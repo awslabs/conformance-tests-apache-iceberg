@@ -1,23 +1,66 @@
-# Minimal table specifications for CI/CD testing
-# This file contains a small subset of tables for fast CI validation
+# Minimal Table Specifications for CI/CD Testing
+# Contains a small subset of tables for fast CI validation
 
+metadata:
+  description: "Minimal Iceberg tables for CI testing"
+  rows_per_table: 100
+  rows_per_commit: 50
+  total_commits: 2
+  insert_method: "append_only"
+  partition_status: "unpartitioned"
+
+# Validation queries to verify table correctness
+validation_queries:
+  - name: "row_count"
+    description: "Verify total row count matches expected"
+    query: "SELECT COUNT(*) as count FROM {table}"
+    expected: 100
+
+# Data type configurations for simple tables
+data_types:
+  boolean:
+    type: "boolean"
+    values: [true, false, null]
+  
+  int:
+    type: "int"
+    values: [1, 2, 3, 4, 5, -1, -2, 0, null]
+  
+  string:
+    type: "string"
+    values: ["hello", "world", "test", "data", "", null]
+  
+  double:
+    type: "double"
+    values: [1.1, 2.2, 3.3, -1.1, 0.0, null]
+  
+  timestamp:
+    type: "timestamp"
+    values: 
+      - "2023-01-01T00:00:00.000000"
+      - "2023-06-15T12:30:45.123456"
+      - "2023-12-31T23:59:59.999999"
+      - null
+
+# Compression configurations
+compression:
+  snappy:
+    type: "snappy"
+    level: null
+
+# Encoding configurations  
+encoding:
+  plain:
+    type: "plain"
+
+# Format versions
+format_versions:
+  - 2
+
+# Simple table configurations
 simple_tables:
-  # Basic data types with fast compression
   - unpart_boolean_snappy_plain_v2
   - unpart_int_snappy_plain_v2  
   - unpart_string_snappy_plain_v2
   - unpart_double_snappy_plain_v2
   - unpart_timestamp_snappy_plain_v2
-
-write_pattern_tables:
-  # Simple write patterns for CI testing
-  - unpart_insert_heavy_zstd_plain_dictionary_v2_cow
-  - unpart_batch_replace_zstd_plain_dictionary_v2_cow
-
-# Configuration for CI testing
-test_config:
-  max_tables_per_backend: 5
-  timeout_minutes: 20
-  backends_to_test:
-    - pyiceberg
-    - polars
