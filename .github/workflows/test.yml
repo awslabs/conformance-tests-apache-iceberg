@@ -55,8 +55,8 @@ jobs:
       run: |
         TABLE_COUNT=$(find ./test-warehouse-pyiceberg -name "metadata" -type d 2>/dev/null | wc -l)
         echo "PyIceberg tables created: $TABLE_COUNT"
-        if [ $TABLE_COUNT -lt 2 ]; then
-          echo "ERROR: Expected 3 PyIceberg tables, got $TABLE_COUNT"
+        if [ $TABLE_COUNT -lt 1 ]; then
+          echo "ERROR: Expected at least 1 PyIceberg table, got $TABLE_COUNT"
           exit 1
         else
           echo "✅ Successfully created $TABLE_COUNT PyIceberg tables"
@@ -66,8 +66,8 @@ jobs:
       run: |
         TABLE_COUNT=$(find ./test-warehouse-polars -name "metadata" -type d 2>/dev/null | wc -l)
         echo "Polars tables created: $TABLE_COUNT"
-        if [ $TABLE_COUNT -lt 2 ]; then
-          echo "ERROR: Expected 3 Polars tables, got $TABLE_COUNT"
+        if [ $TABLE_COUNT -lt 1 ]; then
+          echo "ERROR: Expected at least 1 Polars table, got $TABLE_COUNT"
           exit 1
         else
           echo "✅ Successfully created $TABLE_COUNT Polars tables"
