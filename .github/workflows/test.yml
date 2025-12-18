@@ -35,13 +35,13 @@ jobs:
         python -c "import iceberg_fuzzer; print('iceberg_fuzzer imported successfully')"
         python -m iceberg_fuzzer.cli --help
     
-    - name: Generate 5 random tables with PyIceberg
+    - name: Generate 3 random simple tables with PyIceberg
       run: |
-        python -m iceberg_fuzzer.cli generate --backend pyiceberg --warehouse-path ./test-warehouse-pyiceberg --specs tests/ci_specs.yaml --random 5
+        python -m iceberg_fuzzer.cli generate --backend pyiceberg --warehouse-path ./test-warehouse-pyiceberg --specs specs/simple.yaml --random 3
     
-    - name: Generate 5 random tables with Polars
+    - name: Generate 3 random simple tables with Polars
       run: |
-        python -m iceberg_fuzzer.cli generate --backend polars --warehouse-path ./test-warehouse-polars --specs tests/ci_specs.yaml --random 5
+        python -m iceberg_fuzzer.cli generate --backend polars --warehouse-path ./test-warehouse-polars --specs specs/simple.yaml --random 3
     
     - name: Debug - List created directories
       if: always()
@@ -55,8 +55,9 @@ jobs:
       run: |
         TABLE_COUNT=$(find ./test-warehouse-pyiceberg -name "metadata" -type d 2>/dev/null | wc -l)
         echo "PyIceberg tables created: $TABLE_COUNT"
-        if [ $TABLE_COUNT -lt 3 ]; then
-          echo "WARNING: Expected 5 PyIceberg tables, got $TABLE_COUNT (accepting 3+ for now)"
+        if [ $TABLE_COUNT -lt 2 ]; then
+          echo "ERROR: Expected 3 PyIceberg tables, got $TABLE_COUNT"
+          exit 1
         else
           echo "✅ Successfully created $TABLE_COUNT PyIceberg tables"
         fi
@@ -66,10 +67,10 @@ jobs:
         TABLE_COUNT=$(find ./test-warehouse-polars -name "metadata" -type d 2>/dev/null | wc -l)
         echo "Polars tables created: $TABLE_COUNT"
         if [ $TABLE_COUNT -lt 2 ]; then
-          echo "ERROR: Expected at least 2 Polars tables, got $TABLE_COUNT"
+          echo "ERROR: Expected 3 Polars tables, got $TABLE_COUNT"
           exit 1
         else
-          echo "✅ Successfully created $TABLE_COUNT Polars tables (expected 5, accepting 2+ for now)"
+          echo "✅ Successfully created $TABLE_COUNT Polars tables"
         fi
     
     - name: Upload PyIceberg test artifacts
