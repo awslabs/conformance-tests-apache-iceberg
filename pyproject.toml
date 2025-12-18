@@ -42,8 +42,8 @@ dev = [
 cli = "cli:main"
 
 [project.urls]
-Homepage = "https://github.com/gsoundar/iceberg-table-generator"
-Repository = "https://github.com/gsoundar/iceberg-table-generator"
+Homepage = "https://github.com/awslabs/apache-iceberg-table-fuzzer"
+Repository = "https://github.com/awslabs/apache-iceberg-table-fuzzer"
 
 [tool.setuptools.packages.find]
 include = ["backend*", "validator*", "specs*"]

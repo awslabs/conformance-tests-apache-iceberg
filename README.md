@@ -13,8 +13,8 @@ Generate a comprehensive variety of Apache Iceberg tables for testing compaction
 
 ```bash
 # Clone the repository
-git clone https://github.com/gsoundar/iceberg-table-generator.git
-cd iceberg-table-generator
+git clone https://github.com/awslabs/apache-iceberg-table-fuzzer.git
+cd apache-iceberg-table-fuzzer
 
 # Create and activate virtual environment
 python3 -m venv iceberg-fuzzer-env

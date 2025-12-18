@@ -42,8 +42,8 @@ echo 'export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64' >> ~/.bashrc
 ### Virtual Environment Setup (Recommended)
 
 ```bash
-git clone https://github.com/gsoundar/iceberg-table-generator.git
-cd iceberg-table-generator
+git clone https://github.com/awslabs/apache-iceberg-table-fuzzer.git
+cd apache-iceberg-table-fuzzer
 python3 -m venv kona-env
 source kona-env/bin/activate
 pip install -r requirements.txt
@@ -52,8 +52,8 @@ pip install -r requirements.txt
 ### Development Installation
 
 ```bash
-git clone https://github.com/gsoundar/iceberg-table-generator.git
-cd iceberg-table-generator
+git clone https://github.com/awslabs/apache-iceberg-table-fuzzer.git
+cd apache-iceberg-table-fuzzer
 python3 -m venv kona-env
 source kona-env/bin/activate
 pip install -r requirements.txt
