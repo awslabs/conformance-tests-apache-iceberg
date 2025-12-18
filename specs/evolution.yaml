@@ -1,0 +1,841 @@
+# Evolution Table Specifications for Iceberg Testing
+# Tests various Iceberg evolution features: format version, schema, partition, sort order, properties, metadata
+
+metadata:
+  description: "Evolution tables for testing Iceberg table evolution features"
+  namespace: "evolution"
+  rows_per_table: 1000
+  backend_support:
+    pyspark: true
+    pyiceberg: false  # Evolution features require PySpark-specific operations
+    polars: false     # Evolution features not supported
+  
+# Base schema used across all evolution tables for consistency
+base_schema:
+  - name: id
+    type: bigint
+    description: "Primary identifier"
+  - name: name
+    type: string
+    description: "Entity name"
+  - name: category
+    type: string
+    description: "Category for partitioning tests"
+  - name: value
+    type: int
+    description: "Numeric value for type evolution tests"
+  - name: timestamp
+    type: timestamp
+    description: "Timestamp for temporal partitioning"
+  - name: active
+    type: boolean
+    description: "Boolean flag"
+
+# Extended schema for schema evolution tests
+extended_schema:
+  - name: description
+    type: string
+    description: "Added during schema evolution"
+  - name: price
+    type: "decimal(10,2)"
+    description: "Added for type evolution tests"
+
+# Validation queries for evolution tables
+validation_queries:
+  # Basic validation
+  - name: "row_count"
+    description: "Verify total row count"
+    query: "SELECT COUNT(*) as count FROM {table}"
+    expected: 1000
+  
+  # Schema validation
+  - name: "column_count"
+    description: "Verify column count matches expected schema"
+    query: "SELECT COUNT(*) as cols FROM information_schema.columns WHERE table_name = '{table_name}'"
+    expected_min: 6  # Base schema columns
+  
+  # Data integrity
+  - name: "id_uniqueness"
+    description: "Verify ID uniqueness"
+    query: "SELECT COUNT(DISTINCT id) as unique_ids FROM {table}"
+    expected: 1000
+  
+  # Evolution-specific validations
+  - name: "format_version"
+    description: "Check Iceberg format version"
+    query: "SELECT format_version FROM {table}.metadata"
+    expected_values: [1, 2]
+  
+  - name: "partition_count"
+    description: "Check partition structure"
+    query: "SELECT COUNT(DISTINCT partition) FROM {table}.partitions"
+    expected_min: 1
+
+# Evolution table specifications
+evolution_tables:
+  # 1. FORMAT VERSION EVOLUTION (v1 → v2)
+  # Tests upgrading tables from Iceberg v1 to v2 format
+  
+  - name: "evol_v1_to_v2_simple_cow"
+    category: "format_version"
+    description: "Test v1→v2 upgrade with copy-on-write operations"
+    approach: |
+      1. Create v1 table with base schema (500 rows)
+      2. Upgrade table to v2 format using ALTER TABLE
+      3. Insert 500 more rows using v2 features
+      4. Perform copy-on-write updates to test v2 compatibility
+    schema: "base"
+    partition_spec: null
+    sort_order: null
+    initial_format_version: 1
+    final_format_version: 2
+    delete_mode: "cow"
+    validation_queries:
+      - "row_count"
+      - "format_version"
+      - "snapshot_count"
+      - "id_uniqueness"
+    expected_snapshots: 3  # create + upgrade + insert
+    
+  - name: "evol_v1_to_v2_simple_posdelete"
+    category: "format_version"
+    description: "Test v1→v2 upgrade with position delete operations"
+    approach: |
+      1. Create v1 table with base schema (600 rows)
+      2. Upgrade table to v2 format
+      3. DELETE 100 rows to create position delete files
+      4. INSERT 500 rows to reach 1000 total
+    schema: "base"
+    partition_spec: null
+    sort_order: null
+    initial_format_version: 1
+    final_format_version: 2
+    delete_mode: "posdelete"
+    validation_queries:
+      - "row_count"
+      - "format_version"
+    expected_snapshots: 4  # create + upgrade + delete + insert
+    
+  - name: "evol_v1_to_v2_partitioned_cow"
+    category: "format_version"
+    description: "Test v1→v2 upgrade on partitioned table with COW"
+    approach: |
+      1. Create v1 partitioned table by category (500 rows)
+      2. Upgrade to v2 format
+      3. Add 500 rows with copy-on-write operations
+      4. Test v2 features on partitioned data
+    schema: "base"
+    partition_spec: ["identity(category)"]
+    sort_order: null
+    initial_format_version: 1
+    final_format_version: 2
+    delete_mode: "cow"
+    validation_queries:
+      - "row_count"
+      - "format_version"
+      - "partition_count"
+    expected_snapshots: 3
+    
+  - name: "evol_v1_to_v2_partitioned_posdelete"
+    category: "format_version"
+    description: "Test v1→v2 upgrade on partitioned table with position deletes"
+    approach: |
+      1. Create v1 partitioned table (600 rows)
+      2. Upgrade to v2 format
+      3. DELETE 100 rows across partitions
+      4. INSERT 500 rows to reach 1000 total
+    schema: "base"
+    partition_spec: ["identity(category)"]
+    sort_order: null
+    initial_format_version: 1
+    final_format_version: 2
+    delete_mode: "posdelete"
+    validation_queries:
+      - "row_count"
+      - "format_version"
+      - "partition_count"
+    expected_snapshots: 4
+  # 2. SCHEMA EVOLUTION (Add/Drop/Rename/Type Changes)
+  # Tests various schema modification operations
+  
+  - name: "evol_schema_add_columns_simple"
+    category: "schema_evolution"
+    description: "Test adding columns to unpartitioned table"
+    approach: |
+      1. Create table with base schema (500 rows)
+      2. Add 'description STRING' column using ALTER TABLE ADD COLUMN
+      3. Insert 500 rows with new column populated
+      4. Verify old rows have NULL for new column, new rows have values
+    schema: "base"
+    schema_evolution:
+      - operation: "add_column"
+        column: "description"
+        type: "string"
+    partition_spec: null
+    validation_queries:
+      - "row_count"
+      - "column_count"
+      - "snapshot_count"
+    expected_snapshots: 2
+    
+  - name: "evol_schema_drop_columns_simple"
+    category: "schema_evolution"
+    description: "Test dropping columns from unpartitioned table"
+    approach: |
+      1. Create table with extended schema including description (500 rows)
+      2. Drop 'description' column using ALTER TABLE DROP COLUMN
+      3. Insert 500 rows without dropped column
+      4. Verify reads work correctly without dropped column
+    schema: "extended"
+    schema_evolution:
+      - operation: "drop_column"
+        column: "description"
+    partition_spec: null
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_schema_rename_columns_simple"
+    category: "schema_evolution"
+    description: "Test renaming columns in unpartitioned table"
+    approach: |
+      1. Create table with base schema (500 rows)
+      2. Rename 'name' column to 'full_name' using ALTER TABLE RENAME COLUMN
+      3. Insert 500 rows using new column name
+      4. Verify both old and new data accessible via new column name
+    schema: "base"
+    schema_evolution:
+      - operation: "rename_column"
+        old_name: "name"
+        new_name: "full_name"
+    partition_spec: null
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_schema_change_types_simple"
+    category: "schema_evolution"
+    description: "Test widening column types (INT to BIGINT)"
+    approach: |
+      1. Create table with 'value INT' (500 rows)
+      2. Widen 'value' column from INT to BIGINT
+      3. Insert 500 rows with BIGINT values
+      4. Verify type compatibility and data integrity
+    schema: "base"
+    schema_evolution:
+      - operation: "widen_type"
+        column: "value"
+        from_type: "int"
+        to_type: "bigint"
+    partition_spec: null
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_schema_add_columns_partitioned"
+    category: "schema_evolution"
+    description: "Test adding columns to partitioned table"
+    approach: |
+      1. Create partitioned table by category (500 rows)
+      2. Add 'description STRING' column
+      3. Insert 500 rows across partitions with new column
+      4. Verify schema evolution works across all partitions
+    schema: "base"
+    schema_evolution:
+      - operation: "add_column"
+        column: "description"
+        type: "string"
+    partition_spec: ["identity(category)"]
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 2
+    
+  - name: "evol_schema_drop_columns_partitioned"
+    category: "schema_evolution"
+    description: "Test dropping columns from partitioned table"
+    approach: |
+      1. Create partitioned table with extended schema (500 rows)
+      2. Drop non-partition column
+      3. Insert 500 rows across partitions
+      4. Verify partition integrity maintained after column drop
+    schema: "extended"
+    schema_evolution:
+      - operation: "drop_column"
+        column: "description"
+    partition_spec: ["identity(category)"]
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 2
+    
+  - name: "evol_schema_rename_columns_partitioned"
+    category: "schema_evolution"
+    description: "Test renaming non-partition columns in partitioned table"
+    approach: |
+      1. Create partitioned table (500 rows)
+      2. Rename non-partition column 'name' to 'full_name'
+      3. Insert 500 rows across partitions
+      4. Verify cross-partition reads work with renamed column
+    schema: "base"
+    schema_evolution:
+      - operation: "rename_column"
+        old_name: "name"
+        new_name: "full_name"
+    partition_spec: ["identity(category)"]
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 2
+    
+  - name: "evol_schema_change_types_partitioned"
+    category: "schema_evolution"
+    description: "Test type widening in partitioned table"
+    approach: |
+      1. Create partitioned table (500 rows)
+      2. Widen 'value' column from INT to BIGINT
+      3. Insert 500 rows across partitions
+      4. Verify type evolution works across all partitions
+    schema: "base"
+    schema_evolution:
+      - operation: "widen_type"
+        column: "value"
+        from_type: "int"
+        to_type: "bigint"
+    partition_spec: ["identity(category)"]
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 2
+  # 3. PARTITION SPEC EVOLUTION
+  # Tests changing partition specifications
+  
+  - name: "evol_partition_add_field"
+    category: "partition_evolution"
+    description: "Test adding partition field to unpartitioned table"
+    approach: |
+      1. Create unpartitioned table (500 rows)
+      2. Add partition by 'category' using ALTER TABLE ADD PARTITION FIELD
+      3. Insert 500 rows into partitioned table
+      4. Verify data distributed across partitions correctly
+    schema: "base"
+    partition_evolution:
+      - operation: "add_partition"
+        field: "identity(category)"
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 2
+    
+  - name: "evol_partition_remove_field"
+    category: "partition_evolution"
+    description: "Test removing partition field (make unpartitioned)"
+    approach: |
+      1. Create partitioned table by category (500 rows)
+      2. Remove partition field using ALTER TABLE DROP PARTITION FIELD
+      3. Insert 500 rows into now-unpartitioned table
+      4. Verify table becomes unpartitioned but data preserved
+    schema: "base"
+    initial_partition_spec: ["identity(category)"]
+    partition_evolution:
+      - operation: "drop_partition"
+        field: "category"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_partition_change_transform"
+    category: "partition_evolution"
+    description: "Test changing partition transform"
+    approach: |
+      1. Create table partitioned by identity(category) (500 rows)
+      2. Change to bucket(4, id) partitioning
+      3. Insert 500 rows with new partition scheme
+      4. Verify data accessible across both partition schemes
+    schema: "base"
+    initial_partition_spec: ["identity(category)"]
+    partition_evolution:
+      - operation: "replace_partition"
+        old_field: "identity(category)"
+        new_field: "bucket(4, id)"
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 2
+    
+  - name: "evol_partition_multi_evolution"
+    category: "partition_evolution"
+    description: "Test multiple partition spec changes"
+    approach: |
+      1. Create unpartitioned table (300 rows)
+      2. Add identity(category) partition (200 rows)
+      3. Change to bucket(4, id) partition (500 rows)
+      4. Verify all data accessible through final partition scheme
+    schema: "base"
+    partition_evolution:
+      - operation: "add_partition"
+        field: "identity(category)"
+      - operation: "replace_partition"
+        old_field: "identity(category)"
+        new_field: "bucket(4, id)"
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 3
+    
+  - name: "evol_partition_rollback"
+    category: "partition_evolution"
+    description: "Test partition spec rollback"
+    approach: |
+      1. Create partitioned by category (400 rows)
+      2. Change to bucket(4, id) partition (200 rows)
+      3. Rollback to identity(category) partition (400 rows)
+      4. Verify rollback compatibility and data integrity
+    schema: "base"
+    initial_partition_spec: ["identity(category)"]
+    partition_evolution:
+      - operation: "replace_partition"
+        old_field: "identity(category)"
+        new_field: "bucket(4, id)"
+      - operation: "rollback_partition"
+        target_field: "identity(category)"
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 3
+    
+  - name: "evol_partition_temporal_evolution"
+    category: "partition_evolution"
+    description: "Test temporal partition granularity changes"
+    approach: |
+      1. Create table partitioned by days(timestamp) (400 rows)
+      2. Change to months(timestamp) partition (300 rows)
+      3. Change to years(timestamp) partition (300 rows)
+      4. Verify temporal queries work across all granularities
+    schema: "base"
+    initial_partition_spec: ["days(timestamp)"]
+    partition_evolution:
+      - operation: "replace_partition"
+        old_field: "days(timestamp)"
+        new_field: "months(timestamp)"
+      - operation: "replace_partition"
+        old_field: "months(timestamp)"
+        new_field: "years(timestamp)"
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 3
+  # 4. SORT ORDER EVOLUTION
+  # Tests changing sort order specifications
+  
+  - name: "evol_sort_add_order"
+    category: "sort_evolution"
+    description: "Test adding sort order to unsorted table"
+    approach: |
+      1. Create unsorted table (500 rows)
+      2. Add sort order by 'id ASC' using ALTER TABLE WRITE ORDERED BY
+      3. Insert 500 rows with sort order applied
+      4. Verify new data written in sorted order
+    schema: "base"
+    sort_evolution:
+      - operation: "add_sort"
+        fields: ["id ASC"]
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_sort_change_order"
+    category: "sort_evolution"
+    description: "Test changing existing sort order"
+    approach: |
+      1. Create table sorted by 'id ASC' (500 rows)
+      2. Change sort order to 'category ASC'
+      3. Insert 500 rows with new sort order
+      4. Verify sort order change applied correctly
+    schema: "base"
+    initial_sort_order: ["id ASC"]
+    sort_evolution:
+      - operation: "change_sort"
+        old_fields: ["id ASC"]
+        new_fields: ["category ASC"]
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_sort_remove_order"
+    category: "sort_evolution"
+    description: "Test removing sort order"
+    approach: |
+      1. Create sorted table (500 rows)
+      2. Remove sort order using ALTER TABLE WRITE UNORDERED
+      3. Insert 500 rows without sort order
+      4. Verify table becomes unsorted
+    schema: "base"
+    initial_sort_order: ["id ASC", "category ASC"]
+    sort_evolution:
+      - operation: "remove_sort"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_sort_multi_column"
+    category: "sort_evolution"
+    description: "Test multi-column sort order evolution"
+    approach: |
+      1. Create table sorted by 'id' (500 rows)
+      2. Change to multi-column sort 'category ASC, id DESC'
+      3. Insert 500 rows with multi-column sort
+      4. Verify complex sort order applied
+    schema: "base"
+    initial_sort_order: ["id ASC"]
+    sort_evolution:
+      - operation: "change_sort"
+        old_fields: ["id ASC"]
+        new_fields: ["category ASC", "id DESC"]
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+
+  # 5. COMBINED EVOLUTION SCENARIOS
+  # Tests multiple evolution operations together
+  
+  - name: "evol_combined_v1_to_v2_schema"
+    category: "combined_evolution"
+    description: "Test v2 table with schema changes"
+    approach: |
+      1. Create v2 table (500 rows)
+      2. Add 'description' column (500 rows)
+      3. Verify schema evolution works correctly
+    schema: "base"
+    initial_format_version: 2
+    schema_evolution:
+      - operation: "add_column"
+        column: "description"
+        type: "string"
+    validation_queries:
+      - "row_count"
+      - "format_version"
+    expected_snapshots: 3
+    
+  - name: "evol_combined_v1_to_v2_partition"
+    category: "combined_evolution"
+    description: "Test v1→v2 upgrade with partition evolution"
+    approach: |
+      1. Create v1 unpartitioned table (400 rows)
+      2. Upgrade to v2 + add partition by category (600 rows)
+      3. Verify v2 features work with partitioned data
+    schema: "base"
+    initial_format_version: 1
+    evolution_sequence:
+      - operation: "upgrade_format"
+        to_version: 2
+      - operation: "add_partition"
+        field: "identity(category)"
+    validation_queries:
+      - "row_count"
+      - "format_version"
+      - "partition_count"
+    expected_snapshots: 2
+    
+  - name: "evol_combined_schema_partition"
+    category: "combined_evolution"
+    description: "Test schema and partition evolution together"
+    approach: |
+      1. Create simple table (400 rows)
+      2. Add column + add partition simultaneously (600 rows)
+      3. Verify both schema and partition changes work together
+    schema: "base"
+    evolution_sequence:
+      - operation: "add_column"
+        column: "description"
+        type: "string"
+      - operation: "add_partition"
+        field: "identity(category)"
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 2
+    
+  - name: "evol_combined_schema_sort"
+    category: "combined_evolution"
+    description: "Test schema and sort order evolution together"
+    approach: |
+      1. Create unsorted table (400 rows)
+      2. Add column + add sort order (600 rows)
+      3. Verify schema and sort changes work together
+    schema: "base"
+    evolution_sequence:
+      - operation: "add_column"
+        column: "description"
+        type: "string"
+      - operation: "add_sort"
+        fields: ["category ASC", "id DESC"]
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_combined_partition_sort"
+    category: "combined_evolution"
+    description: "Test partition and sort evolution together"
+    approach: |
+      1. Create unpartitioned, unsorted table (400 rows)
+      2. Add partition + sort order (600 rows)
+      3. Verify partition and sort work together
+    schema: "base"
+    evolution_sequence:
+      - operation: "add_partition"
+        field: "identity(category)"
+      - operation: "add_sort"
+        fields: ["id ASC"]
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 2
+    
+  - name: "evol_combined_all_features"
+    category: "combined_evolution"
+    description: "Test all evolution types together"
+    approach: |
+      1. Create v1 simple table (300 rows)
+      2. Upgrade v2 + add column (200 rows)
+      3. Add partition + sort order (500 rows)
+      4. Verify comprehensive evolution works
+    schema: "base"
+    initial_format_version: 1
+    evolution_sequence:
+      - operation: "upgrade_format"
+        to_version: 2
+      - operation: "add_column"
+        column: "description"
+        type: "string"
+      - operation: "add_partition"
+        field: "identity(category)"
+      - operation: "add_sort"
+        fields: ["category ASC", "id DESC"]
+    validation_queries:
+      - "row_count"
+      - "format_version"
+      - "partition_count"
+    expected_snapshots: 3
+  # 6. EDGE CASES & ROLLBACKS
+  # Tests rollback scenarios and edge cases
+  
+  - name: "evol_rollback_schema_changes"
+    category: "rollback"
+    description: "Test schema evolution rollback using time travel"
+    approach: |
+      1. Create table (400 rows)
+      2. Add columns (200 rows)
+      3. Rollback schema using time travel to pre-evolution snapshot (400 rows)
+      4. Verify rollback compatibility and data integrity
+    schema: "base"
+    evolution_sequence:
+      - operation: "add_column"
+        column: "description"
+        type: "string"
+      - operation: "rollback_to_snapshot"
+        target: "pre_evolution"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 3
+    
+  - name: "evol_rollback_partition_changes"
+    category: "rollback"
+    description: "Test partition evolution rollback"
+    approach: |
+      1. Create partitioned table (400 rows)
+      2. Change partition spec (200 rows)
+      3. Rollback partition spec using time travel (400 rows)
+      4. Verify partition rollback works correctly
+    schema: "base"
+    initial_partition_spec: ["identity(category)"]
+    evolution_sequence:
+      - operation: "replace_partition"
+        old_field: "identity(category)"
+        new_field: "bucket(4, id)"
+      - operation: "rollback_to_snapshot"
+        target: "pre_partition_change"
+    validation_queries:
+      - "row_count"
+      - "partition_count"
+    expected_snapshots: 3
+    
+  - name: "evol_metadata_only_changes"
+    category: "rollback"
+    description: "Test metadata-only evolution (no data structure changes)"
+    approach: |
+      1. Create table (500 rows)
+      2. Change table comments and properties (no structural changes)
+      3. Insert 500 rows (verify metadata changes don't affect data operations)
+      4. Verify metadata evolution works without data migration
+    schema: "base"
+    evolution_sequence:
+      - operation: "change_metadata"
+        changes: ["table_comment", "column_comments", "custom_properties"]
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_concurrent_evolution"
+    category: "rollback"
+    description: "Test concurrent evolution scenarios"
+    approach: |
+      1. Create table (500 rows)
+      2. Simulate concurrent schema and partition changes
+      3. Insert 500 rows with conflict resolution
+      4. Verify concurrent evolution handling
+    schema: "base"
+    evolution_sequence:
+      - operation: "concurrent_changes"
+        changes: ["add_column", "add_partition"]
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+
+  # 7. TABLE PROPERTIES EVOLUTION
+  # Tests changing table-level properties
+  
+  - name: "evol_props_compression_change"
+    category: "properties"
+    description: "Test changing compression codec properties"
+    approach: |
+      1. Create table with GZIP compression (400 rows)
+      2. Change to ZSTD compression (300 rows)
+      3. Change to SNAPPY compression (300 rows)
+      4. Verify compression changes applied to new data
+    schema: "base"
+    initial_properties:
+      compression: "gzip"
+    property_evolution:
+      - operation: "change_compression"
+        from: "gzip"
+        to: "zstd"
+      - operation: "change_compression"
+        from: "zstd"
+        to: "snappy"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 3
+    
+  - name: "evol_props_encoding_change"
+    category: "properties"
+    description: "Test changing encoding properties"
+    approach: |
+      1. Create table with PLAIN encoding (400 rows)
+      2. Change to DICTIONARY encoding (600 rows)
+      3. Verify encoding changes applied correctly
+    schema: "base"
+    initial_properties:
+      encoding: "plain"
+    property_evolution:
+      - operation: "change_encoding"
+        from: "plain"
+        to: "dictionary"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_props_merge_mode_change"
+    category: "properties"
+    description: "Test changing merge-on-read/copy-on-write mode"
+    approach: |
+      1. Create COW table (500 rows)
+      2. Change to merge-on-read mode (500 rows)
+      3. Verify MOR operations work correctly
+    schema: "base"
+    initial_properties:
+      delete_mode: "cow"
+    property_evolution:
+      - operation: "change_delete_mode"
+        from: "cow"
+        to: "merge-on-read"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_props_retention_policies"
+    category: "properties"
+    description: "Test changing snapshot retention policies"
+    approach: |
+      1. Create table with default retention (500 rows)
+      2. Change snapshot retention and cleanup policies (500 rows)
+      3. Verify retention policy changes applied
+    schema: "base"
+    property_evolution:
+      - operation: "change_retention"
+        snapshot_retention: "7 days"
+        file_cleanup: "3 days"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+
+  # 8. METADATA EVOLUTION & COMPATIBILITY
+  # Tests metadata-level changes and compatibility
+  
+  - name: "evol_metadata_table_comments"
+    category: "metadata"
+    description: "Test table and column comment evolution"
+    approach: |
+      1. Create table without comments (500 rows)
+      2. Add table and column comments (500 rows)
+      3. Verify comment changes don't affect data operations
+    schema: "base"
+    metadata_evolution:
+      - operation: "add_comments"
+        table_comment: "Evolution test table"
+        column_comments:
+          id: "Primary identifier"
+          name: "Entity name"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_metadata_custom_properties"
+    category: "metadata"
+    description: "Test custom table properties evolution"
+    approach: |
+      1. Create table with basic properties (500 rows)
+      2. Add custom properties (owner, team, etc.) (500 rows)
+      3. Verify custom properties preserved across operations
+    schema: "base"
+    metadata_evolution:
+      - operation: "add_custom_properties"
+        properties:
+          environment: "test"
+          version: "1.0"
+          team: "data-team"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_metadata_location_change"
+    category: "metadata"
+    description: "Test table location metadata changes"
+    approach: |
+      1. Create table at location A (500 rows)
+      2. Change table location metadata (500 rows)
+      3. Verify location changes handled correctly
+    schema: "base"
+    metadata_evolution:
+      - operation: "change_location"
+        from_location: "warehouse/evolution/table_a"
+        to_location: "warehouse/evolution/table_b"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2
+    
+  - name: "evol_metadata_catalog_migration"
+    category: "metadata"
+    description: "Test catalog migration compatibility"
+    approach: |
+      1. Create table in catalog (500 rows)
+      2. Simulate catalog migration metadata changes (500 rows)
+      3. Verify cross-catalog compatibility maintained
+    schema: "base"
+    metadata_evolution:
+      - operation: "catalog_migration"
+        from_catalog: "local"
+        to_catalog: "migrated"
+    validation_queries:
+      - "row_count"
+    expected_snapshots: 2

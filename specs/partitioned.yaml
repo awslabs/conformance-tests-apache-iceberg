@@ -1,0 +1,198 @@
+# Partitioned Tables - Multi-column tables with partition transforms for compaction testing
+
+metadata:
+  description: "Partitioned tables with different write patterns for compaction testing"
+  total_columns: 30
+  final_rows: 100000  # 10 batches × 10K rows each
+  deterministic_data: true
+  total_transforms: 37  # Comprehensive partition transform testing
+  
+# Schema definition for all partitioned tables (30 columns)
+schema:
+  # Partition-specific fields (7)
+  - name: id
+    type: int
+    description: "Primary key, sequential integers"
+  - name: category
+    type: string
+    description: "Categorical field (A, B, C, D, E)"
+  - name: name
+    type: string
+    description: "String field for truncate transforms"
+  - name: value
+    type: int
+    description: "Numeric field for bucket transforms"
+  - name: timestamp
+    type: timestamp
+    description: "Timestamp field for temporal transforms"
+  - name: deprecated_field
+    type: string
+    description: "Field for void transform testing"
+  - name: single_value_field
+    type: string
+    description: "Constant value field (single partition)"
+    
+  # Standard data type columns (20)
+  - name: boolean_col
+    type: boolean
+  - name: int_col
+    type: int
+  - name: long_col
+    type: long
+  - name: float_col
+    type: float
+  - name: double_col
+    type: double
+  - name: string_col
+    type: string
+  - name: binary_col
+    type: binary
+  - name: date_col
+    type: date
+  - name: time_col
+    type: string  # Time as string in Spark
+  - name: timestamp_col
+    type: timestamp
+  - name: timestamptz_col
+    type: timestamptz
+  - name: decimal_col
+    type: decimal(10,2)
+  - name: uuid_col
+    type: binary
+  - name: fixed_col
+    type: binary
+  - name: string_small_col
+    type: string
+  - name: string_medium_col
+    type: string
+  - name: string_long_col
+    type: string
+  - name: binary_small_col
+    type: binary
+  - name: binary_medium_col
+    type: binary
+  - name: binary_long_col
+    type: binary
+    
+  # List type columns (3)
+  - name: list_boolean_col
+    type: list<boolean>
+  - name: list_int_col
+    type: list<int>
+  - name: list_string_col
+    type: list<string>
+
+# Partition transforms for comprehensive testing (16 total)
+partition_transforms:
+  # Single-column transforms (10)
+  - name: identity_category
+    spec: ["identity(category)"]
+    description: "Categorical partitioning (5 partitions: A-E)"
+    
+  - name: bucket4_id
+    spec: ["bucket(4, id)"]
+    description: "Hash partitioning with 4 buckets"
+    
+  - name: bucket8_id
+    spec: ["bucket(8, id)"]
+    description: "Hash partitioning with 8 buckets"
+    
+  - name: truncate2_name
+    spec: ["truncate(2, name)"]
+    description: "String prefix partitioning (2 chars)"
+    
+  - name: truncate5_name
+    spec: ["truncate(5, name)"]
+    description: "String prefix partitioning (5 chars)"
+    
+  - name: year_timestamp
+    spec: ["years(timestamp)"]
+    description: "Yearly partitioning (2020-2024)"
+    
+  - name: month_timestamp
+    spec: ["months(timestamp)"]
+    description: "Monthly partitioning"
+    
+  - name: day_timestamp
+    spec: ["days(timestamp)"]
+    description: "Daily partitioning"
+    
+  - name: hour_timestamp
+    spec: ["hours(timestamp)"]
+    description: "Hourly partitioning"
+    
+  - name: bucket10_value
+    spec: ["bucket(10, value)"]
+    description: "Numeric hash partitioning (10 buckets)"
+    
+  # Multi-column transforms (5)
+  - name: identity_category_year_timestamp
+    spec: ["identity(category)", "years(timestamp)"]
+    description: "Categorical + temporal partitioning"
+    
+  - name: identity_category_bucket8_id
+    spec: ["identity(category)", "bucket(8, id)"]
+    description: "Categorical + hash partitioning"
+    
+  - name: bucket4_id_day_timestamp
+    spec: ["bucket(4, id)", "days(timestamp)"]
+    description: "Hash + temporal partitioning"
+    
+  - name: year_timestamp_bucket4_id
+    spec: ["years(timestamp)", "bucket(4, id)"]
+    description: "Temporal + hash partitioning (order matters)"
+    
+  - name: identity_category_month_timestamp_bucket4_id
+    spec: ["identity(category)", "months(timestamp)", "bucket(4, id)"]
+    description: "Three-way partitioning"
+    
+  # Edge case (1)
+  - name: identity_single_value_field
+    spec: ["identity(single_value_field)"]
+    description: "Single partition (constant value)"
+
+# Write patterns for partitioned tables (4 selected patterns)
+patterns:
+  - name: insert_heavy
+    description: "Append-only growth pattern"
+    use_case: "Log/event data, time-series"
+    commits: 10
+    operations: "INSERT 10K rows per commit"
+    
+  - name: update_heavy
+    description: "In-place modifications pattern"
+    use_case: "Customer records, inventory updates"
+    commits: 6
+    operations: "INSERT + multiple DELETE/INSERT cycles"
+    
+  - name: delete_heavy
+    description: "Data purging pattern"
+    use_case: "GDPR compliance, data retention"
+    commits: 2
+    operations: "INSERT 20K rows, then DELETE 10K rows"
+    
+  - name: mixed_chaos
+    description: "Real-world simulation pattern"
+    use_case: "OLTP workload"
+    commits: 4
+    operations: "Random mix of INSERT/UPDATE/DELETE"
+
+# Configuration for partitioned tables
+table_config:
+  compression: "snappy"
+  encoding: "plain"
+  versions: ["v1", "v2"]
+  delete_modes: ["cow", "posdelete"]
+  total_tables: 296  # 37 transforms × 4 patterns × 2 delete modes
+  
+  # Version-specific constraints
+  v1_supported_modes: ["cow"]  # v1 only supports copy-on-write
+  v2_supported_modes: ["cow", "posdelete"]  # v2 supports both
+
+# Naming convention
+naming_convention:
+  pattern: "part_{transform_spec}_{pattern}_{delete_mode}"
+  examples:
+    - "part_identity_category_insert_heavy_cow"
+    - "part_bucket4_id_delete_heavy_posdelete"
+    - "part_identity_category_year_timestamp_mixed_chaos_cow"

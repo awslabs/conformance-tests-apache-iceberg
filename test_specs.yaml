@@ -1,0 +1,20 @@
+simple_tables:
+  - unpart_boolean_snappy_plain_v2
+  - unpart_int_snappy_plain_v2  
+  - unpart_string_snappy_plain_v2
+  - unpart_double_snappy_plain_v2
+  - unpart_timestamp_snappy_plain_v2
+
+write_pattern_tables:
+  - unpart_insert_heavy_zstd_plain_dictionary_v2_cow
+  - unpart_batch_replace_zstd_plain_dictionary_v2_cow
+  - unpart_gradual_growth_zstd_plain_dictionary_v2_cow
+  - unpart_burst_ops_zstd_plain_dictionary_v2_cow
+  - unpart_mixed_chaos_zstd_plain_dictionary_v2_cow
+
+partitioned_tables:
+  - part_identity_category_mixed_chaos_cow
+  - part_bucket_4__id_mixed_chaos_cow
+  - part_months_timestamp_mixed_chaos_cow
+  - part_identity_category_bucket_4__id_mixed_chaos_cow
+  - part_years_timestamp_mixed_chaos_cow

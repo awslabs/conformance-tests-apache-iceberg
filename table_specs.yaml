@@ -1,0 +1,979 @@
+# Table Specifications for Iceberg Testing
+# This configuration defines unpartitioned, single-column tables for testing
+
+metadata:
+  description: "Unpartitioned single-column Iceberg tables for compaction testing"
+  rows_per_table: 1000
+  rows_per_commit: 100
+  total_commits: 10
+  insert_method: "append_only"
+  partition_status: "unpartitioned"
+
+# Validation queries to verify table correctness
+validation_queries:
+  # Basic row count validation
+  - name: "row_count"
+    description: "Verify total row count matches expected"
+    query: "SELECT COUNT(*) as count FROM {table}"
+    expected: 1000
+  
+  # Data type validation
+  - name: "non_null_count"
+    description: "Count non-null values in value column"
+    query: "SELECT COUNT({value_column}) as non_null_count FROM {table}"
+    expected_min: 900  # Allow some nulls
+  
+  # Distinct values check
+  - name: "distinct_values"
+    description: "Check for data variety"
+    query: "SELECT COUNT(DISTINCT {value_column}) as distinct_count FROM {table}"
+    expected_min: 10  # At least some variety
+  
+  # ID range validation
+  - name: "id_range"
+    description: "Verify ID column ranges from 0 to 999"
+    query: "SELECT MIN(id) as min_id, MAX(id) as max_id FROM {table}"
+    expected: {"min_id": 0, "max_id": 999}
+  
+  # Snapshot count validation
+  - name: "snapshot_count"
+    description: "Verify number of commits/snapshots"
+    query: "SELECT COUNT(*) as snapshot_count FROM {table}.snapshots"
+    expected: 10
+  
+  # File count validation
+  - name: "data_files"
+    description: "Verify data files exist"
+    query: "SELECT COUNT(*) as file_count FROM {table}.files"
+    expected_min: 1
+
+# Iceberg format versions
+iceberg_versions:
+  - version: 1
+    namespace: "v1"
+  - version: 2
+    namespace: "v2"
+
+# Value ranges to test for each data type
+value_coverage:
+  include:
+    - null_values
+    - min_values
+    - max_values
+    - zero_or_empty
+    - typical_values
+    - edge_cases
+
+# Compression codec variations with levels
+compression_configs:
+  - codec: gzip
+    levels: [1, 2, 3]
+  - codec: zstd
+    levels: [1, 2, 3]
+  - codec: snappy
+    levels: [null]
+  - codec: lz4
+    levels: [null]
+  - codec: none
+    levels: [null]
+
+# Parquet column encoding options
+# Note: Actual encoding used depends on Parquet writer implementation
+encoding_types:
+  - PLAIN                    # Plain encoding, no compression
+  - RLE                      # Run-Length Encoding
+  - DICTIONARY               # Dictionary encoding
+  - DELTA                    # Delta encoding
+
+# String/Binary length categories
+string_binary_lengths:
+  small: 1      # 1 character/byte
+  medium: 8     # 8 characters/bytes
+  long: 64      # 64 characters/bytes
+  xlong: 131072 # 128 KB
+
+# Primitive Data Types (20 types: 12 basic + 4 string variants + 4 binary variants)
+primitive_types:
+  - name: boolean
+    iceberg_type: boolean
+    sample_values:
+      - null
+      - true
+      - false
+    
+  - name: int
+    iceberg_type: int
+    sample_values:
+      - null
+      - -2147483648  # min
+      - -1
+      - 0
+      - 1
+      - 2147483647   # max
+    
+  - name: long
+    iceberg_type: long
+    sample_values:
+      - null
+      - -9223372036854775808  # min
+      - -1
+      - 0
+      - 1
+      - 9223372036854775807   # max
+    
+  - name: float
+    iceberg_type: float
+    sample_values:
+      - null
+      - -1000000.0  # safe min
+      - -1.0
+      - 0.0
+      - 1.0
+      - 1000000.0   # safe max
+    
+  - name: double
+    iceberg_type: double
+    sample_values:
+      - null
+      - -1000000.0  # safe min
+      - -1.0
+      - 0.0
+      - 1.0
+      - 1000000.0   # safe max
+    
+  - name: decimal_10_2
+    iceberg_type: "decimal(10,2)"
+    sample_values:
+      - null
+      - "-99999999.99"
+      - "0.00"
+      - "123.45"
+      - "99999999.99"
+    
+  - name: date
+    iceberg_type: date
+    sample_values:
+      - null
+      - "1970-01-01"   # epoch
+      - "2000-01-01"
+      - "2024-01-01"
+      - "2024-12-31"
+    
+  - name: time
+    iceberg_type: time
+    sample_values:
+      - null
+      - "00:00:00"
+      - "12:00:00"
+      - "23:59:59"
+    
+  - name: timestamp
+    iceberg_type: timestamp
+    sample_values:
+      - null
+      - "1970-01-01T00:00:00"
+      - "2000-01-01T12:00:00"
+      - "2024-01-01T00:00:00"
+      - "2024-12-31T23:59:59.999999"
+    
+  - name: timestamptz
+    iceberg_type: timestamptz
+    sample_values:
+      - null
+      - "1970-01-01T00:00:00+00:00"
+      - "2000-01-01T12:00:00+00:00"
+      - "2024-01-01T00:00:00-08:00"
+      - "2024-12-31T23:59:59+00:00"
+    
+  - name: uuid
+    iceberg_type: uuid
+    sample_values:
+      - null
+      - "00000000-0000-0000-0000-000000000000"
+      - "550e8400-e29b-41d4-a716-446655440000"
+      - "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+    
+  - name: fixed_16
+    iceberg_type: "fixed(16)"
+    sample_values:
+      - null
+      - "00000000000000000000000000000000"  # all zeros
+      - "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"  # all ones
+      - "0123456789ABCDEF0123456789ABCDEF"
+    
+  # String variants by length
+  - name: string_small
+    iceberg_type: string
+    length_category: small
+    max_length: 1
+    sample_values:
+      - null
+      - ""
+      - "a"
+      - "z"
+      - "1"
+    
+  - name: string_medium
+    iceberg_type: string
+    length_category: medium
+    max_length: 8
+    sample_values:
+      - null
+      - ""
+      - "a"
+      - "test123"
+      - "12345678"
+    
+  - name: string_long
+    iceberg_type: string
+    length_category: long
+    max_length: 64
+    sample_values:
+      - null
+      - ""
+      - "short"
+      - "This is a longer test string with exactly sixty-four chars!!"
+    
+  - name: string_xlong
+    iceberg_type: string
+    length_category: xlong
+    max_length: 131072  # 128KB
+    sample_values:
+      - null
+      - ""
+      - "small"
+      - "generate_128kb_string"  # Will be generated programmatically
+    
+  # Binary variants by length
+  - name: binary_small
+    iceberg_type: binary
+    length_category: small
+    max_length: 1
+    sample_values:
+      - null
+      - ""
+      - "00"
+      - "FF"
+    
+  - name: binary_medium
+    iceberg_type: binary
+    length_category: medium
+    max_length: 8
+    sample_values:
+      - null
+      - ""
+      - "00"
+      - "0102030405060708"
+      - "DEADBEEFCAFEBABE"
+    
+  - name: binary_long
+    iceberg_type: binary
+    length_category: long
+    max_length: 64
+    sample_values:
+      - null
+      - ""
+      - "00"
+      - "generate_64byte_binary"  # Will be generated programmatically
+    
+  - name: binary_xlong
+    iceberg_type: binary
+    length_category: xlong
+    max_length: 131072  # 128KB
+    sample_values:
+      - null
+      - ""
+      - "00"
+      - "generate_128kb_binary"  # Will be generated programmatically
+
+# Complex Types - List (20 types, one for each primitive including string/binary variants)
+complex_types_list:
+  - name: list_boolean
+    iceberg_type: "list<boolean>"
+    element_type: boolean
+    
+  - name: list_int
+    iceberg_type: "list<int>"
+    element_type: int
+    
+  - name: list_long
+    iceberg_type: "list<long>"
+    element_type: long
+    
+  - name: list_float
+    iceberg_type: "list<float>"
+    element_type: float
+    
+  - name: list_double
+    iceberg_type: "list<double>"
+    element_type: double
+    
+  - name: list_decimal
+    iceberg_type: "list<decimal(10,2)>"
+    element_type: "decimal(10,2)"
+    
+  - name: list_date
+    iceberg_type: "list<date>"
+    element_type: date
+    
+  - name: list_time
+    iceberg_type: "list<time>"
+    element_type: time
+    
+  - name: list_timestamp
+    iceberg_type: "list<timestamp>"
+    element_type: timestamp
+    
+  - name: list_timestamptz
+    iceberg_type: "list<timestamptz>"
+    element_type: timestamptz
+    
+  - name: list_uuid
+    iceberg_type: "list<uuid>"
+    element_type: uuid
+    
+  - name: list_fixed
+    iceberg_type: "list<fixed(16)>"
+    element_type: "fixed(16)"
+    
+  - name: list_string_small
+    iceberg_type: "list<string>"
+    element_type: string
+    length_category: small
+    
+  - name: list_string_medium
+    iceberg_type: "list<string>"
+    element_type: string
+    length_category: medium
+    
+  - name: list_string_long
+    iceberg_type: "list<string>"
+    element_type: string
+    length_category: long
+    
+  - name: list_string_xlong
+    iceberg_type: "list<string>"
+    element_type: string
+    length_category: xlong
+    
+  - name: list_binary_small
+    iceberg_type: "list<binary>"
+    element_type: binary
+    length_category: small
+    
+  - name: list_binary_medium
+    iceberg_type: "list<binary>"
+    element_type: binary
+    length_category: medium
+    
+  - name: list_binary_long
+    iceberg_type: "list<binary>"
+    element_type: binary
+    length_category: long
+    
+  - name: list_binary_xlong
+    iceberg_type: "list<binary>"
+    element_type: binary
+    length_category: xlong
+
+# Complex Types - Map (20 types, map<int, primitive>)
+complex_types_map:
+  - name: map_int_boolean
+    iceberg_type: "map<int, boolean>"
+    key_type: int
+    value_type: boolean
+    
+  - name: map_int_int
+    iceberg_type: "map<int, int>"
+    key_type: int
+    value_type: int
+    
+  - name: map_int_long
+    iceberg_type: "map<int, long>"
+    key_type: int
+    value_type: long
+    
+  - name: map_int_float
+    iceberg_type: "map<int, float>"
+    key_type: int
+    value_type: float
+    
+  - name: map_int_double
+    iceberg_type: "map<int, double>"
+    key_type: int
+    value_type: double
+    
+  - name: map_int_decimal
+    iceberg_type: "map<int, decimal(10,2)>"
+    key_type: int
+    value_type: "decimal(10,2)"
+    
+  - name: map_int_date
+    iceberg_type: "map<int, date>"
+    key_type: int
+    value_type: date
+    
+  - name: map_int_time
+    iceberg_type: "map<int, time>"
+    key_type: int
+    value_type: time
+    
+  - name: map_int_timestamp
+    iceberg_type: "map<int, timestamp>"
+    key_type: int
+    value_type: timestamp
+    
+  - name: map_int_timestamptz
+    iceberg_type: "map<int, timestamptz>"
+    key_type: int
+    value_type: timestamptz
+    
+  - name: map_int_uuid
+    iceberg_type: "map<int, uuid>"
+    key_type: int
+    value_type: uuid
+    
+  - name: map_int_fixed
+    iceberg_type: "map<int, fixed(16)>"
+    key_type: int
+    value_type: "fixed(16)"
+    
+  - name: map_int_string_small
+    iceberg_type: "map<int, string>"
+    key_type: int
+    value_type: string
+    length_category: small
+    
+  - name: map_int_string_medium
+    iceberg_type: "map<int, string>"
+    key_type: int
+    value_type: string
+    length_category: medium
+    
+  - name: map_int_string_long
+    iceberg_type: "map<int, string>"
+    key_type: int
+    value_type: string
+    length_category: long
+    
+  - name: map_int_string_xlong
+    iceberg_type: "map<int, string>"
+    key_type: int
+    value_type: string
+    length_category: xlong
+    
+  - name: map_int_binary_small
+    iceberg_type: "map<int, binary>"
+    key_type: int
+    value_type: binary
+    length_category: small
+    
+  - name: map_int_binary_medium
+    iceberg_type: "map<int, binary>"
+    key_type: int
+    value_type: binary
+    length_category: medium
+    
+  - name: map_int_binary_long
+    iceberg_type: "map<int, binary>"
+    key_type: int
+    value_type: binary
+    length_category: long
+    
+  - name: map_int_binary_xlong
+    iceberg_type: "map<int, binary>"
+    key_type: int
+    value_type: binary
+    length_category: xlong
+
+# Complex Types - Struct (20 types, struct with one field of each primitive)
+complex_types_struct:
+  - name: struct_boolean
+    iceberg_type: "struct<field:boolean>"
+    fields:
+      - name: field
+        type: boolean
+    
+  - name: struct_int
+    iceberg_type: "struct<field:int>"
+    fields:
+      - name: field
+        type: int
+    
+  - name: struct_long
+    iceberg_type: "struct<field:long>"
+    fields:
+      - name: field
+        type: long
+    
+  - name: struct_float
+    iceberg_type: "struct<field:float>"
+    fields:
+      - name: field
+        type: float
+    
+  - name: struct_double
+    iceberg_type: "struct<field:double>"
+    fields:
+      - name: field
+        type: double
+    
+  - name: struct_decimal
+    iceberg_type: "struct<field:decimal(10,2)>"
+    fields:
+      - name: field
+        type: "decimal(10,2)"
+    
+  - name: struct_date
+    iceberg_type: "struct<field:date>"
+    fields:
+      - name: field
+        type: date
+    
+  - name: struct_time
+    iceberg_type: "struct<field:time>"
+    fields:
+      - name: field
+        type: time
+    
+  - name: struct_timestamp
+    iceberg_type: "struct<field:timestamp>"
+    fields:
+      - name: field
+        type: timestamp
+    
+  - name: struct_timestamptz
+    iceberg_type: "struct<field:timestamptz>"
+    fields:
+      - name: field
+        type: timestamptz
+    
+  - name: struct_uuid
+    iceberg_type: "struct<field:uuid>"
+    fields:
+      - name: field
+        type: uuid
+    
+  - name: struct_fixed
+    iceberg_type: "struct<field:fixed(16)>"
+    fields:
+      - name: field
+        type: "fixed(16)"
+    
+  - name: struct_string_small
+    iceberg_type: "struct<field:string>"
+    fields:
+      - name: field
+        type: string
+        length_category: small
+    
+  - name: struct_string_medium
+    iceberg_type: "struct<field:string>"
+    fields:
+      - name: field
+        type: string
+        length_category: medium
+    
+  - name: struct_string_long
+    iceberg_type: "struct<field:string>"
+    fields:
+      - name: field
+        type: string
+        length_category: long
+    
+  - name: struct_string_xlong
+    iceberg_type: "struct<field:string>"
+    fields:
+      - name: field
+        type: string
+        length_category: xlong
+    
+  - name: struct_binary_small
+    iceberg_type: "struct<field:binary>"
+    fields:
+      - name: field
+        type: binary
+        length_category: small
+    
+  - name: struct_binary_medium
+    iceberg_type: "struct<field:binary>"
+    fields:
+      - name: field
+        type: binary
+        length_category: medium
+    
+  - name: struct_binary_long
+    iceberg_type: "struct<field:binary>"
+    fields:
+      - name: field
+        type: binary
+        length_category: long
+    
+  - name: struct_binary_xlong
+    iceberg_type: "struct<field:binary>"
+    fields:
+      - name: field
+        type: binary
+        length_category: xlong
+
+# Table generation matrix
+# Total tables = base_types × compression_configs × encoding_types × iceberg_versions
+# Base types: 20 primitives + 20 lists + 20 maps + 20 structs = 80
+# Compression configs: gzip(3) + zstd(3) + snappy(1) + lz4(1) = 8
+# Encoding types: 2 (PLAIN, RLE - Spark-supported only)
+# Iceberg versions: 2
+# Total: 80 × 8 × 2 × 2 = 2,560 tables
+# = 80 × 9 × 8 × 2 = 11,520 tables
+table_count:
+  basic_primitive_types: 12
+  string_variants: 4
+  binary_variants: 4
+  total_primitive_types: 20
+  complex_list_types: 20
+  complex_map_types: 20
+  complex_struct_types: 20
+  total_base_types: 80
+  compression_codecs: 2
+  compression_levels_per_codec: 5
+  total_compression_configs: 10
+  encoding_variants: 8
+  iceberg_versions: 2
+  total_tables: 12800
+
+# Write Pattern Tables - Comprehensive multi-column tables for compaction testing
+write_patterns:
+  metadata:
+    description: "Comprehensive multi-column tables with different write patterns for compaction testing"
+    total_columns: 24
+    final_rows: 1000
+    deterministic_data: true
+    
+  # Schema definition for all write-pattern tables
+  schema:
+    - name: id
+      type: int
+      description: "Primary key, sequential integers 1-1000"
+      
+    # 20 primitive type columns
+    - name: boolean_col
+      type: boolean
+    - name: int_col
+      type: int
+    - name: long_col
+      type: long
+    - name: float_col
+      type: float
+    - name: double_col
+      type: double
+    - name: string_col
+      type: string
+    - name: binary_col
+      type: binary
+    - name: date_col
+      type: date
+    - name: time_col
+      type: time
+    - name: timestamp_col
+      type: timestamp
+    - name: timestamptz_col
+      type: timestamptz
+    - name: decimal_col
+      type: decimal(10,2)
+    - name: uuid_col
+      type: uuid
+    - name: fixed_col
+      type: fixed(16)
+    - name: string_small_col
+      type: string
+    - name: string_medium_col
+      type: string
+    - name: string_long_col
+      type: string
+    - name: binary_small_col
+      type: binary
+    - name: binary_medium_col
+      type: binary
+    - name: binary_long_col
+      type: binary
+      
+    # 3 list type columns (simplified from planned 20)
+    - name: list_boolean_col
+      type: list<boolean>
+    - name: list_int_col
+      type: list<int>
+    - name: list_string_col
+      type: list<string>
+  
+  # Write patterns for different compaction scenarios
+  patterns:
+    - name: insert_heavy
+      description: "Append-only growth pattern"
+      use_case: "Log/event data, time-series"
+      commits: 10
+      operations: "INSERT 100 rows per commit"
+      pyiceberg_status: "fully_supported"
+      
+    - name: update_heavy
+      description: "In-place modifications pattern"
+      use_case: "Customer records, inventory updates"
+      commits: 10
+      operations: "INSERT 1000 rows, then UPDATE different blocks"
+      pyiceberg_status: "limited"
+      limitation: "No direct UPDATE operations"
+      
+    - name: delete_heavy
+      description: "Data purging pattern"
+      use_case: "GDPR compliance, data retention"
+      commits: 15
+      operations: "INSERT 2000 rows, then DELETE 1000 rows"
+      pyiceberg_status: "limited"
+      limitation: "No direct DELETE operations"
+      
+    - name: mixed_chaos
+      description: "Real-world simulation pattern"
+      use_case: "OLTP workload"
+      commits: 20
+      operations: "Random mix of INSERT/UPDATE/DELETE"
+      pyiceberg_status: "limited"
+      limitation: "No mixed operations support"
+      
+    - name: batch_replace
+      description: "ETL-style pattern"
+      use_case: "Daily batch processing"
+      commits: 12
+      operations: "Alternating INSERT new batch, DELETE old batch"
+      pyiceberg_status: "fully_supported"
+      implementation: "Uses table.overwrite() operations"
+      
+    - name: gradual_growth
+      description: "Steady state pattern"
+      use_case: "User growth with churn"
+      commits: 10
+      operations: "Each commit: +150 INSERT, -50 DELETE"
+      pyiceberg_status: "fully_supported"
+      implementation: "Incremental inserts"
+      
+    - name: burst_ops
+      description: "Peak load pattern"
+      use_case: "Black Friday, viral content"
+      commits: 7
+      operations: "Small commits, then massive burst, then cleanup"
+      pyiceberg_status: "fully_supported"
+      implementation: "Burst + overwrite pattern"
+      
+    - name: truncate_cycles
+      description: "Complete refresh pattern"
+      use_case: "Data refresh, testing resets"
+      commits: 20
+      operations: "Multiple truncate and regrow cycles"
+      pyiceberg_status: "limited"
+      limitation: "No TRUNCATE operations"
+      
+  # Configuration for write-pattern tables
+  table_config:
+    compression: "zstd"
+    encoding: "plain_dictionary"
+    versions: ["v1", "v2"]
+    delete_modes: ["cow", "posdelete"]
+    total_tables: 32  # 8 patterns × 2 versions × 2 delete modes
+
+# Partitioned Tables - Comprehensive partition testing
+partitioned_tables:
+  metadata:
+    description: "Partitioned tables with various partition transforms for compaction testing"
+    total_columns: 30  # 7 partition fields + 20 primitive + 3 list
+    final_rows: 100000
+    deterministic_data: true
+    versions: ["v2"]  # Only v2 format
+    delete_modes: ["cow", "posdelete"]  # No eqdelete
+    
+  # Schema definition for all partitioned tables (extends write-pattern schema)
+  schema:
+    - name: id
+      type: int
+      description: "Primary key, sequential integers 1-10000"
+    - name: category
+      type: string
+      description: "Categorical field with 5 values: A, B, C, D, E (2000 rows each)"
+    - name: name
+      type: string
+      description: "String field for truncate transforms: name_1 to name_10000"
+    - name: value
+      type: int
+      description: "Numeric field for bucket transforms: 1-10000"
+    - name: timestamp
+      type: timestamp
+      description: "Temporal field spanning 2020-2024 for temporal transforms"
+    - name: deprecated_field
+      type: string
+      description: "Always NULL for void transform testing"
+    - name: single_value_field
+      type: string
+      description: "Always 'CONSTANT' for single-partition testing"
+    # All 20 primitive columns from write-patterns
+    - name: boolean_col
+      type: boolean
+    - name: int_col
+      type: int
+    - name: long_col
+      type: long
+    - name: float_col
+      type: float
+    - name: double_col
+      type: double
+    - name: string_col
+      type: string
+    - name: binary_col
+      type: binary
+    - name: date_col
+      type: date
+    - name: time_col
+      type: time
+    - name: timestamp_col
+      type: timestamp
+    - name: timestamptz_col
+      type: timestamptz
+    - name: decimal_col
+      type: decimal(10,2)
+    - name: uuid_col
+      type: uuid
+    - name: fixed_col
+      type: fixed(16)
+    - name: string_small_col
+      type: string
+    - name: string_medium_col
+      type: string
+    - name: string_long_col
+      type: string
+    - name: binary_small_col
+      type: binary
+    - name: binary_medium_col
+      type: binary
+    - name: binary_long_col
+      type: binary
+    # 3 list columns
+    - name: list_boolean_col
+      type: list<boolean>
+    - name: list_int_col
+      type: list<int>
+    - name: list_string_col
+      type: list<string>
+  
+  # Partition transform specifications
+  partition_transforms:
+    # Single-column transforms (10)
+    - name: identity_category
+      spec: "identity(category)"
+      description: "Direct categorical partitioning (5 partitions)"
+      
+    - name: bucket4_id
+      spec: "bucket[4](id)"
+      description: "Hash partition into 4 buckets"
+      
+    - name: bucket8_id
+      spec: "bucket[8](id)"
+      description: "Hash partition into 8 buckets"
+      
+    - name: truncate2_name
+      spec: "truncate[2](name)"
+      description: "Truncate string to 2 characters"
+      
+    - name: truncate5_name
+      spec: "truncate[5](name)"
+      description: "Truncate string to 5 characters"
+      
+    - name: year_timestamp
+      spec: "year(timestamp)"
+      description: "Partition by year (5 years: 2020-2024)"
+      
+    - name: month_timestamp
+      spec: "month(timestamp)"
+      description: "Partition by month"
+      
+    - name: day_timestamp
+      spec: "day(timestamp)"
+      description: "Partition by day"
+      
+    - name: hour_timestamp
+      spec: "hour(timestamp)"
+      description: "Partition by hour"
+      
+    - name: bucket10_value
+      spec: "bucket[10](value)"
+      description: "Numeric bucketing into 10 buckets"
+    
+    # Multi-column transforms (5)
+    - name: identity_category__year_timestamp
+      spec: "identity(category), year(timestamp)"
+      description: "Categorical + temporal (2-way partition)"
+      
+    - name: identity_category__bucket8_id
+      spec: "identity(category), bucket[8](id)"
+      description: "Categorical + hash (2-way partition)"
+      
+    - name: bucket4_id__day_timestamp
+      spec: "bucket[4](id), day(timestamp)"
+      description: "Hash + temporal (2-way partition)"
+      
+    - name: year_timestamp__bucket4_id
+      spec: "year(timestamp), bucket[4](id)"
+      description: "Temporal + hash, different order (2-way partition)"
+      
+    - name: identity_category__month_timestamp__bucket4_id
+      spec: "identity(category), month(timestamp), bucket[4](id)"
+      description: "Three-way partition"
+    
+    # Edge case transforms (1)
+    # Note: void transform not supported in Spark 3.4 / Iceberg 1.4.2
+    # - name: void_deprecated
+    #   spec: "void(deprecated_field)"
+    #   description: "Hidden partition (single partition)"
+      
+    - name: identity_single
+      spec: "identity(single_value_field)"
+      description: "Single partition (constant value)"
+  
+  # Write patterns (same as unpartitioned)
+  patterns:
+    - insert_heavy
+    - update_heavy
+    - delete_heavy
+    - mixed_chaos
+    - batch_replace
+    - gradual_growth
+    - burst_ops
+    - truncate_cycles
+  
+  # Table count calculation
+  table_count:
+    partition_transforms: 16  # Removed void (unsupported in Spark 3.4)
+    write_patterns: 8
+    versions: 1  # v2 only
+    delete_modes: 2  # cow, posdelete
+    total_tables: 256  # 16 × 8 × 1 × 2 = 256
+
+# Naming convention for generated tables
+naming_convention:
+  unpartitioned_pattern: "unpart_{datatype}_{codec}_lvl{level}_{encoding}"
+  partitioned_pattern: "part_{transform_spec}_{pattern}_{delete_mode}_{path_style}"
+  description: "Tables prefixed with 'unpart' for unpartitioned, 'part' for partitioned"
+  examples:
+    unpartitioned:
+      - "v1.unpart_int_gzip_lvl1_plain"
+      - "v1.unpart_string_small_zstd_lvl3_dictionary"
+      - "v1.unpart_long_gzip_lvl2_delta_binary_packed"
+      - "v2.unpart_float_zstd_lvl4_byte_stream_split"
+    partitioned:
+      - "part_identity_category_insert_heavy_cow_hive"
+      - "part_bucket4_id_delete_heavy_posdelete_nonhive"
+      - "part_identity_category__year_timestamp_mixed_chaos_cow_hive"
+      - "part_void_deprecated_gradual_growth_posdelete_nonhive"
+  namespace_organization:
+    - "v1 namespace: Iceberg format version 1 tables (unpartitioned only)"
+    - "v2 namespace: Iceberg format version 2 tables (unpartitioned + partitioned)"
+  write_pattern_tables:
+    unpartitioned: "unpart_{pattern_name}_zstd_plain_dictionary_{version}_{delete_mode}"
+    partitioned: "part_{transform_spec}_{pattern}_{delete_mode}_{path_style}"
+    examples:
+      - "unpart_insert_heavy_zstd_plain_dictionary_v1_cow"
+      - "part_month_timestamp_batch_replace_cow_hive"

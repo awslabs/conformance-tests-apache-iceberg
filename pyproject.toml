@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iceberg-fuzzer"
+version = "1.0.0"
+description = "Apache Iceberg Table Fuzzer for testing compaction, compression, encoding, and cross-engine compatibility"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Amazon Web Services"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "pyspark==3.5.3",
+    "pyiceberg>=0.5.0",
+    "polars>=0.20.0",
+    "pyarrow>=12.0.0",
+    "pyyaml>=6.0",
+    "boto3>=1.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=22.0.0",
+    "flake8>=4.0.0",
+]
+
+[project.scripts]
+cli = "cli:main"
+
+[project.urls]
+Homepage = "https://github.com/gsoundar/iceberg-table-generator"
+Repository = "https://github.com/gsoundar/iceberg-table-generator"
+
+[tool.setuptools.packages.find]
+include = ["backend*", "validator*", "specs*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml"]

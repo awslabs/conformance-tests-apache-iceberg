@@ -1,0 +1,147 @@
+# Write Pattern Tables - Comprehensive multi-column tables for compaction testing
+
+metadata:
+  description: "Comprehensive multi-column tables with different write patterns for compaction testing"
+  total_columns: 24
+  final_rows: 10000  # Updated to match actual PySpark implementation
+  deterministic_data: true
+  
+# Schema definition for all write-pattern tables
+schema:
+  - name: id
+    type: int
+    description: "Primary key, sequential integers 1-1000"
+    
+  # 20 primitive type columns
+  - name: boolean_col
+    type: boolean
+  - name: int_col
+    type: int
+  - name: long_col
+    type: long
+  - name: float_col
+    type: float
+  - name: double_col
+    type: double
+  - name: string_col
+    type: string
+  - name: binary_col
+    type: binary
+  - name: date_col
+    type: date
+  - name: time_col
+    type: time
+  - name: timestamp_col
+    type: timestamp
+  - name: timestamptz_col
+    type: timestamptz
+  - name: decimal_col
+    type: decimal(10,2)
+  - name: uuid_col
+    type: uuid
+  - name: fixed_col
+    type: fixed(16)
+  - name: string_small_col
+    type: string
+  - name: string_medium_col
+    type: string
+  - name: string_long_col
+    type: string
+  - name: binary_small_col
+    type: binary
+  - name: binary_medium_col
+    type: binary
+  - name: binary_long_col
+    type: binary
+    
+  # 3 list type columns
+  - name: list_boolean_col
+    type: list<boolean>
+  - name: list_int_col
+    type: list<int>
+  - name: list_string_col
+    type: list<string>
+
+# Write patterns for different compaction scenarios
+patterns:
+  - name: insert_heavy
+    description: "Append-only growth pattern"
+    use_case: "Log/event data, time-series"
+    commits: 10
+    operations: "INSERT 100 rows per commit"
+    pyiceberg_status: "fully_supported"
+    
+  - name: update_heavy
+    description: "In-place modifications pattern"
+    use_case: "Customer records, inventory updates"
+    commits: 10
+    operations: "INSERT 1000 rows, then UPDATE different blocks"
+    pyiceberg_status: "limited"
+    limitation: "No direct UPDATE operations"
+    
+  - name: delete_heavy
+    description: "Data purging pattern"
+    use_case: "GDPR compliance, data retention"
+    commits: 15
+    operations: "INSERT 2000 rows, then DELETE 1000 rows"
+    pyiceberg_status: "limited"
+    limitation: "No direct DELETE operations"
+    
+  - name: mixed_chaos
+    description: "Real-world simulation pattern"
+    use_case: "OLTP workload"
+    commits: 20
+    operations: "Random mix of INSERT/UPDATE/DELETE"
+    pyiceberg_status: "limited"
+    limitation: "No mixed operations support"
+    
+  - name: batch_replace
+    description: "ETL-style pattern"
+    use_case: "Daily batch processing"
+    commits: 12
+    operations: "Alternating INSERT new batch, DELETE old batch"
+    pyiceberg_status: "fully_supported"
+    implementation: "Uses table.overwrite() operations"
+    
+  - name: gradual_growth
+    description: "Steady state pattern"
+    use_case: "User growth with churn"
+    commits: 10
+    operations: "Each commit: +150 INSERT, -50 DELETE"
+    pyiceberg_status: "fully_supported"
+    implementation: "Incremental inserts"
+    
+  - name: burst_ops
+    description: "Peak load pattern"
+    use_case: "Black Friday, viral content"
+    commits: 7
+    operations: "Small commits, then massive burst, then cleanup"
+    pyiceberg_status: "fully_supported"
+    implementation: "Burst + overwrite pattern"
+    
+  - name: truncate_cycles
+    description: "Complete refresh pattern"
+    use_case: "Data refresh, testing resets"
+    commits: 20
+    operations: "Multiple truncate and regrow cycles"
+    pyiceberg_status: "limited"
+    limitation: "No TRUNCATE operations"
+
+# Configuration for write-pattern tables
+table_config:
+  compression: "zstd"
+  encoding: "plain_dictionary"
+  versions: ["v1", "v2"]
+  delete_modes: ["cow", "posdelete"]  # PySpark cannot create eqdelete
+  total_tables: 24  # 8 patterns × (1 v1_cow + 2 v2_modes) = 8 + 16 = 24
+  
+  # Version-specific constraints
+  v1_supported_modes: ["cow"]  # v1 only supports copy-on-write
+  v2_supported_modes: ["cow", "posdelete"]  # v2 supports both, but not eqdelete in PySpark
+
+# Naming convention
+naming_convention:
+  pattern: "unpart_{pattern}_zstd_plain_dictionary_{version}_{delete_mode}"
+  examples:
+    - "unpart_insert_heavy_zstd_plain_dictionary_v1_cow"
+    - "unpart_delete_heavy_zstd_plain_dictionary_v2_posdelete"
