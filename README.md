@@ -4,30 +4,9 @@ Generate a comprehensive variety of Apache Iceberg tables for testing compaction
 
 ## Installation
 
-### Prerequisites
+See [INSTALL.md](INSTALL.md) for setup instructions.
 
-- Python 3.9+
-- Java 21+ (for PySpark)
-
-### Setup with Virtual Environment (Recommended)
-
-```bash
-# Clone the repository
-git clone https://github.com/awslabs/apache-iceberg-table-fuzzer.git
-cd apache-iceberg-table-fuzzer
-
-# Create and activate virtual environment
-python3 -m venv iceberg-fuzzer-env
-source iceberg-fuzzer-env/bin/activate  # On Windows: iceberg-fuzzer-env\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Set JAVA_HOME (required for PySpark)
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk  # Adjust path as needed
-```
-
-### Install Java (if not already installed)
+## Usage
 
 **Amazon Linux/RHEL/CentOS:**
 ```bash
