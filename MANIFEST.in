@@ -1,6 +1,0 @@
-include README.md
-include requirements.txt
-include LICENSE
-recursive-include specs *.yaml
-recursive-include backend *.py
-recursive-include validator *.py
