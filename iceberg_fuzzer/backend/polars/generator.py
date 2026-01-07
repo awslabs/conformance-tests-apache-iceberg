@@ -42,11 +42,11 @@ import uuid
 
 class PolarsGenerator(TableGenerator):
     """Polars implementation of table generator"""
-    
+
     def __init__(self, warehouse_path: str, specs_path: str):
         super().__init__(warehouse_path, specs_path)
         self._setup_warehouse()
-    
+
     def _setup_warehouse(self):
         """Setup warehouse path and catalog"""
         path = Path(self.warehouse_path)
@@ -246,16 +246,6 @@ class PolarsGenerator(TableGenerator):
         iceberg_type = table_spec['iceberg_type']
         version = int(table_spec['version'].replace('v', ''))
         
-        # Skip UUID types - Polars/PyArrow limitations with binary UUID
-        if iceberg_type == 'uuid' or (iceberg_type.startswith('list<') and 'uuid' in iceberg_type):
-            print(f"⚠️  Skipped {table_name} (UUID type: {iceberg_type})")
-            return True  # Return True to indicate "handled" (not failed)
-        
-        # Skip fixed types - Polars/PyArrow binary compatibility issues
-        if iceberg_type.startswith('fixed[') or (iceberg_type.startswith('list<') and 'fixed[' in iceberg_type):
-            print(f"⚠️  Skipped {table_name} (fixed type: {iceberg_type})")
-            return True  # Return True to indicate "handled" (not failed)
-        
         # Skip nested types - Polars/PyArrow limitations
         if iceberg_type.startswith('map<') or iceberg_type.startswith('struct<'):
             print(f"⚠️  Skipped {table_name} (nested type: {iceberg_type})")
@@ -356,13 +346,18 @@ class PolarsGenerator(TableGenerator):
         # Get all type definitions
         all_types = []
         all_types.extend(specs.get('primitive_types', []))
-        all_types.extend(specs.get('complex_types_list', []))
-        all_types.extend(specs.get('complex_types_map', []))
-        all_types.extend(specs.get('complex_types_struct', []))
+
+        # In minimal mode, skip complex types to match PyIceberg behavior
+        if not minimal:
+            all_types.extend(specs.get('complex_types_list', []))
+            all_types.extend(specs.get('complex_types_map', []))
+            all_types.extend(specs.get('complex_types_struct', []))
         
         # Filter out time types if minimal mode
         if minimal:
             all_types = [t for t in all_types if not ('time' in t.get('name', '') and t.get('name') != 'timestamp' and t.get('name') != 'timestamptz')]
+            # Also filter out UUID and fixed types to match Polars limitations
+            all_types = [t for t in all_types if t.get('name') not in ['uuid', 'fixed_16']]
         
         # Get configurations
         if minimal:

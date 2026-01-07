@@ -68,7 +68,7 @@ class PyIcebergGenerator(TableGenerator):
         return False
     
     def supports_minimal_mode(self) -> bool:
-        return False
+        return True
     
     def delete_all_tables(self, num_parallel: int = 1):
         """Delete all tables in the warehouse"""
