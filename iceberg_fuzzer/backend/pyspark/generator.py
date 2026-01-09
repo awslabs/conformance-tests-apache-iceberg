@@ -602,29 +602,16 @@ class PySparkGenerator(TableGenerator):
             self.delete_tables_by_namespace("partitioned")
         
         if minimal:
-            # Minimal set: 16 key transforms with mixed_chaos + posdelete
+            # Minimal set: 8 key transforms with mixed_chaos + 2 delete modes
             partition_transforms = [
-                # Single-column (10)
+                # Essential transforms (4)
                 ["identity(category)"],
-                ["bucket[2](id)"],
                 ["bucket[4](id)"],
-                ["bucket[8](id)"],
-                ["truncate[1](name)"],
-                ["truncate[2](name)"],
-                ["truncate[5](name)"],
-                ["year(timestamp)"],
                 ["month(timestamp)"],
-                ["day(timestamp)"],
-                # Multi-column (6)
-                ["identity(category)", "year(timestamp)"],
-                ["identity(category)", "bucket[4](id)"],
-                ["bucket[4](id)", "day(timestamp)"],
-                ["year(timestamp)", "bucket[4](id)"],
-                ["truncate[2](name)", "month(timestamp)"],
-                ["identity(category)", "month(timestamp)", "bucket[4](id)"]
+                ["identity(category)", "bucket[4](id)"]
             ]
-            patterns = ["mixed_chaos"]
-            delete_modes = ["posdelete"]
+            write_patterns = ["mixed_chaos"]
+            delete_modes = ["cow", "posdelete"]
         else:
             # Full set: all 37 transforms with 4 patterns
             partition_transforms = [
@@ -674,7 +661,7 @@ class PySparkGenerator(TableGenerator):
                 # Edge cases (1)
                 ["identity(single_value_field)"]   # Single partition
             ]
-            patterns = ["insert_heavy", "update_heavy", "delete_heavy", "mixed_chaos"]
+            write_patterns = ["insert_heavy", "update_heavy", "delete_heavy", "mixed_chaos"]
             delete_modes = ["cow", "posdelete"]
         
         # Build table specs
@@ -714,7 +701,7 @@ class PySparkGenerator(TableGenerator):
             
             transform_name = "_".join(transform_parts)
             
-            for pattern in patterns:
+            for pattern in write_patterns:
                 for mode in delete_modes:
                     # Skip invalid combinations: v1 only supports cow
                     if mode == "posdelete" and "_v1_" in transform_name:
