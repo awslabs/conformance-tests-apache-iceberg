@@ -186,71 +186,7 @@ def create_table_with_commits(catalog_config, table_name, table_spec, num_commit
         print(f"Error creating table {table_name}: {e}")
         return False
 
-def load_table_specs(yaml_path, minimal=False):
-    with open(yaml_path, 'r') as f:
-        specs = yaml.safe_load(f)
-    
-    if 'tables' in specs:
-        return specs['tables']
-    
-    tables = []
-    
-    # Collect all type definitions (exclude complex types for PyIceberg)
-    all_types = []
-    all_types.extend(specs.get('primitive_types', []))
-    # Skip complex types - not fully supported in PyIceberg
-    # all_types.extend(specs.get('complex_types_list', []))
-    # all_types.extend(specs.get('complex_types_map', []))
-    # all_types.extend(specs.get('complex_types_struct', []))
-    
-    # Filter out time types if minimal mode
-    if minimal:
-        all_types = [t for t in all_types if not ('time' in t.get('name', '') and t.get('name') != 'timestamp' and t.get('name') != 'timestamptz')]
-        # Also filter out UUID and fixed types to match Polars limitations
-        all_types = [t for t in all_types if t.get('name') not in ['uuid', 'fixed_16']]
-    
-    # Minimal mode: only none compression and plain encoding
-    if minimal:
-        compression_configs = [{'codec': 'none', 'level': None}]
-        encoding_types = ['PLAIN']
-    else:
-        compression_configs = []
-        for comp_config in specs.get('compression_configs', []):
-            codec = comp_config['codec']
-            levels = comp_config.get('levels', [None])
-            for level in levels:
-                compression_configs.append({'codec': codec, 'level': level})
-        
-        encoding_types = specs.get('encoding_types', ['PLAIN'])
-    
-    iceberg_versions = []
-    for version_config in specs.get('iceberg_versions', [{'version': 2, 'namespace': 'v2'}]):
-        iceberg_versions.append(f"v{version_config['version']}")
-    
-    for type_def in all_types:
-        for compression in compression_configs:
-            for encoding in encoding_types:
-                for version in iceberg_versions:
-                    comp_str = f"{compression['codec']}"
-                    if compression['level'] is not None:
-                        comp_str += f"_lvl{compression['level']}"
-                    
-                    table_name = f"unpart_{type_def['name']}_{comp_str}_{encoding.lower()}_{version}"
-                    
-                    schema = [
-                        {'name': 'id', 'type': 'int'},
-                        {'name': 'value', 'type': type_def['iceberg_type']}
-                    ]
-                    
-                    tables.append({
-                        'name': table_name,
-                        'schema': schema,
-                        'compression': compression,
-                        'encoding': encoding,
-                        'iceberg_version': version
-                    })
-    
-    return tables
+from iceberg_fuzzer.table_spec import load_table_specs
 
 def create_comprehensive_schema():
     """Create comprehensive schema with multiple data types"""
