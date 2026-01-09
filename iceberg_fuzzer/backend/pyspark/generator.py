@@ -30,7 +30,6 @@ from generator import TableGenerator
 from backend.pyspark.cli import (
     create_spark_session,
     is_s3_table_warehouse,
-    load_minimal_table_specs,
     create_single_type_table,
     create_comprehensive_table,
     create_partitioned_table,
@@ -453,12 +452,8 @@ class PySparkGenerator(TableGenerator):
             print("Deleting existing simple tables before generation...")
             self.delete_tables_by_namespace("simple")
         
-        if minimal:
-            table_specs = load_minimal_table_specs(self.specs_path)
-            mode_str = "minimal (none compression, plain encoding)"
-        else:
-            table_specs = load_table_specs(self.specs_path, minimal=minimal)
-            mode_str = "full"
+        table_specs = load_table_specs(self.specs_path, minimal=minimal)
+        mode_str = "minimal (none compression, plain encoding)" if minimal else "full"
         
         # Apply random selection if specified
         table_specs = self._random_select_tables(table_specs, random_count)
