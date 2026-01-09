@@ -242,9 +242,15 @@ class PolarsGenerator(TableGenerator):
     def _create_simple_table(self, table_spec: dict) -> bool:
         """Create a single simple table using Polars + PyIceberg"""
         table_name = table_spec['name']
-        field_name = table_spec['field_name']
-        iceberg_type = table_spec['iceberg_type']
-        version = int(table_spec['version'].replace('v', ''))
+        
+        # Extract field info from schema
+        value_field = table_spec['schema'][1]  # Second field is the value field
+        field_name = value_field['name']
+        field_type = value_field['type']
+        
+        # Convert to iceberg type name
+        iceberg_type = field_type
+        version = int(table_spec['properties']['format-version'])
         
         # Skip nested types - Polars/PyArrow limitations
         if iceberg_type.startswith('map<') or iceberg_type.startswith('struct<'):
@@ -337,68 +343,8 @@ class PolarsGenerator(TableGenerator):
     
     def generate_simple_tables(self, num_parallel: int = 1, minimal: bool = False, random_count: int = None, delete_existing: bool = False):
         """Generate simple single-type tables"""
-        import yaml
-        
-        # Load table specs
-        with open(self.specs_path, 'r') as f:
-            specs = yaml.safe_load(f)
-        
-        # Get all type definitions
-        all_types = []
-        all_types.extend(specs.get('primitive_types', []))
-
-        # In minimal mode, skip complex types to match PyIceberg behavior
-        if not minimal:
-            all_types.extend(specs.get('complex_types_list', []))
-            all_types.extend(specs.get('complex_types_map', []))
-            all_types.extend(specs.get('complex_types_struct', []))
-        
-        # Filter out time types if minimal mode
-        if minimal:
-            all_types = [t for t in all_types if not ('time' in t.get('name', '') and t.get('name') != 'timestamp' and t.get('name') != 'timestamptz')]
-            # Also filter out UUID and fixed types to match Polars limitations
-            all_types = [t for t in all_types if t.get('name') not in ['uuid', 'fixed_16']]
-        
-        # Get configurations
-        if minimal:
-            # Minimal: only none compression, plain encoding, v1&v2
-            compression_configs = [{'codec': 'none', 'level': None}]
-            encoding_types = ['PLAIN']
-            iceberg_versions = ['v1', 'v2']
-        else:
-            compression_configs = []
-            for comp_config in specs.get('compression_configs', []):
-                codec = comp_config['codec']
-                levels = comp_config.get('levels', [None])
-                for level in levels:
-                    compression_configs.append({'codec': codec, 'level': level})
-            
-            encoding_types = specs.get('encoding_types', ['PLAIN'])
-            
-            iceberg_versions = []
-            for version_config in specs.get('iceberg_versions', [{'version': 2, 'namespace': 'v2'}]):
-                iceberg_versions.append(f"v{version_config['version']}")
-        
-        # Generate table specs
-        table_specs = []
-        for type_def in all_types:
-            for compression in compression_configs:
-                for encoding in encoding_types:
-                    for version in iceberg_versions:
-                        comp_str = f"{compression['codec']}"
-                        if compression['level'] is not None:
-                            comp_str += f"_lvl{compression['level']}"
-                        
-                        table_name = f"unpart_{type_def['name']}_{comp_str}_{encoding.lower()}_{version}"
-                        
-                        table_specs.append({
-                            'name': table_name,
-                            'field_name': type_def['name'],
-                            'iceberg_type': type_def['iceberg_type'],
-                            'compression': compression,
-                            'encoding': encoding,
-                            'version': version
-                        })
+        from iceberg_fuzzer.table_spec import load_table_specs
+        table_specs = load_table_specs(self.specs_path, minimal=minimal)
         
         # Apply random selection if specified
         table_specs = self._random_select_tables(table_specs, random_count)

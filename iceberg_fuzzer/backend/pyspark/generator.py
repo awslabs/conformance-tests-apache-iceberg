@@ -30,7 +30,6 @@ from generator import TableGenerator
 from backend.pyspark.cli import (
     create_spark_session,
     is_s3_table_warehouse,
-    load_table_specs,
     load_minimal_table_specs,
     create_single_type_table,
     create_comprehensive_table,
@@ -39,6 +38,7 @@ from backend.pyspark.cli import (
     create_write_pattern_worker,
     create_partitioned_table_worker
 )
+from iceberg_fuzzer.table_spec import load_table_specs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class PySparkGenerator(TableGenerator):
@@ -457,7 +457,7 @@ class PySparkGenerator(TableGenerator):
             table_specs = load_minimal_table_specs(self.specs_path)
             mode_str = "minimal (none compression, plain encoding)"
         else:
-            table_specs = load_table_specs(self.specs_path)
+            table_specs = load_table_specs(self.specs_path, minimal=minimal)
             mode_str = "full"
         
         # Apply random selection if specified
