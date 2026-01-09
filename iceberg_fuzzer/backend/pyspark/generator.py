@@ -756,7 +756,7 @@ class PySparkGenerator(TableGenerator):
     
     def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None):
         """Generate minimal set of tables"""
-        table_specs = load_minimal_table_specs(self.specs_path)
+        table_specs = load_table_specs(self.specs_path, minimal=True)
         
         # Apply random selection if specified
         table_specs = self._random_select_tables(table_specs, random_count)

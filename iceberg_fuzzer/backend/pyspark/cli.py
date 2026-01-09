@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, date, time
 from decimal import Decimal
+from iceberg_fuzzer.table_spec import load_table_specs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from pyspark.sql import SparkSession
@@ -1328,23 +1329,6 @@ def load_table_specs(yaml_path):
     
     return tables
 
-def load_minimal_table_specs(yaml_path):
-    """Load minimal table specs: filter to only none compression, plain encoding, v1 and v2, excluding time types"""
-    # Load all specs first
-    all_specs = load_table_specs(yaml_path)
-    
-    # Filter to only none compression + plain encoding + both v1 and v2, excluding time types
-    minimal_specs = []
-    for spec in all_specs:
-        table_name = spec['name']
-        # Check if table matches: none compression, plain encoding, v1 or v2 version
-        if '_none_' in table_name and '_plain_' in table_name and ('_v1' in table_name or '_v2' in table_name):
-            # Exclude time-related data types (known PySpark issues)
-            if not ('_time_' in table_name or '_list_time_' in table_name or '_map_int_time_' in table_name or '_struct_time_' in table_name):
-                minimal_specs.append(spec)
-    
-    return minimal_specs
-
 def create_table_worker_with_session(warehouse_path, table_spec):
     """Worker function that creates its own Spark session per thread"""
     spark = None
@@ -1368,10 +1352,8 @@ def create_table_worker(spark, warehouse_path, spec, delete_existing=True):
 
 def generate_single_tables(args, spark, warehouse_path):
     """Generate single-type tables"""
-    if args.table_type == 'minimal':
-        table_specs = load_minimal_table_specs(args.specs)
-    else:
-        table_specs = load_table_specs(args.specs)
+    minimal = args.table_type == 'minimal'
+    table_specs = load_table_specs(args.specs, minimal=minimal)
     
     print(f"Generating {len(table_specs)} single-type tables with {args.num_parallel} parallel workers...")
     
