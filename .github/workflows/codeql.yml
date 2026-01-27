@@ -2,9 +2,7 @@ name: CodeQL
 
 on:
   push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
   schedule:
     - cron: '28 2 * * 5'  # Weekly on Monday at 5:00 UTC
 
@@ -21,12 +19,10 @@ jobs:
 
     timeout-minutes: 10
     permissions:
-      contents: read
-      security-events: write
-
-      # only required for workflows in private repositories
       actions: read
       contents: read
+      security-events: write
+      pull-requests: read
 
     strategy:
       fail-fast: false
