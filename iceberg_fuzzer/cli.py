@@ -282,6 +282,10 @@ Examples:
             else:
                 print("\n✅ Validation completed successfully")
     
+    except Exception as e:
+        print(f"Error generating tables: {e}")
+        sys.exit(1)
+
     finally:
         generator.cleanup()
 
