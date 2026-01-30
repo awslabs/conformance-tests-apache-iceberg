@@ -23,7 +23,7 @@ Abstract base class for table validators
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Dict
 
 class TableValidator(ABC):
     """Abstract base class for table validators"""

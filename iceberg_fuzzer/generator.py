@@ -23,7 +23,6 @@ Abstract base class for Iceberg table generators
 """
 
 from abc import ABC, abstractmethod
-from pathlib import Path
 
 class TableGenerator(ABC):
     """Abstract base class for table generation backends"""
