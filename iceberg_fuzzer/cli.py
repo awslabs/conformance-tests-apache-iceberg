@@ -167,6 +167,9 @@ Examples:
         elif args.backend == 'pyiceberg':
             from iceberg_fuzzer.backend.pyiceberg.generator import PyIcebergGenerator
             generator = PyIcebergGenerator(args.warehouse_path, None)
+        else:
+            print(f"Error: Backend '{args.backend}' does not support delete operation")
+            sys.exit(1)
         
         try:
             generator.delete_all_tables(args.num_parallel)

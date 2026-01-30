@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from generator import TableGenerator
+from iceberg_fuzzer.generator import TableGenerator
 from backend.pyspark.cli import (
     create_spark_session,
     is_s3_table_warehouse,

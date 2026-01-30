@@ -270,7 +270,6 @@ def disable_table_compaction(spark, catalog, namespace, table_name, warehouse_pa
         print(f"    → Disabled compaction for {catalog}.{namespace}.{table_name}")
     except Exception as e:
         print(f"    → Failed to disable compaction: {e}")
-        pass
 
 def disable_s3_table_maintenance(warehouse_path, namespace, table_name):
     """Disable maintenance operations for S3 Tables using AWS SDK"""
@@ -336,7 +335,6 @@ def disable_s3_table_maintenance(warehouse_path, namespace, table_name):
         
     except Exception as e:
         print(f"    → S3 Tables SDK call failed: {e}")
-        pass
 
 def create_namespace_if_not_exists(spark, catalog, namespace):
     """Create namespace if it doesn't exist"""
@@ -421,9 +419,7 @@ def create_spark_schema(table_spec):
         elif field_type_str.startswith('map<'):
             # Parse map<key_type, value_type>
             inner = field_type_str[4:-1]
-            key_type_str, value_type_str = inner.split(',', 1)
-            key_type_str = key_type_str.strip()
-            value_type_str = value_type_str.strip()
+            key_type_str, value_type_str = [t.strip() for t in inner.split(',', 1)]
             
             # Map key type
             if key_type_str == 'int':
@@ -571,9 +567,7 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
             elif field_type.startswith('map<'):
                 # Parse map type
                 inner = field_type[4:-1]
-                key_type_str, value_type_str = inner.split(',', 1)
-                key_type_str = key_type_str.strip()
-                value_type_str = value_type_str.strip()
+                key_type_str, value_type_str = [t.strip() for t in inner.split(',', 1)]
                 
                 # Generate map data based on value type
                 if value_type_str == 'string':
@@ -750,7 +744,6 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
                         return create_partitioned_table(spark, warehouse_path, table_name, pattern['name'], partition_spec_str, delete_existing=delete_existing)
     except Exception as e:
         print(f"Error checking partitioned specs: {e}")
-        pass
     
     # Try to find the table in evolution specs
     try:
@@ -1268,66 +1261,6 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
     except Exception as e:
         print(f"Error creating table {table_name}: {e}")
         return False
-
-def load_table_specs(yaml_path):
-    """Load table specifications from YAML file"""
-    with open(yaml_path, 'r') as f:
-        specs = yaml.safe_load(f)
-    
-    if 'tables' in specs:
-        return specs['tables']
-    elif 'evolution_tables' in specs:
-        return specs['evolution_tables']
-    
-    # Generate table specs from the YAML structure
-    tables = []
-    
-    # Get all type definitions
-    all_types = []
-    all_types.extend(specs.get('primitive_types', []))
-    all_types.extend(specs.get('complex_types_list', []))
-    all_types.extend(specs.get('complex_types_map', []))
-    all_types.extend(specs.get('complex_types_struct', []))
-    
-    # Get configurations
-    compression_configs = []
-    for comp_config in specs.get('compression_configs', []):
-        codec = comp_config['codec']
-        levels = comp_config.get('levels', [None])
-        for level in levels:
-            compression_configs.append({'codec': codec, 'level': level})
-    
-    encoding_types = specs.get('encoding_types', ['PLAIN'])
-    
-    iceberg_versions = []
-    for version_config in specs.get('iceberg_versions', [{'version': 2, 'namespace': 'v2'}]):
-        iceberg_versions.append(f"v{version_config['version']}")
-    
-    # Generate table combinations
-    for type_def in all_types:
-        for compression in compression_configs:
-            for encoding in encoding_types:
-                for version in iceberg_versions:
-                    comp_str = f"{compression['codec']}"
-                    if compression['level'] is not None:
-                        comp_str += f"_lvl{compression['level']}"
-                    
-                    table_name = f"unpart_{type_def['name']}_{comp_str}_{encoding.lower()}_{version}"
-                    
-                    schema = [
-                        {'name': 'id', 'type': 'int'},
-                        {'name': 'value', 'type': type_def['iceberg_type']}
-                    ]
-                    
-                    tables.append({
-                        'name': table_name,
-                        'schema': schema,
-                        'compression': compression,
-                        'encoding': encoding,
-                        'iceberg_version': version
-                    })
-    
-    return tables
 
 def create_table_worker_with_session(warehouse_path, table_spec):
     """Worker function that creates its own Spark session per thread"""
