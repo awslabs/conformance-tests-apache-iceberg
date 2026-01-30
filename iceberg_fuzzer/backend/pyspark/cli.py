@@ -148,11 +148,10 @@ def delete_all_s3_tables(warehouse_path):
         import boto3
         import os
         
-        # Extract region and table bucket name from ARN
+        # Extract region from ARN
         # Format: arn:aws:s3tables:region:account:bucket/bucket-name
         arn_parts = warehouse_path.split(':')
         region = arn_parts[3]
-        table_bucket_name = arn_parts[5].split('/')[-1]
         
         # Use AWS credentials from environment
         session = boto3.Session(
@@ -1722,9 +1721,6 @@ def create_partitioned_table_worker(spark, warehouse_path, table_name, pattern, 
 
 def generate_partitioned_tables(args, spark, warehouse_path):
     """Generate partitioned tables - limited to mixed_chaos pattern only"""
-    with open(args.specs, 'r') as f:
-        specs = yaml.safe_load(f)
-    
     # Minimal set of 4 essential partition transforms
     minimal_transforms = [
         ["identity(category)"],                    # Direct partitioning

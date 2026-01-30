@@ -91,7 +91,6 @@ class PySparkGenerator(TableGenerator):
             # arn:aws:s3tables:us-west-2:438336019674:bucket/test-bucket
             arn_parts = self.warehouse_path.split(':')
             region = arn_parts[3]
-            bucket_name = arn_parts[5].split('/')[-1]
             
             # Create S3 Tables client
             print(f"Creating S3 Tables client for region {region}...")

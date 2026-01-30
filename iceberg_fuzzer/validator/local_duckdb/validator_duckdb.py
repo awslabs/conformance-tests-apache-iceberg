@@ -176,7 +176,6 @@ def extract_expected_partitioned_tables(specs):
     # Extract patterns and configuration
     patterns = [p['name'] for p in partitioned_specs.get('patterns', [])]
     config = partitioned_specs.get('table_config', {})
-    versions = config.get('versions', ['v1', 'v2'])
     delete_modes = config.get('delete_modes', ['cow', 'posdelete'])
     expected_rows = partitioned_specs.get('metadata', {}).get('final_rows', 100000)
     expected_columns = partitioned_specs.get('metadata', {}).get('total_columns', 30)
@@ -821,9 +820,8 @@ def validate_delete_files(table_path, expected_spec):
             total_position_deletes = max(total_position_deletes, position_deletes)
             total_equality_deletes = max(total_equality_deletes, equality_deletes)
         
-        # Determine expectations based on table type and delete mode
+        # Determine expectations based on table type
         table_name = expected_spec.get('name', '')
-        delete_mode = expected_spec.get('delete_mode', '')
         pattern = expected_spec.get('pattern', '')
         
         # Expected delete file behavior for write-pattern tables
@@ -832,7 +830,6 @@ def validate_delete_files(table_path, expected_spec):
                 # COW tables should have NO delete files
                 expected_delete_files = 0
                 expected_position_deletes = 0
-                expected_equality_deletes = 0
                 validation_msg = "COW mode should have no delete files"
             elif 'posdelete' in table_name:
                 # Posdelete tables should have position deletes (if pattern does DELETEs)
@@ -843,18 +840,15 @@ def validate_delete_files(table_path, expected_spec):
                 else:
                     expected_delete_files = 0  # Insert-only patterns
                     expected_position_deletes = 0
-                expected_equality_deletes = 0  # PySpark doesn't create equality deletes
                 validation_msg = f"Posdelete mode for {pattern} pattern"
             else:
                 expected_delete_files = 0
                 expected_position_deletes = 0
-                expected_equality_deletes = 0
                 validation_msg = "Unknown delete mode"
         else:
             # For non-write-pattern tables, no specific expectations
             expected_delete_files = 0
             expected_position_deletes = 0
-            expected_equality_deletes = 0
             validation_msg = "Non-write-pattern table"
         
         # Validate expectations
@@ -900,10 +894,6 @@ def validate_delete_files(table_path, expected_spec):
 def validate_iceberg_metadata(conn, table_path, expected_spec):
     """Validate Iceberg metadata using DuckDB metadata functions"""
     try:
-        # Get table metadata using DuckDB
-        metadata_query = f"SELECT * FROM iceberg_metadata('{table_path}')"
-        metadata_result = conn.execute(metadata_query).fetchall()
-        
         # Get snapshots info
         snapshots_query = f"SELECT * FROM iceberg_snapshots('{table_path}')"
         snapshots_result = conn.execute(snapshots_query).fetchall()
@@ -1193,7 +1183,6 @@ def _types_compatible(expected_type, actual_type):
 
 def validate_evolution_table(conn, table_path, expected_spec):
     """Validate evolution-specific properties of a table"""
-    table_name = expected_spec['name']
     validation_results = {}
     
     try:
