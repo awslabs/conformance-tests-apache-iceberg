@@ -120,7 +120,7 @@ class PySparkGenerator(TableGenerator):
             
             if not tables_to_delete:
                 print("No tables found to delete.")
-                return
+                return None
             
             def delete_s3_table(table_info):
                 delete_start = time.time()
@@ -155,6 +155,7 @@ class PySparkGenerator(TableGenerator):
             print(f"\nCompleted: {success_count}/{len(tables_to_delete)} tables deleted successfully")
             print(f"Total time: {total_time:.2f}s, Deletion time: {delete_time:.2f}s")
             print(f"Average per table: {delete_time/len(tables_to_delete):.2f}s")
+            return None
             
         except ImportError:
             print("boto3 not available, falling back to Spark deletion...")
@@ -195,7 +196,7 @@ class PySparkGenerator(TableGenerator):
             
             if not tables_to_delete:
                 print(f"No tables found in namespace '{namespace}' to delete.")
-                return
+                return None
             
             def delete_s3_table(table_info):
                 try:
@@ -219,6 +220,7 @@ class PySparkGenerator(TableGenerator):
                         success_count += 1
             
             print(f"Deleted {success_count}/{len(tables_to_delete)} tables from namespace '{namespace}'")
+            return None
             
         except Exception as e:
             print(f"S3 Tables namespace deletion failed: {e}, falling back to Spark...")
