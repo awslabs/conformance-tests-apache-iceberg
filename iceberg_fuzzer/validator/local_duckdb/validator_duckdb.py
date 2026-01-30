@@ -1201,7 +1201,7 @@ def validate_evolution_table(conn, table_path, expected_spec):
                             actual_version = 1
                         else:
                             actual_version = int(result[0])
-                    except:
+                    except Exception:
                         # If metadata query fails, try to infer from table structure
                         actual_version = 2  # Default assumption
                     
@@ -1347,7 +1347,7 @@ def validate_evolution_table(conn, table_path, expected_spec):
                         result = conn.execute(f"SELECT COUNT(*) FROM iceberg_scan('{table_path}', allow_moved_paths := true)").fetchone()
                         has_data = result[0] > 0 if result else False
                         actual_snapshots = 1 if has_data else 0  # Simplified: just check if evolution succeeded
-                    except:
+                    except Exception:
                         actual_snapshots = 0
                     
                     expected_snapshots = expected_spec.get('expected_snapshots', 1)

@@ -209,7 +209,7 @@ class PyIcebergGenerator(TableGenerator):
                             catalog.load_table(f"simple.{table_name}")
                             print(f"Skipping existing table: {table_name}")
                             return True
-                        except:
+                        except Exception:
                             pass  # Table doesn't exist, continue with creation
                     
                     success = create_table_with_commits(

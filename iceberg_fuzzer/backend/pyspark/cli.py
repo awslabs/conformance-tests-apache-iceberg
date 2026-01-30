@@ -617,22 +617,22 @@ def get_all_possible_table_names(specs_path='specs'):
     try:
         simple_specs = load_table_specs(f'{specs_path}/simple.yaml')
         all_table_names.extend([spec['name'] for spec in simple_specs])
-    except:
-        pass
+    except Exception:
+        pass  # Ignore errors
     
     # Get write pattern table names
     try:
         write_pattern_specs = load_table_specs(f'{specs_path}/write_patterns.yaml')
         all_table_names.extend([spec['name'] for spec in write_pattern_specs])
-    except:
-        pass
+    except Exception:
+        pass  # Ignore errors
     
     # Get evolution table names
     try:
         evolution_specs = load_table_specs(f'{specs_path}/evolution.yaml')
         all_table_names.extend([spec['name'] for spec in evolution_specs])
-    except:
-        pass
+    except Exception:
+        pass  # Ignore errors
     
     # Generate partitioned table names programmatically
     try:
@@ -653,8 +653,8 @@ def get_all_possible_table_names(specs_path='specs'):
                 for mode in delete_modes:
                     table_name = f"part_{transform}_{pattern}_{mode}"
                     all_table_names.append(table_name)
-    except:
-        pass
+    except Exception:
+        pass  # Ignore errors
     
     return sorted(list(set(all_table_names)))
 
@@ -710,8 +710,8 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
         for spec in simple_specs:
             if spec['name'] == table_name:
                 return create_single_type_table(spark, warehouse_path, table_name, spec, delete_existing=delete_existing)
-    except:
-        pass
+    except Exception:
+        pass  # Ignore errors
     
     # Try to find the table in write pattern specs  
     try:
@@ -719,8 +719,8 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
         for spec in write_pattern_specs:
             if spec['name'] == table_name:
                 return create_comprehensive_table(spark, warehouse_path, table_name, spec['pattern'], delete_existing=delete_existing)
-    except:
-        pass
+    except Exception:
+        pass  # Ignore errors
     
     # Try to find the table in partitioned specs by generating all possible combinations
     try:
@@ -750,8 +750,8 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
         for spec in evolution_specs:
             if spec['name'] == table_name:
                 return create_evolution_table(spark, warehouse_path, table_name, spec, delete_existing=delete_existing)
-    except:
-        pass
+    except Exception:
+        pass  # Ignore errors
     
     # Table not found - suggest alternatives
     print(f"❌ Table '{table_name}' not found in any specs")
@@ -1235,7 +1235,7 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             for cycle in range(2):
                 try:
                     spark.sql(f"TRUNCATE TABLE {catalog}.{namespace}.{table_name}")
-                except:
+                except Exception:
                     # If TRUNCATE not supported, use DELETE
                     spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name}")
                 
@@ -1246,7 +1246,7 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             # Final truncate and full dataset
             try:
                 spark.sql(f"TRUNCATE TABLE {catalog}.{namespace}.{table_name}")
-            except:
+            except Exception:
                 spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name}")
             
             final_df = generate_spark_data(spark, schema_spec, 10000)
@@ -1933,7 +1933,7 @@ def create_evolution_table(spark, warehouse_path, table_name, table_spec, delete
                 spark.sql(f"DESCRIBE TABLE {catalog}.{namespace}.{table_name}")
                 print(f"Skipping existing evolution table: {table_name}")
                 return True
-            except:
+            except Exception:
                 pass  # Table doesn't exist, continue with creation
         
         print(f"Creating evolution table: {table_name}")

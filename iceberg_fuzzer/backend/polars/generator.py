@@ -268,8 +268,8 @@ class PolarsGenerator(TableGenerator):
             namespace = ("simple",)
             try:
                 catalog.create_namespace(namespace)
-            except:
-                pass
+            except Exception:
+                pass  # Ignore errors
             
             # Create Iceberg schema
             iceberg_field_type = self._get_iceberg_type(iceberg_type)
@@ -283,8 +283,8 @@ class PolarsGenerator(TableGenerator):
             # Drop if exists
             try:
                 catalog.drop_table(table_identifier)
-            except:
-                pass
+            except Exception:
+                pass  # Ignore errors
             
             # Map compression codec
             compression_map = {
@@ -441,7 +441,7 @@ class PolarsGenerator(TableGenerator):
                                     catalog.load_table(f"simple.{table_name}")
                                     print(f"Skipping existing table: {table_name}")
                                     return True
-                                except:
+                                except Exception:
                                     pass  # Table doesn't exist, continue with creation
                             
                             success = self._create_simple_table(spec)
