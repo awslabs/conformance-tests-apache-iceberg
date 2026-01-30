@@ -89,9 +89,9 @@ jobs:
         path: ./test-warehouse-polars/
         retention-days: 7
 
-  pyspark:
+  pyspark-simple:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     needs: cli-test
     steps:
     - uses: actions/checkout@v6
@@ -108,31 +108,111 @@ jobs:
       run: uv sync
     - name: Generate PySpark simple tables
       run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark --specs specs/simple.yaml --minimal
-    - name: Generate PySpark partitioned tables
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-partitioned --specs specs/partitioned.yaml --minimal
-    - name: Generate PySpark write-pattern tables
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-writepatterns --specs specs/write_patterns.yaml --random 3
-    - name: Generate PySpark evolution tables
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --random 3
-    - name: Verify PySpark tables
+    - name: Verify PySpark simple tables
       run: |
         SIMPLE_COUNT=$(find ./test-warehouse-pyspark -name "metadata" -type d 2>/dev/null | wc -l)
-        PARTITIONED_COUNT=$(find ./test-warehouse-pyspark-partitioned -name "metadata" -type d 2>/dev/null | wc -l)
-        WRITEPATTERNS_COUNT=$(find ./test-warehouse-pyspark-writepatterns -name "metadata" -type d 2>/dev/null | wc -l)
-        EVOLUTION_COUNT=$(find ./test-warehouse-pyspark-evolution -name "metadata" -type d 2>/dev/null | wc -l)
-        echo "PySpark simple: $SIMPLE_COUNT, partitioned: $PARTITIONED_COUNT, write-patterns: $WRITEPATTERNS_COUNT, evolution: $EVOLUTION_COUNT"
+        echo "PySpark simple: $SIMPLE_COUNT"
         [ $SIMPLE_COUNT -eq 34 ] || exit 1
-        [ $PARTITIONED_COUNT -eq 8 ] || exit 1
-        [ $WRITEPATTERNS_COUNT -eq 3 ] || exit 1
-        [ $EVOLUTION_COUNT -eq 3 ] || exit 1
-    - name: Upload PySpark artifacts
+    - name: Upload PySpark simple artifacts
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: pyspark-tables
-        path: |
-          ./test-warehouse-pyspark/
-          ./test-warehouse-pyspark-partitioned/
-          ./test-warehouse-pyspark-writepatterns/
-          ./test-warehouse-pyspark-evolution/
+        name: pyspark-simple-tables
+        path: ./test-warehouse-pyspark/
+        retention-days: 7
+
+  pyspark-partitioned:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: cli-test
+    steps:
+    - uses: actions/checkout@v6
+    - name: Install uv
+      uses: astral-sh/setup-uv@f06b870e0a91d23284a3013acc55e6f88ab4b904 # v7
+    - name: Set up Python 3.9
+      run: uv python install 3.9
+    - name: Set up Java 21
+      uses: actions/setup-java@v5
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+    - name: Install dependencies
+      run: uv sync
+    - name: Generate PySpark partitioned tables
+      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-partitioned --specs specs/partitioned.yaml --minimal
+    - name: Verify PySpark partitioned tables
+      run: |
+        PARTITIONED_COUNT=$(find ./test-warehouse-pyspark-partitioned -name "metadata" -type d 2>/dev/null | wc -l)
+        echo "PySpark partitioned: $PARTITIONED_COUNT"
+        [ $PARTITIONED_COUNT -eq 8 ] || exit 1
+    - name: Upload PySpark partitioned artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: pyspark-partitioned-tables
+        path: ./test-warehouse-pyspark-partitioned/
+        retention-days: 7
+
+  pyspark-writepatterns:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: cli-test
+    steps:
+    - uses: actions/checkout@v6
+    - name: Install uv
+      uses: astral-sh/setup-uv@f06b870e0a91d23284a3013acc55e6f88ab4b904 # v7
+    - name: Set up Python 3.9
+      run: uv python install 3.9
+    - name: Set up Java 21
+      uses: actions/setup-java@v5
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+    - name: Install dependencies
+      run: uv sync
+    - name: Generate PySpark write-pattern tables
+      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-writepatterns --specs specs/write_patterns.yaml --random 3
+    - name: Verify PySpark write-pattern tables
+      run: |
+        WRITEPATTERNS_COUNT=$(find ./test-warehouse-pyspark-writepatterns -name "metadata" -type d 2>/dev/null | wc -l)
+        echo "PySpark write-patterns: $WRITEPATTERNS_COUNT"
+        [ $WRITEPATTERNS_COUNT -eq 3 ] || exit 1
+    - name: Upload PySpark write-pattern artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: pyspark-writepattern-tables
+        path: ./test-warehouse-pyspark-writepatterns/
+        retention-days: 7
+
+  pyspark-evolution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: cli-test
+    steps:
+    - uses: actions/checkout@v6
+    - name: Install uv
+      uses: astral-sh/setup-uv@f06b870e0a91d23284a3013acc55e6f88ab4b904 # v7
+    - name: Set up Python 3.9
+      run: uv python install 3.9
+    - name: Set up Java 21
+      uses: actions/setup-java@v5
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+    - name: Install dependencies
+      run: uv sync
+    - name: Generate PySpark evolution tables
+      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --random 3
+    - name: Verify PySpark evolution tables
+      run: |
+        EVOLUTION_COUNT=$(find ./test-warehouse-pyspark-evolution -name "metadata" -type d 2>/dev/null | wc -l)
+        echo "PySpark evolution: $EVOLUTION_COUNT"
+        [ $EVOLUTION_COUNT -eq 3 ] || exit 1
+    - name: Upload PySpark evolution artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: pyspark-evolution-tables
+        path: ./test-warehouse-pyspark-evolution/
         retention-days: 7
