@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from generator import TableGenerator
+from iceberg_fuzzer.generator import TableGenerator
 import polars as pl
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.schema import Schema
