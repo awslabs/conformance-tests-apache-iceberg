@@ -151,8 +151,8 @@ def create_table_with_commits(catalog_config, table_name, table_spec, num_commit
         namespace = ("simple",)
         try:
             catalog.create_namespace(namespace)
-        except:
-            pass
+        except Exception:
+            pass  # Ignore errors
         
         iceberg_schema = create_iceberg_schema(table_spec)
         table_identifier = f"simple.{table_name}"
@@ -160,8 +160,8 @@ def create_table_with_commits(catalog_config, table_name, table_spec, num_commit
         # Force drop and recreate to avoid conflicts
         try:
             catalog.drop_table(table_identifier)
-        except:
-            pass
+        except Exception:
+            pass  # Ignore errors
         
         table = catalog.create_table(
             identifier=table_identifier,
@@ -351,13 +351,13 @@ def create_comprehensive_table(catalog_config, pattern_name, version, delete_mod
     
     try:
         catalog.drop_table(table_identifier)
-    except:
-        pass
+    except Exception:
+        pass  # Ignore errors
     
     try:
         catalog.create_namespace(("write_pattern",))
-    except:
-        pass
+    except Exception:
+        pass  # Ignore errors
     
     schema = create_comprehensive_schema()
     
