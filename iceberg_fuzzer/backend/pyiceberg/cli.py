@@ -23,8 +23,6 @@ PyIceberg table generation implementation using PyIceberg library
 """
 
 import argparse
-import yaml
-import sys
 from pathlib import Path
 from datetime import datetime, date, time
 from decimal import Decimal

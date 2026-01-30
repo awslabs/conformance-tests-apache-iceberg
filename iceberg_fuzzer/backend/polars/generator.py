@@ -36,7 +36,7 @@ from pyiceberg.types import (
     StringType, BinaryType, DateType, TimeType, TimestampType,
     DecimalType, UUIDType, FixedType, ListType, NestedField
 )
-from datetime import datetime, date, time as dt_time
+from datetime import datetime, date
 from decimal import Decimal
 import uuid
 
