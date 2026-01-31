@@ -23,12 +23,13 @@ PyIceberg table generation implementation using PyIceberg library
 """
 
 import argparse
-from pathlib import Path
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date, time
 from decimal import Decimal
-import pyarrow as pa
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
+import pyarrow as pa
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import (
@@ -36,6 +37,7 @@ from pyiceberg.types import (
     BinaryType, DateType, TimeType, TimestampType, TimestamptzType,
     DecimalType, FixedType, UUIDType, ListType, NestedField
 )
+
 
 def create_iceberg_schema(table_spec):
     """Convert table spec to PyIceberg schema"""
@@ -119,7 +121,6 @@ def generate_sample_data(table_spec, num_rows=100):
             scale = int(parts[1]) if len(parts) > 1 else 0
             data[field_name] = pa.array([Decimal(f"{i}.{i%100:02d}") for i in range(num_rows)], type=pa.decimal128(precision, scale))
         elif field_type == 'uuid':
-            import uuid
             # Generate deterministic UUIDs based on row index
             data[field_name] = pa.array([uuid.UUID(int=i).bytes for i in range(num_rows)], type=pa.binary(16))
         elif field_type.startswith('fixed('):
@@ -259,7 +260,6 @@ def generate_comprehensive_row_data(row_id, num_rows=1):
     
     # Special types
     data["decimal_col"] = pa.array([Decimal(f"{row_id + i}.{(row_id + i) % 100:02d}") for i in range(num_rows)], type=pa.decimal128(10, 2))
-    import uuid
     data["uuid_col"] = pa.array([uuid.UUID(int=(row_id + i)).bytes for i in range(num_rows)], type=pa.binary(16))
     data["fixed_col"] = pa.array([f"fixed_{row_id + i}".ljust(16, '0')[:16].encode() for i in range(num_rows)], type=pa.binary(16))
     

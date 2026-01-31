@@ -23,16 +23,19 @@ PyIceberg implementation of TableGenerator
 """
 
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from iceberg_fuzzer.generator import TableGenerator
+from pyiceberg.catalog.sql import SqlCatalog
+
 from backend.pyiceberg.cli import (
     load_table_specs,
     create_table_with_commits
 )
-from pyiceberg.catalog.sql import SqlCatalog
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from iceberg_fuzzer.generator import TableGenerator
+
 
 class PyIcebergGenerator(TableGenerator):
     """PyIceberg implementation of table generator"""
@@ -103,7 +106,6 @@ class PyIcebergGenerator(TableGenerator):
         
         # Delete tables in parallel
         if num_parallel > 1:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
             
             def delete_single_table(table_identifier):
                 cat = self._get_catalog()
@@ -229,7 +231,6 @@ class PyIcebergGenerator(TableGenerator):
             print(f"Error checking simple specs: {e}")
         
         # Table not found - suggest alternatives
-        from backend.pyspark.cli import suggest_table_names
         print(f"❌ Table '{table_name}' not found in PyIceberg specs")
         
         suggestions = suggest_table_names(table_name)

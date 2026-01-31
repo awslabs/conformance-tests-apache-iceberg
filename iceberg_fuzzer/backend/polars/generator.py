@@ -24,19 +24,26 @@ Uses Polars for fast data generation + PyIceberg for writing
 """
 
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from iceberg_fuzzer.generator import TableGenerator
 import polars as pl
+import yaml
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import (
     BooleanType, IntegerType, LongType, FloatType, DoubleType,
     StringType, BinaryType, DateType, TimestampType,
-    DecimalType, FixedType, ListType, NestedField
+    DecimalType, FixedType, ListType, NestedField, MapType, StructType as IcebergStructType
 )
-from decimal import Decimal
+
+from iceberg_fuzzer.generator import TableGenerator
+from iceberg_fuzzer.table_spec import load_table_specs
+
 
 class PolarsGenerator(TableGenerator):
     """Polars implementation of table generator"""
@@ -109,14 +116,12 @@ class PolarsGenerator(TableGenerator):
             key_str, value_str = inner.split(',', 1)
             key_type = self._get_iceberg_type(key_str.strip())
             value_type = self._get_iceberg_type(value_str.strip())
-            from pyiceberg.types import MapType
             return MapType(1, key_type, 2, value_type, value_required=False)
         
         # Handle struct types
         if iceberg_type_str.startswith('struct<'):
             # Extract field definitions: struct<field1:type1, field2:type2>
             inner = iceberg_type_str[7:-1]
-            from pyiceberg.types import StructType as IcebergStructType
             fields = []
             field_id = 1
             for field_def in inner.split(','):
@@ -130,9 +135,6 @@ class PolarsGenerator(TableGenerator):
     
     def _generate_polars_data(self, field_name: str, iceberg_type: str, num_rows: int, row_offset: int = 0):
         """Generate data using Polars to match PySpark/PyIceberg patterns"""
-        import uuid
-        from datetime import date, datetime
-        from decimal import Decimal
         
         # Use iceberg_type instead of field_name for type determination
         if iceberg_type == 'boolean':
@@ -341,7 +343,6 @@ class PolarsGenerator(TableGenerator):
     
     def generate_simple_tables(self, num_parallel: int = 1, minimal: bool = False, random_count: int = None, delete_existing: bool = False):
         """Generate simple single-type tables"""
-        from iceberg_fuzzer.table_spec import load_table_specs
         table_specs = load_table_specs(self.specs_path, minimal=minimal)
         
         # Apply random selection if specified
@@ -366,7 +367,6 @@ class PolarsGenerator(TableGenerator):
                     print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
                 # Silently skip failures to reduce noise
         else:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
             with ThreadPoolExecutor(max_workers=num_parallel) as executor:
                 futures = {executor.submit(self._create_simple_table, spec): spec for spec in table_specs}
                 for future in as_completed(futures):
@@ -384,7 +384,6 @@ class PolarsGenerator(TableGenerator):
     
     def generate_single_table(self, table_name: str, delete_existing: bool = False):
         """Generate a single table by name"""
-        import yaml
         
         # Load table specs to find the requested table
         with open(self.specs_path, 'r') as f:
@@ -451,7 +450,6 @@ class PolarsGenerator(TableGenerator):
                                 return False
         
         # Table not found - suggest alternatives
-        from backend.pyspark.cli import suggest_table_names
         print(f"❌ Table '{table_name}' not found in Polars specs")
         
         suggestions = suggest_table_names(table_name)

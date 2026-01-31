@@ -23,24 +23,31 @@ PySpark Iceberg table generation implementation
 """
 
 import argparse
-import yaml
-from pathlib import Path
+import heapq
+import os
+import random
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 from decimal import Decimal
-from iceberg_fuzzer.table_spec import load_table_specs
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
+import boto3
+import yaml
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, lit, date_add
 from pyspark.sql.types import (
     StructType, StructField, BooleanType, IntegerType, LongType,
     FloatType, DoubleType, DecimalType, DateType, TimestampType,
     StringType, BinaryType, ArrayType, MapType
 )
-from pyspark.sql.functions import col, lit
+
+from iceberg_fuzzer.table_spec import load_table_specs
+
 
 def create_spark_session(warehouse_path, app_name=None):
     """Create Spark session with Iceberg support and performance optimizations"""
-    import uuid
     if app_name is None:
         app_name = f"IcebergTableGenerator-{uuid.uuid4()}"
     
@@ -112,7 +119,6 @@ def create_spark_session(warehouse_path, app_name=None):
             .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1,software.amazon.awssdk:bundle:2.28.11,software.amazon.awssdk:url-connection-client:2.28.11")
     else:
         # Configure for local/HDFS with comprehensive file system settings
-        import os
         # Ensure warehouse directory exists with proper permissions
         os.makedirs(warehouse_path, mode=0o755, exist_ok=True)
         
@@ -144,8 +150,6 @@ def delete_all_s3_tables(warehouse_path):
     print("🗑️  Deleting all existing tables from S3 table bucket...")
     
     try:
-        import boto3
-        import os
         
         # Extract region from ARN
         # Format: arn:aws:s3tables:region:account:bucket/bucket-name
@@ -272,8 +276,6 @@ def disable_table_compaction(spark, catalog, namespace, table_name, warehouse_pa
 def disable_s3_table_maintenance(warehouse_path, namespace, table_name):
     """Disable maintenance operations for S3 Tables using AWS SDK"""
     try:
-        import boto3
-        import time
         
         # Parse S3 Tables ARN
         arn_parts = warehouse_path.split(':')
@@ -471,7 +473,6 @@ def create_spark_schema(table_spec):
 
 def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
     """Generate deterministic sample data using Spark to match PyIceberg patterns"""
-    import uuid
     data = []
     
     for i in range(num_rows):
@@ -607,8 +608,6 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
 
 def get_all_possible_table_names(specs_path='specs'):
     """Generate all possible table names from all spec files"""
-    import os
-    import yaml
     
     all_table_names = []
     
@@ -659,7 +658,6 @@ def get_all_possible_table_names(specs_path='specs'):
 
 def suggest_table_names(invalid_name, specs_path='specs'):
     """Suggest closest matching table names using weighted edit distance"""
-    import heapq
     
     def weighted_levenshtein_distance(s1, s2):
         if len(s1) < len(s2):
@@ -723,7 +721,6 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
     
     # Try to find the table in partitioned specs by generating all possible combinations
     try:
-        import yaml
         with open('specs/partitioned.yaml', 'r') as f:
             partitioned_spec = yaml.safe_load(f)
         
@@ -1395,8 +1392,6 @@ def generate_write_pattern_tables(args, spark, warehouse_path):
 
 def generate_partitioned_data(spark, schema_spec, num_rows=100, row_offset=0):
     """Generate data for partitioned tables with partition-specific fields"""
-    from pyspark.sql.functions import expr
-    import random
     
     schema = create_spark_schema(schema_spec)
     data = []
@@ -1831,8 +1826,6 @@ if __name__ == '__main__':
 
 def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
     """Generate data for evolution tables with schema-aware column mapping"""
-    from pyspark.sql.functions import col, lit, date_add
-    from pyspark.sql.types import StructType, StructField, LongType, StringType, IntegerType, TimestampType, BooleanType
     
     # Get current table schema if table exists
     current_schema = None
@@ -2202,7 +2195,6 @@ def execute_evolution_operation(spark, catalog, namespace, table_name, operation
 
 def generate_evolution_tables(args, spark, warehouse_path):
     """Generate evolution tables for testing Iceberg evolution features"""
-    import yaml
     
     with open(args.specs, 'r') as f:
         specs = yaml.safe_load(f)
@@ -2211,7 +2203,6 @@ def generate_evolution_tables(args, spark, warehouse_path):
     
     # Apply random selection if specified
     if args.random and args.random < len(evolution_tables):
-        import random
         evolution_tables = random.sample(evolution_tables, args.random)
     
     total = len(evolution_tables)
