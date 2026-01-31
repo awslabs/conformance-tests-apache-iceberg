@@ -24,9 +24,8 @@ PySpark Iceberg table generation implementation
 
 import argparse
 import yaml
-import sys
 from pathlib import Path
-from datetime import datetime, date, time
+from datetime import datetime, date
 from decimal import Decimal
 from iceberg_fuzzer.table_spec import load_table_specs
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -198,8 +197,8 @@ def delete_all_s3_tables(warehouse_path):
         
         print(f"🗑️  Deleted {total_deleted} tables from S3 table bucket")
         
-    except Exception as e:
-        pass
+    except Exception:
+        pass  # Ignore errors in S3 Tables deletion
 
 def is_s3_table_warehouse(warehouse_path):
     """Check if warehouse path is an S3 table ARN"""
@@ -340,8 +339,8 @@ def create_namespace_if_not_exists(spark, catalog, namespace):
     try:
         spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {catalog}.{namespace}")
         print(f"  → Created namespace {catalog}.{namespace}")
-    except Exception as e:
-        pass
+    except Exception:
+        pass  # Namespace already exists
 
 def create_spark_schema(table_spec):
     """Convert table spec to Spark schema"""
@@ -2047,7 +2046,6 @@ def create_evolution_table(spark, warehouse_path, table_name, table_spec, delete
             # Simple case: just insert 1000 rows
             initial_df = generate_evolution_data(spark, full_table_name, target_rows, 0)
             initial_df.writeTo(full_table_name).append()
-            total_rows = target_rows
         else:
             # Complex case: insert data between evolution operations
             rows_per_step = target_rows // (len(evolution_ops) + 1)

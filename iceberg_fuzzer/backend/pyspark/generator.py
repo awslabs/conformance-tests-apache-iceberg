@@ -33,9 +33,7 @@ from backend.pyspark.cli import (
     create_single_type_table,
     create_comprehensive_table,
     create_partitioned_table,
-    create_table_worker,
-    create_write_pattern_worker,
-    create_partitioned_table_worker
+    create_table_worker
 )
 from iceberg_fuzzer.table_spec import load_table_specs
 from concurrent.futures import ThreadPoolExecutor, as_completed
