@@ -22,6 +22,8 @@ Apache Iceberg Table Fuzzer
 Abstract base class for Iceberg table generators
 """
 
+import random
+
 from abc import ABC, abstractmethod
 
 class TableGenerator(ABC):
@@ -50,8 +52,6 @@ class TableGenerator(ABC):
         """Randomly select a subset of table specs"""
         if random_count is None or random_count >= len(table_specs):
             return table_specs
-        
-        import random
         return random.sample(table_specs, random_count)
     
     @abstractmethod

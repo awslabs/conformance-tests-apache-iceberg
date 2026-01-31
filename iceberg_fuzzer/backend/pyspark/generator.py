@@ -23,20 +23,27 @@ PySpark implementation of TableGenerator
 """
 
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from iceberg_fuzzer.generator import TableGenerator
+import boto3
+
 from backend.pyspark.cli import (
     create_spark_session,
     is_s3_table_warehouse,
     create_single_type_table,
     create_comprehensive_table,
     create_partitioned_table,
-    create_table_worker
+    create_table_worker,
+    create_single_table,
+    generate_evolution_tables
 )
+from iceberg_fuzzer.generator import TableGenerator
 from iceberg_fuzzer.table_spec import load_table_specs
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 class PySparkGenerator(TableGenerator):
     """PySpark implementation of table generator"""
@@ -80,10 +87,7 @@ class PySparkGenerator(TableGenerator):
     
     def _delete_s3_tables_fast(self, num_parallel: int):
         """Fast deletion for S3 Tables using AWS SDK"""
-        import time
         try:
-            import boto3
-            from concurrent.futures import ThreadPoolExecutor, as_completed
             
             # Parse S3 Tables ARN
             # arn:aws:s3tables:us-west-2:438336019674:bucket/test-bucket
@@ -164,10 +168,7 @@ class PySparkGenerator(TableGenerator):
     
     def _delete_s3_tables_by_namespace(self, namespace: str, num_parallel: int):
         """Delete tables in specific namespace using AWS SDK"""
-        import time
         try:
-            import boto3
-            from concurrent.futures import ThreadPoolExecutor, as_completed
             
             arn_parts = self.warehouse_path.split(':')
             region = arn_parts[3]
@@ -274,8 +275,6 @@ class PySparkGenerator(TableGenerator):
         
         # Delete tables in parallel
         if num_parallel > 1:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            from backend.pyspark.cli import create_spark_session
             
             # Batch tables for more efficient deletion
             batch_size = max(1, len(tables_to_delete) // num_parallel)
@@ -383,8 +382,6 @@ class PySparkGenerator(TableGenerator):
         
         # Delete tables (reuse existing parallel logic)
         if num_parallel > 1:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            from backend.pyspark.cli import create_spark_session
             
             batch_size = max(1, len(tables_to_delete) // num_parallel)
             table_batches = [tables_to_delete[i:i + batch_size] for i in range(0, len(tables_to_delete), batch_size)]
@@ -497,7 +494,6 @@ class PySparkGenerator(TableGenerator):
     
     def generate_single_table(self, table_name: str, delete_existing: bool = False):
         """Generate a single table by name"""
-        from .cli import create_single_table, create_spark_session
         
         # Ensure Spark session is initialized
         if not self.spark:
@@ -521,8 +517,6 @@ class PySparkGenerator(TableGenerator):
         if delete_existing:
             print("Deleting existing write-pattern tables before generation...")
             self.delete_tables_by_namespace("write_pattern")
-        
-        from backend.pyspark.cli import create_comprehensive_table
         
         all_patterns = ["insert_heavy", "update_heavy", "delete_heavy", "mixed_chaos", 
                        "batch_replace", "gradual_growth", "burst_ops", "truncate_cycles"]
@@ -799,7 +793,6 @@ class PySparkGenerator(TableGenerator):
             print("Deleting existing evolution tables before generation...")
             self.delete_tables_by_namespace("evolution")
         
-        from backend.pyspark.cli import generate_evolution_tables
         
         self._ensure_spark()
         

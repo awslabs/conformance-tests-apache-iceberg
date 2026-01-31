@@ -22,16 +22,20 @@ DuckDB-based validator for Iceberg tables
 Validates table structure and data against table_specs.yaml specifications
 """
 
-import duckdb
-import yaml
-import argparse
-from pathlib import Path
-import sys
-import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime, date, time
+from decimal import Decimal
+from pathlib import Path
+import argparse
+import json
+import os
+import sys
+import uuid as uuid_lib
 
-# Add parent directory to path for validator base class
-sys.path.append(str(Path(__file__).parent.parent.parent))
+import duckdb
+import pyarrow.parquet as pq
+import yaml
+
 from validator import TableValidator
 
 def load_table_specs(yaml_path):
@@ -97,8 +101,6 @@ def extract_expected_single_type_tables(specs, minimal=False, primitives_only=Fa
 
 def extract_expected_write_pattern_tables(specs):
     """Extract expected write-pattern table specifications from write_patterns.yaml"""
-    import yaml
-    import os
     
     tables = []
     
@@ -152,8 +154,6 @@ def extract_expected_write_pattern_tables(specs):
 
 def extract_expected_partitioned_tables(specs):
     """Extract expected partitioned table specifications from partitioned.yaml"""
-    import yaml
-    import os
     
     tables = []
     
@@ -260,8 +260,6 @@ def extract_expected_partitioned_tables(specs):
 
 def extract_expected_evolution_tables(specs):
     """Extract expected evolution table specifications from evolution.yaml"""
-    import yaml
-    import os
     
     tables = []
     
@@ -338,8 +336,6 @@ def extract_expected_evolution_tables(specs):
 
 def validate_delete_file_types(table_path, delete_mode):
     """Validate that the correct delete files are present for the delete mode"""
-    import os
-    import json
     
     metadata_dir = os.path.join(table_path, 'metadata')
     if not os.path.exists(metadata_dir):
@@ -388,9 +384,6 @@ def validate_delete_file_types(table_path, delete_mode):
         return False, f"Error reading metadata: {e}"
 
 def generate_expected_single_type_data(data_type, row_id):
-    from datetime import date, datetime, time
-    from decimal import Decimal
-    import uuid as uuid_lib
     
     if data_type == 'boolean':
         return (row_id % 2) == 0
@@ -482,9 +475,6 @@ def generate_expected_single_type_data(data_type, row_id):
 
 def generate_expected_write_pattern_data(row_id):
     """Generate expected data for a write-pattern table row"""
-    from datetime import datetime, date, time
-    from decimal import Decimal
-    import uuid
     
     return {
         'id': row_id,
@@ -502,8 +492,6 @@ def generate_expected_write_pattern_data(row_id):
 
 def generate_expected_partitioned_data(row_id):
     """Generate expected data for a partitioned table row"""
-    from datetime import datetime, date
-    from decimal import Decimal
     
     categories = ['A', 'B', 'C', 'D', 'E']
     
@@ -537,8 +525,6 @@ def generate_expected_partitioned_data(row_id):
 def validate_parquet_properties(table_path, expected_spec):
     """Validate Parquet file compression and encoding"""
     try:
-        import pyarrow.parquet as pq
-        from pathlib import Path
         
         # Find parquet files
         table_dir = Path(table_path)
@@ -663,7 +649,6 @@ def validate_table_contents(conn, table_path, expected_spec):
                             content_errors.append(f"Row {row_id}: UUID mismatch")
                     else:
                         # DuckDB might return UUID object
-                        import uuid as uuid_lib
                         if hasattr(actual_val, 'bytes'):
                             if actual_val.bytes != expected_value:
                                 content_errors.append(f"Row {row_id}: UUID mismatch")
@@ -801,7 +786,6 @@ def validate_delete_files(table_path, expected_spec):
         latest_metadata = max(metadata_files, key=lambda f: f.name)
         
         # Read metadata
-        import json
         with open(latest_metadata, 'r') as f:
             metadata = json.load(f)
         
@@ -907,8 +891,6 @@ def validate_iceberg_metadata(conn, table_path, expected_spec):
             expected_version = int(expected_spec['version'].replace('v', ''))
             
             # Read metadata.json to get format-version
-            import json
-            from pathlib import Path
             metadata_dir = Path(table_path) / 'metadata'
             if metadata_dir.exists():
                 metadata_files = list(metadata_dir.glob('*.metadata.json'))
