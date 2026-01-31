@@ -33,11 +33,10 @@ from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import (
     BooleanType, IntegerType, LongType, FloatType, DoubleType,
-    StringType, BinaryType, DateType, TimeType, TimestampType,
-    DecimalType, UUIDType, FixedType, ListType, NestedField
+    StringType, BinaryType, DateType, TimestampType,
+    DecimalType, FixedType, ListType, NestedField
 )
 from decimal import Decimal
-import uuid
 
 class PolarsGenerator(TableGenerator):
     """Polars implementation of table generator"""

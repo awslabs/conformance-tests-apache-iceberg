@@ -24,7 +24,6 @@ Unified CLI for generating Apache Iceberg tables with PySpark, PyIceberg, or Pol
 
 import argparse
 import sys
-from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(

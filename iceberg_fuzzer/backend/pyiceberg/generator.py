@@ -29,8 +29,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from iceberg_fuzzer.generator import TableGenerator
 from backend.pyiceberg.cli import (
     load_table_specs,
-    create_table_with_commits,
-    create_comprehensive_table
+    create_table_with_commits
 )
 from pyiceberg.catalog.sql import SqlCatalog
 from concurrent.futures import ThreadPoolExecutor, as_completed
