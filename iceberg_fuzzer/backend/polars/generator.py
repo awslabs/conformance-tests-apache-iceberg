@@ -56,30 +56,30 @@ class PolarsGenerator(TableGenerator):
         """Setup warehouse path and catalog"""
         path = Path(self.warehouse_path)
         path.mkdir(parents=True, exist_ok=True)
-        
+
         self.catalog_config = {
             'uri': f"sqlite:///{path}/catalog.db",
             'warehouse': f"file://{path}"
         }
-        
+
         # Initialize catalog
         catalog = SqlCatalog("iceberg_catalog", **self.catalog_config)
         catalog.create_tables()
         catalog.close()
-    
+
     def _get_catalog(self):
         """Get a new catalog instance"""
         return SqlCatalog("iceberg_catalog", **self.catalog_config)
-    
+
     def supports_s3_tables(self) -> bool:
         return False
-    
+
     def supports_partitioned_tables(self) -> bool:
         return False
-    
+
     def supports_minimal_mode(self) -> bool:
         return False
-    
+
     def _get_iceberg_type(self, iceberg_type_str: str):
         """Map Iceberg type string to PyIceberg type"""
         type_map = {
@@ -97,18 +97,18 @@ class PolarsGenerator(TableGenerator):
             'decimal(10,2)': DecimalType(10, 2),
             'uuid': StringType(),  # UUID stored as string
         }
-        
+
         # Handle fixed types
         if iceberg_type_str.startswith('fixed[') and iceberg_type_str.endswith(']'):
             length = int(iceberg_type_str[6:-1])
             return FixedType(length)
-        
+
         # Handle list types
         if iceberg_type_str.startswith('list<'):
             inner = iceberg_type_str[5:-1]
             inner_type = self._get_iceberg_type(inner)
             return ListType(1, inner_type, element_required=False)
-        
+
         # Handle map types
         if iceberg_type_str.startswith('map<'):
             # Extract key and value types: map<int, string>
@@ -117,7 +117,7 @@ class PolarsGenerator(TableGenerator):
             key_type = self._get_iceberg_type(key_str.strip())
             value_type = self._get_iceberg_type(value_str.strip())
             return MapType(1, key_type, 2, value_type, value_required=False)
-        
+
         # Handle struct types
         if iceberg_type_str.startswith('struct<'):
             # Extract field definitions: struct<field1:type1, field2:type2>
@@ -130,12 +130,12 @@ class PolarsGenerator(TableGenerator):
                 fields.append(NestedField(field_id, field_name.strip(), field_type, required=False))
                 field_id += 1
             return IcebergStructType(*fields)
-        
+
         return type_map.get(iceberg_type_str, StringType())
-    
+
     def _generate_polars_data(self, field_name: str, iceberg_type: str, num_rows: int, row_offset: int = 0):
         """Generate data using Polars to match PySpark/PyIceberg patterns"""
-        
+
         # Use iceberg_type instead of field_name for type determination
         if iceberg_type == 'boolean':
             return [(i + row_offset) % 2 == 0 for i in range(num_rows)]
@@ -207,7 +207,7 @@ class PolarsGenerator(TableGenerator):
         else:
             # Default fallback
             return [f"value_{i + 1 + row_offset}" for i in range(num_rows)]
-    
+
     def _get_polars_dtype(self, field_name: str, iceberg_type: str):
         """Get appropriate Polars dtype for field"""
         if iceberg_type == 'boolean':
@@ -238,67 +238,67 @@ class PolarsGenerator(TableGenerator):
             return pl.List(element_dtype)
         else:
             return pl.String
-    
+
     def _create_simple_table(self, table_spec: dict) -> bool:
         """Create a single simple table using Polars + PyIceberg"""
         table_name = table_spec['name']
-        
+
         # Extract field info from schema
         value_field = table_spec['schema'][1]  # Second field is the value field
         field_name = value_field['name']
         field_type = value_field['type']
-        
+
         # Convert to iceberg type name
         iceberg_type = field_type
         version = int(table_spec['properties']['format-version'])
-        
+
         # Skip nested types - Polars/PyArrow limitations
         if iceberg_type.startswith('map<') or iceberg_type.startswith('struct<'):
             print(f"⚠️  Skipped {table_name} (nested type: {iceberg_type})")
             return True  # Return True to indicate "handled" (not failed)
-        
+
         try:
             catalog = SqlCatalog(
                 f"iceberg_catalog_{table_name}",
                 uri=self.catalog_config['uri'],
                 warehouse=self.catalog_config['warehouse']
             )
-            
+
             # Create namespace
             namespace = ("simple",)
             try:
                 catalog.create_namespace(namespace)
             except Exception:
                 pass  # Ignore errors
-            
+
             # Create Iceberg schema
             iceberg_field_type = self._get_iceberg_type(iceberg_type)
             schema = Schema(
                 NestedField(1, "id", IntegerType(), required=False),
                 NestedField(2, field_name, iceberg_field_type, required=False)
             )
-            
+
             table_identifier = f"simple.{table_name}"
-            
+
             # Drop if exists
             try:
                 catalog.drop_table(table_identifier)
             except Exception:
                 pass  # Ignore errors
-            
+
             # Map compression codec
             compression_map = {
                 'gzip': 'gzip',
-                'snappy': 'snappy', 
+                'snappy': 'snappy',
                 'zstd': 'zstd',
                 'lz4': 'lz4',
                 'none': 'uncompressed'
             }
-            
+
             # Extract compression from table spec
             compression_codec = table_spec.get('compression', {}).get('codec', 'snappy')
             parquet_codec = compression_map.get(compression_codec, 'snappy')
-            
+
             # Create table
             table = catalog.create_table(
                 identifier=table_identifier,
@@ -308,16 +308,16 @@ class PolarsGenerator(TableGenerator):
                     "write.parquet.compression-codec": parquet_codec
                 }
             )
-            
+
             # Generate data in 10 commits using Polars
             for commit in range(10):
                 start_id = commit * 100
                 ids = list(range(start_id, start_id + 100))
                 values = self._generate_polars_data(field_name, iceberg_type, 100, start_id)
-                
+
                 # Get appropriate dtype
                 value_dtype = self._get_polars_dtype(field_name, iceberg_type)
-                
+
                 # Create Polars DataFrame with correct types
                 if value_dtype:
                     df = pl.DataFrame({
@@ -329,25 +329,25 @@ class PolarsGenerator(TableGenerator):
                         "id": pl.Series(ids, dtype=pl.Int32),
                         field_name: values
                     })
-                
+
                 # Convert to PyArrow and append
                 arrow_table = df.to_arrow()
                 table.append(arrow_table)
-            
+
             catalog.close()
             return True
-            
+
         except Exception as e:
             # Silently fail - expected for unsupported types (map, struct)
             return False
-    
+
     def generate_simple_tables(self, num_parallel: int = 1, minimal: bool = False, random_count: int = None, delete_existing: bool = False):
         """Generate simple single-type tables"""
         table_specs = load_table_specs(self.specs_path, minimal=minimal)
-        
+
         # Apply random selection if specified
         table_specs = self._random_select_tables(table_specs, random_count)
-        
+
         print(f"Generating {len(table_specs)} simple tables with Polars + PyIceberg...")
         print("\n📊 Polars Backend Support Status:")
         print("  ✅ Supported: All primitive types (boolean, int, long, float, double, string, binary, date, time, timestamp, decimal, uuid, fixed)")
@@ -355,10 +355,10 @@ class PolarsGenerator(TableGenerator):
         print("  ⚠️  Skipped: Map types (Polars/PyArrow limitation)")
         print("  ⚠️  Skipped: Struct types (PyArrow flattening issue)")
         print(f"  📈 Expected success rate: 100% (primitives + lists only, nested types skipped)\n")
-        
+
         success_count = 0
         total_count = len(table_specs)
-        
+
         if num_parallel == 1:
             for spec in table_specs:
                 success = self._create_simple_table(spec)
@@ -379,21 +379,21 @@ class PolarsGenerator(TableGenerator):
                         # Silently skip failures to reduce noise
                     except Exception as e:
                         pass  # Silently skip exceptions
-        
+
         print(f"\nCompleted simple tables: {success_count}/{total_count} tables created successfully")
-    
+
     def generate_single_table(self, table_name: str, delete_existing: bool = False):
         """Generate a single table by name"""
-        
+
         # Load table specs to find the requested table
         with open(self.specs_path, 'r') as f:
             specs = yaml.safe_load(f)
-        
+
         # Get all type definitions
         all_types = []
         all_types.extend(specs.get('primitive_types', []))
         all_types.extend(specs.get('complex_types_list', []))
-        
+
         # Generate all possible table specs to find match
         compression_configs = []
         for comp_config in specs.get('compression_configs', []):
@@ -401,12 +401,12 @@ class PolarsGenerator(TableGenerator):
             levels = comp_config.get('levels', [None])
             for level in levels:
                 compression_configs.append({'codec': codec, 'level': level})
-        
+
         encoding_types = specs.get('encoding_types', ['PLAIN'])
         iceberg_versions = []
         for version_config in specs.get('iceberg_versions', [{'version': 2, 'namespace': 'v2'}]):
             iceberg_versions.append(f"v{version_config['version']}")
-        
+
         # Find matching table spec
         for type_def in all_types:
             for compression in compression_configs:
@@ -415,9 +415,9 @@ class PolarsGenerator(TableGenerator):
                         comp_str = f"{compression['codec']}"
                         if compression['level'] is not None:
                             comp_str += f"_lvl{compression['level']}"
-                        
+
                         generated_name = f"unpart_{type_def['name']}_{comp_str}_{encoding.lower()}_{version}"
-                        
+
                         if generated_name == table_name:
                             # Found match - create the table
                             spec = {
@@ -428,9 +428,9 @@ class PolarsGenerator(TableGenerator):
                                 'encoding': encoding,
                                 'version': version
                             }
-                            
+
                             print(f"Creating single table: {table_name}")
-                            
+
                             # Check if table exists and skip if delete_existing is False
                             if not delete_existing:
                                 try:
@@ -440,7 +440,7 @@ class PolarsGenerator(TableGenerator):
                                     return True
                                 except Exception:
                                     pass  # Table doesn't exist, continue with creation
-                            
+
                             success = self._create_simple_table(spec)
                             if success:
                                 print(f"✓ Successfully created table: {table_name}")
@@ -448,10 +448,10 @@ class PolarsGenerator(TableGenerator):
                             else:
                                 print(f"✗ Failed to create table: {table_name}")
                                 return False
-        
+
         # Table not found - suggest alternatives
         print(f"❌ Table '{table_name}' not found in Polars specs")
-        
+
         suggestions = suggest_table_names(table_name)
         if suggestions:
             print(f"\n💡 Did you mean one of these?")
@@ -459,25 +459,25 @@ class PolarsGenerator(TableGenerator):
                 print(f"   {i}. {suggestion}")
         else:
             print(f"\n💡 Polars only supports simple tables (primitives + lists)")
-        
+
         return False
-    
+
     def generate_write_pattern_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
         """Write-pattern tables not supported in Polars"""
         raise NotImplementedError("Write-pattern tables only supported in PySpark backend")
-    
+
     def generate_partitioned_tables(self, num_parallel: int = 1, random_count: int = None, minimal: bool = False, delete_existing: bool = False):
         """Partitioned tables not supported in Polars"""
         raise NotImplementedError("Partitioned tables only supported in PySpark backend")
-    
+
     def generate_evolution_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
         """Evolution tables not supported in Polars"""
         raise NotImplementedError("Evolution tables only supported in PySpark backend")
-    
+
     def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
         """Generate minimal set of simple tables"""
         return self.generate_simple_tables(num_parallel=num_parallel, minimal=True, random_count=random_count)
-    
+
     def cleanup(self):
         """No cleanup needed for Polars"""
         pass

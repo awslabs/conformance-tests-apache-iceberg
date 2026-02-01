@@ -50,10 +50,10 @@ def create_spark_session(warehouse_path, app_name=None):
     """Create Spark session with Iceberg support and performance optimizations"""
     if app_name is None:
         app_name = f"IcebergTableGenerator-{uuid.uuid4()}"
-    
+
     # Detect if warehouse_path is an S3 table ARN
     is_s3_table = warehouse_path.startswith('arn:aws:s3tables:')
-    
+
     builder = SparkSession.builder \
         .appName(app_name) \
         .master("local[*]") \
@@ -94,17 +94,17 @@ def create_spark_session(warehouse_path, app_name=None):
         .config("spark.sql.iceberg.merge.rewrite-data-files-threshold", "1") \
         .config("spark.sql.warehouse.dir", "/tmp/spark-warehouse") \
         .config("spark.sql.hive.metastore.warehouse.dir", "/tmp/spark-warehouse") \
-        .config("spark.driver.extraJavaOptions", 
+        .config("spark.driver.extraJavaOptions",
                 "-XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseCompressedOops "
                 "-XX:+UseCompressedClassPointers -XX:+TieredCompilation -XX:TieredStopAtLevel=4 "
                 "-XX:+AggressiveOpts -XX:+OptimizeStringConcat -XX:+UseStringDeduplication")
-    
+
     if is_s3_table:
         # Configure for S3 Tables using REST catalog (based on official docs)
         # Extract region from ARN: arn:aws:s3tables:region:account:bucket/bucket-name
         arn_parts = warehouse_path.split(':')
         region = arn_parts[3]
-        
+
         builder = builder \
             .config("spark.sql.catalog.s3tables", "org.apache.iceberg.spark.SparkCatalog") \
             .config("spark.sql.catalog.s3tables.type", "rest") \
@@ -121,7 +121,7 @@ def create_spark_session(warehouse_path, app_name=None):
         # Configure for local/HDFS with comprehensive file system settings
         # Ensure warehouse directory exists with proper permissions
         os.makedirs(warehouse_path, mode=0o755, exist_ok=True)
-        
+
         builder = builder \
             .config("spark.sql.catalog.local", "org.apache.iceberg.spark.SparkCatalog") \
             .config("spark.sql.catalog.local.type", "hadoop") \
@@ -134,28 +134,28 @@ def create_spark_session(warehouse_path, app_name=None):
             .config("spark.hadoop.fs.permissions.umask-mode", "000") \
             .config("spark.hadoop.hadoop.tmp.dir", "/tmp/hadoop-tmp") \
             .config("spark.hadoop.fs.automatic.close", "false")
-    
+
     spark = builder.getOrCreate()
-    
+
     # Set log level to ERROR to suppress WARN messages
     spark.sparkContext.setLogLevel("ERROR")
-    
+
     return spark
 
 def delete_all_s3_tables(warehouse_path):
     """Delete all tables from S3 table bucket before proceeding"""
     if not is_s3_table_warehouse(warehouse_path):
         return
-    
+
     print("🗑️  Deleting all existing tables from S3 table bucket...")
-    
+
     try:
-        
+
         # Extract region from ARN
         # Format: arn:aws:s3tables:region:account:bucket/bucket-name
         arn_parts = warehouse_path.split(':')
         region = arn_parts[3]
-        
+
         # Use AWS credentials from environment
         session = boto3.Session(
             aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
@@ -163,25 +163,25 @@ def delete_all_s3_tables(warehouse_path):
             aws_session_token=os.environ.get('AWS_SESSION_TOKEN'),
             region_name=region
         )
-        
+
         s3tables_client = session.client('s3tables')
-        
+
         # List all namespaces
         namespaces_response = s3tables_client.list_namespaces(tableBucketARN=warehouse_path)
-        
+
         total_deleted = 0
         for namespace in namespaces_response.get('namespaces', []):
             # Extract namespace name from the response structure
             namespace_name = namespace['namespace'][0]  # namespace is a list with one element
             print(f"  → Checking namespace: {namespace_name}")
-            
+
             # List all tables in this namespace
             try:
                 tables_response = s3tables_client.list_tables(
                     tableBucketARN=warehouse_path,
                     namespace=namespace_name
                 )
-                
+
                 # Delete each table
                 for table in tables_response.get('tables', []):
                     table_name = table['name']
@@ -195,12 +195,12 @@ def delete_all_s3_tables(warehouse_path):
                         total_deleted += 1
                     except Exception as e:
                         print(f"    ✗ Failed to delete {namespace_name}.{table_name}: {e}")
-                        
+
             except Exception as e:
                 print(f"    ✗ Failed to list tables in namespace {namespace_name}: {e}")
-        
+
         print(f"🗑️  Deleted {total_deleted} tables from S3 table bucket")
-        
+
     except Exception:
         pass  # Ignore errors in S3 Tables deletion
 
@@ -276,19 +276,19 @@ def disable_table_compaction(spark, catalog, namespace, table_name, warehouse_pa
 def disable_s3_table_maintenance(warehouse_path, namespace, table_name):
     """Disable maintenance operations for S3 Tables using AWS SDK"""
     try:
-        
+
         # Parse S3 Tables ARN
         arn_parts = warehouse_path.split(':')
         region = arn_parts[3]
-        
+
         print(f"    → Calling S3 Tables SDK to disable maintenance for {namespace}.{table_name} in region {region}")
-        
+
         # Create S3 Tables client
         s3tables = boto3.client('s3tables', region_name=region)
-        
+
         # Wait a moment for table to be fully created
         time.sleep(2)
-        
+
         # Disable iceberg compaction
         try:
             s3tables.put_table_maintenance_configuration(
@@ -309,7 +309,7 @@ def disable_s3_table_maintenance(warehouse_path, namespace, table_name):
             print(f"    → Disabled iceberg compaction")
         except Exception as e:
             print(f"    → Failed to disable compaction: {e}")
-        
+
         # Disable iceberg snapshot management
         try:
             s3tables.put_table_maintenance_configuration(
@@ -330,9 +330,9 @@ def disable_s3_table_maintenance(warehouse_path, namespace, table_name):
             print(f"    → Disabled iceberg snapshot management")
         except Exception as e:
             print(f"    → Failed to disable snapshot management: {e}")
-        
+
         print(f"    → S3 Tables maintenance configuration completed")
-        
+
     except Exception as e:
         print(f"    → S3 Tables SDK call failed: {e}")
 
@@ -347,11 +347,11 @@ def create_namespace_if_not_exists(spark, catalog, namespace):
 def create_spark_schema(table_spec):
     """Convert table spec to Spark schema"""
     fields = []
-    
+
     for field_spec in table_spec['schema']:
         field_name = field_spec['name']
         field_type_str = field_spec['type']
-        
+
         # Map type strings to Spark types
         if field_type_str == 'boolean':
             spark_type = BooleanType()
@@ -420,7 +420,7 @@ def create_spark_schema(table_spec):
             # Parse map<key_type, value_type>
             inner = field_type_str[4:-1]
             key_type_str, value_type_str = [t.strip() for t in inner.split(',', 1)]
-            
+
             # Map key type
             if key_type_str == 'int':
                 key_type = IntegerType()
@@ -428,7 +428,7 @@ def create_spark_schema(table_spec):
                 key_type = StringType()
             else:
                 key_type = StringType()
-            
+
             # Map value type
             if value_type_str == 'string':
                 value_type = StringType()
@@ -461,29 +461,29 @@ def create_spark_schema(table_spec):
                 value_type = StringType()
             else:
                 value_type = StringType()
-            
+
             spark_type = MapType(key_type, value_type)
         else:
             # Default for unknown types including time_col, uuid_col, fixed_col
             spark_type = StringType() if 'time' in field_name else BinaryType() if 'uuid' in field_name or 'fixed' in field_name else StringType()
-        
+
         fields.append(StructField(field_name, spark_type, True))
-    
+
     return StructType(fields)
 
 def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
     """Generate deterministic sample data using Spark to match PyIceberg patterns"""
     data = []
-    
+
     for i in range(num_rows):
         row_id = i + 1 + row_offset
         row_data = {}
-        
+
         # Generate data for each field in the schema
         for field_spec in table_spec['schema']:
             field_name = field_spec['name']
             field_type = field_spec['type']
-            
+
             if field_name == 'id':
                 row_data[field_name] = row_id
             # Handle specific column name patterns first
@@ -567,7 +567,7 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
                 # Parse map type
                 inner = field_type[4:-1]
                 key_type_str, value_type_str = [t.strip() for t in inner.split(',', 1)]
-                
+
                 # Generate map data based on value type
                 if value_type_str == 'string':
                     row_data[field_name] = {row_id: f"value_{row_id}", row_id + 1: f"value_{row_id + 1}"}
@@ -600,52 +600,52 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
             else:
                 # Default fallback
                 row_data[field_name] = f"value_{row_id}"
-        
+
         data.append(row_data)
-    
+
     schema = create_spark_schema(table_spec)
     return spark.createDataFrame(data, schema)
 
 def get_all_possible_table_names(specs_path='specs'):
     """Generate all possible table names from all spec files"""
-    
+
     all_table_names = []
-    
+
     # Get simple table names
     try:
         simple_specs = load_table_specs(f'{specs_path}/simple.yaml')
         all_table_names.extend([spec['name'] for spec in simple_specs])
     except Exception:
         pass  # Ignore errors
-    
+
     # Get write pattern table names
     try:
         write_pattern_specs = load_table_specs(f'{specs_path}/write_patterns.yaml')
         all_table_names.extend([spec['name'] for spec in write_pattern_specs])
     except Exception:
         pass  # Ignore errors
-    
+
     # Get evolution table names
     try:
         evolution_specs = load_table_specs(f'{specs_path}/evolution.yaml')
         all_table_names.extend([spec['name'] for spec in evolution_specs])
     except Exception:
         pass  # Ignore errors
-    
+
     # Generate partitioned table names programmatically
     try:
         # Load partitioned spec to get transforms and patterns
         with open(f'{specs_path}/partitioned.yaml', 'r') as f:
             partitioned_spec = yaml.safe_load(f)
-        
+
         transforms = partitioned_spec.get('partition_transforms', [])
         patterns = partitioned_spec.get('patterns', [])
-        
+
         # Extract transform names and pattern names
         transform_names = [t['name'] for t in transforms]
         pattern_names = [p['name'] for p in patterns]
         delete_modes = ['cow', 'posdelete']
-        
+
         for transform in transform_names:
             for pattern in pattern_names:
                 for mode in delete_modes:
@@ -653,54 +653,54 @@ def get_all_possible_table_names(specs_path='specs'):
                     all_table_names.append(table_name)
     except Exception:
         pass  # Ignore errors
-    
+
     return sorted(list(set(all_table_names)))
 
 def suggest_table_names(invalid_name, specs_path='specs'):
     """Suggest closest matching table names using weighted edit distance"""
-    
+
     def weighted_levenshtein_distance(s1, s2):
         if len(s1) < len(s2):
             return weighted_levenshtein_distance(s2, s1)
-        
+
         if len(s2) == 0:
             return len(s1)
-        
+
         previous_row = list(range(len(s2) + 1))
         for i, c1 in enumerate(s1):
             current_row = [i + 1]
             for j, c2 in enumerate(s2):
                 # Weight differences more heavily at the beginning of the string
                 position_weight = 1.0 / (1.0 + i * 0.1)  # Higher weight for earlier positions
-                
+
                 insertions = previous_row[j + 1] + position_weight
                 deletions = current_row[j] + position_weight
                 substitutions = previous_row[j] + (position_weight if c1 != c2 else 0)
                 current_row.append(min(insertions, deletions, substitutions))
             previous_row = current_row
-        
+
         return previous_row[-1]
-    
+
     all_names = get_all_possible_table_names(specs_path)
-    
+
     # Calculate weighted edit distance for each name and keep top 5
     distances = []
     for name in all_names:
         distance = weighted_levenshtein_distance(invalid_name.lower(), name.lower())
         heapq.heappush(distances, (distance, name))
-    
+
     # Return top 5 closest matches
     suggestions = []
     for _ in range(min(5, len(distances))):
         if distances:
             _, name = heapq.heappop(distances)
             suggestions.append(name)
-    
+
     return suggestions
 
 def create_single_table(spark, warehouse_path, table_name, delete_existing=True):
     """Create a single table by name from all available specs"""
-    
+
     # Try to find the table in simple specs
     try:
         simple_specs = load_table_specs('specs/simple.yaml')
@@ -709,8 +709,8 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
                 return create_single_type_table(spark, warehouse_path, table_name, spec, delete_existing=delete_existing)
     except Exception:
         pass  # Ignore errors
-    
-    # Try to find the table in write pattern specs  
+
+    # Try to find the table in write pattern specs
     try:
         write_pattern_specs = load_table_specs('specs/write_patterns.yaml')
         for spec in write_pattern_specs:
@@ -718,15 +718,15 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
                 return create_comprehensive_table(spark, warehouse_path, table_name, spec['pattern'], delete_existing=delete_existing)
     except Exception:
         pass  # Ignore errors
-    
+
     # Try to find the table in partitioned specs by generating all possible combinations
     try:
         with open('specs/partitioned.yaml', 'r') as f:
             partitioned_spec = yaml.safe_load(f)
-        
+
         transforms = partitioned_spec.get('partition_transforms', [])
         patterns = partitioned_spec.get('patterns', [])
-        
+
         # Generate all possible table names and find exact match
         for transform in transforms:
             for pattern in patterns:
@@ -739,7 +739,7 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
                         return create_partitioned_table(spark, warehouse_path, table_name, pattern['name'], partition_spec_str, delete_existing=delete_existing)
     except Exception as e:
         print(f"Error checking partitioned specs: {e}")
-    
+
     # Try to find the table in evolution specs
     try:
         evolution_specs = load_table_specs('specs/evolution.yaml')
@@ -748,10 +748,10 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
                 return create_evolution_table(spark, warehouse_path, table_name, spec, delete_existing=delete_existing)
     except Exception:
         pass  # Ignore errors
-    
+
     # Table not found - suggest alternatives
     print(f"❌ Table '{table_name}' not found in any specs")
-    
+
     suggestions = suggest_table_names(table_name)
     if suggestions:
         print(f"\n💡 Did you mean one of these?")
@@ -759,41 +759,41 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
             print(f"   {i}. {suggestion}")
     else:
         print(f"\n💡 Run without --table-name to see all available tables")
-    
+
     return False
 
 def create_single_type_table(spark, warehouse_path, table_name, table_spec, counter=None, delete_existing=True):
     """Create a single-type table with PySpark"""
     counter_str = f" ({counter})" if counter else ""
-    
+
     # Get catalog and namespace
     catalog, namespace = get_catalog_and_namespace(warehouse_path, "simple")
-    
+
     # Check if table exists and skip if delete_existing is False
     if not delete_existing and table_exists(spark, catalog, namespace, table_name):
         print(f"Skipping existing table: {table_name}{counter_str}")
         return True
-    
+
     print(f"Creating table: {table_name}{counter_str}")
-    
+
     try:
         # Create namespace if needed
         create_namespace_if_not_exists(spark, catalog, namespace)
-        
+
         # Drop existing table only if delete_existing is True
         if delete_existing:
             drop_table_if_exists(spark, catalog, namespace, table_name)
-        
+
         # Extract compression codec from table name
         # Format: unpart_{type}_{compression}_{encoding}_{version}
         # Compression can be: gzip_lvl1, gzip_lvl2, gzip_lvl3, zstd_lvl1, zstd_lvl2, zstd_lvl3, snappy, lz4
         parts = table_name.split('_')
-        
+
         # Find compression part (comes after datatype, before encoding)
         # Datatype can be multi-part (e.g., binary_long), so we need to find where compression starts
         compression_keywords = ['gzip', 'zstd', 'snappy', 'lz4', 'none']
         compression = 'snappy'  # default
-        
+
         for i, part in enumerate(parts):
             if part in compression_keywords:
                 # Check if next part is lvl1/lvl2/lvl3
@@ -802,7 +802,7 @@ def create_single_type_table(spark, warehouse_path, table_name, table_spec, coun
                 else:
                     compression = part
                 break
-        
+
         # Map compression names to Parquet codec names (strip level suffixes)
         compression_map = {
             'gzip': 'gzip',
@@ -811,15 +811,15 @@ def create_single_type_table(spark, warehouse_path, table_name, table_spec, coun
             'lz4': 'lz4_raw',
             'none': 'uncompressed'
         }
-        
+
         # Extract base compression (remove lvl1, lvl2, lvl3 suffixes)
         base_compression = compression.split('_')[0]
         codec = compression_map.get(base_compression, 'snappy')
-        
+
         # Write 10 commits of 100 rows each
         for i in range(10):
             batch_df = generate_spark_data(spark, table_spec, 100, row_offset=i * 100)
-            
+
             if i == 0:
                 props = {'write.parquet.compression-codec': codec}
                 # Create table with SQL first
@@ -831,10 +831,10 @@ def create_single_type_table(spark, warehouse_path, table_name, table_spec, coun
                 batch_df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
             else:
                 batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-        
+
         # Disable compaction
         disable_table_compaction(spark, catalog, namespace, table_name, warehouse_path)
-        
+
         return True
     except Exception as e:
         print(f"Error creating table {table_name}: {e}")
@@ -869,14 +869,14 @@ def create_equality_deletes(spark, table_name, delete_condition):
     try:
         # Set session-level config to prefer equality deletes
         spark.conf.set("spark.sql.iceberg.delete.mode", "merge-on-read")
-        
+
         # Use MERGE with DELETE to try to create equality deletes
         # The key is to match on the equality field (id)
         spark.sql(f"""
             MERGE INTO local.default.{table_name} AS target
             USING (
-                SELECT DISTINCT id 
-                FROM local.default.{table_name} 
+                SELECT DISTINCT id
+                FROM local.default.{table_name}
                 WHERE {delete_condition}
             ) AS source
             ON target.id = source.id
@@ -891,7 +891,7 @@ def get_table_properties(table_name):
     props = {
         'write.distribution-mode': 'none'  # Disable distribution requirements (fanout mode)
     }
-    
+
     # Set format version based on table name
     if "_v1_" in table_name:
         props['format-version'] = '1'
@@ -899,7 +899,7 @@ def get_table_properties(table_name):
         props['format-version'] = '2'
     else:
         props['format-version'] = '2'  # Default to v2
-    
+
     # Only posdelete mode needs special properties (cow is default)
     if "posdelete" in table_name:
         props.update({
@@ -912,27 +912,27 @@ def get_table_properties(table_name):
             'write.merge.rewrite-data-files-threshold': '1',  # Force delete files for merges
             'write.parquet.row-group-size-bytes': '1048576'  # Smaller row groups
         })
-    
+
     return props
 
 def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, counter=None, delete_existing=True):
     """Create a comprehensive write-pattern table"""
     counter_str = f" ({counter})" if counter else ""
-    
+
     # Get catalog and namespace
     catalog, namespace = get_catalog_and_namespace(warehouse_path, "write_pattern")
-    
+
     # Check if table exists and skip if delete_existing is False
     if not delete_existing and table_exists(spark, catalog, namespace, table_name):
         print(f"Skipping existing table: {table_name} (pattern: {pattern_name}){counter_str}")
         return True
-    
+
     print(f"Creating table: {table_name} (pattern: {pattern_name}){counter_str}")
-    
+
     try:
         # Create namespace if needed
         create_namespace_if_not_exists(spark, catalog, namespace)
-        
+
         # Drop existing table only if delete_existing is True
         if delete_existing:
             drop_table_if_exists(spark, catalog, namespace, table_name)
@@ -965,17 +965,17 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                 {'name': 'list_string_col', 'type': 'list<string>'}
             ]
         }
-        
+
         # Execute pattern-specific operations with 10K rows
         # Use repartition to create multiple files per commit for compaction testing
         num_files_per_commit = 3  # Create 3 files per commit
-        
+
         if pattern_name == "insert_heavy":
             # 10 commits of 1K rows each = 10K total, 30 files total
             for i in range(10):
                 batch_df = generate_spark_data(spark, schema_spec, 1000, row_offset=i * 1000)
                 batch_df = batch_df.repartition(num_files_per_commit)
-                
+
                 if i == 0:
                     props = get_table_properties(table_name)
 
@@ -994,12 +994,12 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                     batch_df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
                 else:
                     batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-        
+
         elif pattern_name == "batch_replace":
             # Create initial batch then replace with full dataset
             df = generate_spark_data(spark, schema_spec, 5000)
             df = df.repartition(num_files_per_commit)
-            
+
             props = get_table_properties(table_name)
             # Create table with SQL first
             df.createOrReplaceTempView("temp_create_data")
@@ -1008,7 +1008,7 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
             # Insert data
             df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
-            
+
             # Replace with full dataset
             if "cow" in table_name:
                 # COW mode: use overwrite
@@ -1023,17 +1023,17 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                     df_full = df_full.repartition(num_files_per_commit)
                     df_full.writeTo(f"{catalog}.{namespace}.{table_name}").append()
                 except Exception as e:
-                    
+
                     df_full = generate_spark_data(spark, schema_spec, 10000)
                     df_full = df_full.repartition(num_files_per_commit)
                     df_full.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
-        
+
         elif pattern_name == "gradual_growth":
             # 10 commits of 1K rows each, 30 files total
             for i in range(10):
                 batch_df = generate_spark_data(spark, schema_spec, 1000, row_offset=i * 1000)
                 batch_df = batch_df.repartition(num_files_per_commit)
-                
+
                 if i == 0:
                     props = get_table_properties(table_name)
 
@@ -1052,13 +1052,13 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                     batch_df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
                 else:
                     batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-        
+
         elif pattern_name == "burst_ops":
             # Small commits then large operation
             for i in range(3):
                 batch_df = generate_spark_data(spark, schema_spec, 500, row_offset=i * 500)
                 batch_df = batch_df.repartition(num_files_per_commit)
-                
+
                 if i == 0:
                     props = get_table_properties(table_name)
                     # Create table with SQL first
@@ -1070,7 +1070,7 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                     batch_df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
                 else:
                     batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-            
+
             # Large operation
             if "cow" in table_name:
                 # COW mode: use overwrite
@@ -1085,11 +1085,11 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                     df_full = df_full.repartition(num_files_per_commit)
                     df_full.writeTo(f"{catalog}.{namespace}.{table_name}").append()
                 except Exception as e:
-                    
+
                     df_full = generate_spark_data(spark, schema_spec, 10000)
                     df_full = df_full.repartition(num_files_per_commit)
                     df_full.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
-        
+
         # PySpark can also handle the limited patterns with actual operations
         elif pattern_name == "update_heavy":
             # Create initial data then simulate updates
@@ -1104,7 +1104,7 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
             # Insert data
             df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
-            
+
             # Simulate multiple update operations
             if "cow" in table_name:
                 # COW mode: use overwrites
@@ -1125,40 +1125,40 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                         df_updated = df_updated.repartition(num_files_per_commit)
                         df_updated.writeTo(f"{catalog}.{namespace}.{table_name}").append()
                     except Exception as e:
-                        
+
                         df_updated = generate_spark_data(spark, schema_spec, 10000)
                         df_updated = df_updated.repartition(num_files_per_commit)
                         df_updated.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
                         break
-        
+
         elif pattern_name == "delete_heavy":
             # Create initial data with 20K rows
             df = generate_spark_data(spark, schema_spec, 20000)
             df = df.repartition(num_files_per_commit * 2)  # More files for larger dataset
-            
+
             props = get_table_properties(table_name)
 
-            
+
             # Create table with SQL first
 
-            
+
             df.createOrReplaceTempView("temp_create_data")
 
-            
+
             schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in df.schema.fields])
 
-            
+
             props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
 
-            
+
             spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
 
-            
+
             # Insert data
 
-            
+
             df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
-            
+
             # For COW mode, use overwrite to avoid delete files
             if "cow" in table_name:
                 final_df = generate_spark_data(spark, schema_spec, 10000)
@@ -1170,16 +1170,16 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                     spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name} WHERE id > 10000")
                     print(f"✓ Used DELETE operation for {table_name}")
                 except Exception as e:
-                    
+
                     final_df = generate_spark_data(spark, schema_spec, 10000)
                     final_df = final_df.repartition(num_files_per_commit)
                     final_df.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
-        
+
         elif pattern_name == "mixed_chaos":
             # Mixed operations - inserts, updates, deletes
             df = generate_spark_data(spark, schema_spec, 5000)
             df = df.repartition(num_files_per_commit)
-            
+
             props = get_table_properties(table_name)
             # Create table with SQL first
             df.createOrReplaceTempView("temp_create_data")
@@ -1188,12 +1188,12 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
             # Insert data
             df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
-            
+
             # Add more data
             append_df = generate_spark_data(spark, schema_spec, 3000, row_offset=5000)
             append_df = append_df.repartition(num_files_per_commit)
             append_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-            
+
             # For COW mode, use overwrite to avoid delete files
             if "cow" in table_name:
                 final_df = generate_spark_data(spark, schema_spec, 10000)
@@ -1208,11 +1208,11 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                     final_append = final_append.repartition(num_files_per_commit)
                     final_append.writeTo(f"{catalog}.{namespace}.{table_name}").append()
                 except Exception as e:
-                    
+
                     final_df = generate_spark_data(spark, schema_spec, 10000)
                     final_df = final_df.repartition(num_files_per_commit)
                     final_df.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
-        
+
         elif pattern_name == "truncate_cycles":
             # Create, truncate, recreate cycles using TRUNCATE or overwrite
             df = generate_spark_data(spark, schema_spec, 4000)
@@ -1226,7 +1226,7 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
             # Insert data
             df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
-            
+
             # Truncate and refill cycles
             for cycle in range(2):
                 try:
@@ -1234,24 +1234,24 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                 except Exception:
                     # If TRUNCATE not supported, use DELETE
                     spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name}")
-                
+
                 df_refill = generate_spark_data(spark, schema_spec, 4000)
                 df_refill = df_refill.repartition(num_files_per_commit)
                 df_refill.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-            
+
             # Final truncate and full dataset
             try:
                 spark.sql(f"TRUNCATE TABLE {catalog}.{namespace}.{table_name}")
             except Exception:
                 spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name}")
-            
+
             final_df = generate_spark_data(spark, schema_spec, 10000)
             final_df = final_df.repartition(num_files_per_commit)
             final_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-        
+
         # Disable compaction
         disable_table_compaction(spark, catalog, namespace, table_name, warehouse_path)
-        
+
         return True
     except Exception as e:
         print(f"Error creating table {table_name}: {e}")
@@ -1282,12 +1282,12 @@ def generate_single_tables(args, spark, warehouse_path):
     """Generate single-type tables"""
     minimal = args.table_type == 'minimal'
     table_specs = load_table_specs(args.specs, minimal=minimal)
-    
+
     print(f"Generating {len(table_specs)} single-type tables with {args.num_parallel} parallel workers...")
-    
+
     success_count = 0
     total_count = len(table_specs)
-    
+
     if args.num_parallel > 1:
         # Process in batches to avoid overwhelming the executor with 11k+ futures
         batch_size = 256
@@ -1295,7 +1295,7 @@ def generate_single_tables(args, spark, warehouse_path):
             for batch_start in range(0, len(table_specs), batch_size):
                 batch_end = min(batch_start + batch_size, len(table_specs))
                 batch = table_specs[batch_start:batch_end]
-                
+
                 futures = {executor.submit(create_table_worker_with_session, warehouse_path, spec): spec for spec in batch}
                 for future in as_completed(futures):
                     table_name, success = future.result()
@@ -1312,7 +1312,7 @@ def generate_single_tables(args, spark, warehouse_path):
                 print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
             else:
                 print(f"✗ Failed to create table {spec['name']}")
-    
+
     print(f"\nCompleted single tables: {success_count}/{total_count} tables created successfully")
 
 def create_write_pattern_worker_with_session(warehouse_path, table_name, pattern):
@@ -1338,11 +1338,11 @@ def create_write_pattern_worker(spark, warehouse_path, table_name, pattern, dele
 
 def generate_write_pattern_tables(args, spark, warehouse_path):
     """Generate comprehensive write-pattern tables"""
-    all_patterns = ["insert_heavy", "update_heavy", "delete_heavy", "mixed_chaos", 
+    all_patterns = ["insert_heavy", "update_heavy", "delete_heavy", "mixed_chaos",
                     "batch_replace", "gradual_growth", "burst_ops", "truncate_cycles"]
     versions = ["v1", "v2"]
     delete_modes = ["cow", "posdelete"]  # Remove eqdelete - PySpark cannot create equality deletes
-    
+
     tasks = []
     for pattern in all_patterns:
         for version in versions:
@@ -1350,19 +1350,19 @@ def generate_write_pattern_tables(args, spark, warehouse_path):
                 # Skip invalid combinations: v1 only supports cow
                 if version == "v1" and delete_mode != "cow":
                     continue
-                    
+
                 table_name = f"unpart_{pattern}_zstd_plain_dictionary_{version}_{delete_mode}"
                 tasks.append((table_name, pattern))
-    
+
     # Calculate actual table count after filtering invalid combinations
     # v1: only cow (8 patterns × 1 delete mode = 8)
     # v2: cow, posdelete (8 patterns × 2 delete modes = 16)
     # Total: 8 + 16 = 24 tables
     total_tables = len(tasks)
     created = 0
-    
+
     print(f"Generating {total_tables} write-pattern tables (PySpark supports all patterns)...")
-    
+
     if args.num_parallel > 1:
         with ThreadPoolExecutor(max_workers=args.num_parallel) as executor:
             futures = {executor.submit(create_write_pattern_worker_with_session, warehouse_path, name, pat): name for name, pat in tasks}
@@ -1387,17 +1387,17 @@ def generate_write_pattern_tables(args, spark, warehouse_path):
                     print(f"✗ Failed to create {table_name}")
             except Exception as e:
                 print(f"✗ Failed to create {table_name}: {e}")
-    
+
     print(f"\nCompleted write-pattern tables: {created}/{total_tables} tables created successfully")
 
 def generate_partitioned_data(spark, schema_spec, num_rows=100, row_offset=0):
     """Generate data for partitioned tables with partition-specific fields"""
-    
+
     schema = create_spark_schema(schema_spec)
     data = []
-    
+
     categories = ['A', 'B', 'C', 'D', 'E']
-    
+
     for i in range(num_rows):
         row_id = row_offset + i + 1
         row = {
@@ -1433,7 +1433,7 @@ def generate_partitioned_data(spark, schema_spec, num_rows=100, row_offset=0):
             'list_string_col': [f'item_{row_id}', f'item_{row_id + 1}']
         }
         data.append(row)
-    
+
     return spark.createDataFrame(data, schema)
 
 def parse_partition_spec(spec_str):
@@ -1442,7 +1442,7 @@ def parse_partition_spec(spec_str):
     parts = []
     current_part = ""
     paren_count = 0
-    
+
     for char in spec_str:
         if char == '(':
             paren_count += 1
@@ -1455,12 +1455,12 @@ def parse_partition_spec(spec_str):
             current_part = ""
         else:
             current_part += char
-    
+
     if current_part.strip():
         parts.append(current_part.strip())
-    
+
     partition_specs = []
-    
+
     for part in parts:
         if part.startswith('identity('):
             col_name = part[9:-1]
@@ -1501,7 +1501,7 @@ def parse_partition_spec(spec_str):
         elif part.startswith('void('):
             col_name = part[5:-1]
             partition_specs.append(('void', col_name, None))
-    
+
     return partition_specs
 
 def get_sort_columns(partition_specs):
@@ -1522,21 +1522,21 @@ def prepare_partitioned_df(df, sort_cols, num_partitions):
 def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, partition_spec, counter=None, delete_existing=True):
     """Create a partitioned table"""
     counter_str = f" ({counter})" if counter else ""
-    
+
     # Get catalog and namespace
     catalog, namespace = get_catalog_and_namespace(warehouse_path, "partitioned")
-    
+
     # Check if table exists and skip if delete_existing is False
     if not delete_existing and table_exists(spark, catalog, namespace, table_name):
         print(f"Skipping existing table: {table_name} (pattern: {pattern_name}, partition: {partition_spec}){counter_str}")
         return True
-    
+
     print(f"Creating partitioned table: {table_name} (pattern: {pattern_name}, partition: {partition_spec}){counter_str}")
-    
+
     try:
         # Create namespace if needed
         create_namespace_if_not_exists(spark, catalog, namespace)
-        
+
         # Drop existing table only if delete_existing is True
         if delete_existing:
             drop_table_if_exists(spark, catalog, namespace, table_name)
@@ -1559,10 +1559,10 @@ def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, pa
                 {'name': 'list_int_col', 'type': 'list<int>'}, {'name': 'list_string_col', 'type': 'list<string>'}
             ]
         }
-        
+
         partition_specs = parse_partition_spec(partition_spec)
         sort_cols = get_sort_columns(partition_specs)
-        
+
         # Build SQL partition spec
         partition_spec_sql = []
         for transform, col_name, param in partition_specs:
@@ -1584,26 +1584,26 @@ def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, pa
                 partition_spec_sql.append(f"hours({col_name})")
             elif transform == 'void':
                 partition_spec_sql.append(f"void({col_name})")
-        
+
         # Build table properties - use snappy compression and plain encoding for partitioned tables
         props = get_table_properties(table_name)
-        
+
         # Override compression and encoding for partitioned tables
         props['write.parquet.compression-codec'] = 'snappy'
         # Note: Encoding is auto-selected by Spark, plain is default for most data types
-        
+
         # Remove fanout mode - we'll sort data instead
         if 'write.distribution-mode' in props:
             del props['write.distribution-mode']
-        
+
         props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
         props_clause = f"TBLPROPERTIES ({props_sql})" if props_sql else ""
-        
+
         # Create table with schema (no CTAS to avoid staged create)
         schema_df = generate_partitioned_data(spark, schema_spec, 1, 0)
         schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in schema_df.schema.fields])
         spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg PARTITIONED BY ({', '.join(partition_spec_sql)}) {props_clause}")
-        
+
         # Apply pattern-specific logic
         if pattern_name == "insert_heavy":
             # Pure append operations - 10 batches of 10K rows each
@@ -1611,14 +1611,14 @@ def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, pa
                 batch_df = generate_partitioned_data(spark, schema_spec, 10000, i * 10000)
                 batch_df = prepare_partitioned_df(batch_df, sort_cols, 3)
                 batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-        
+
         elif pattern_name == "delete_heavy":
             # Create 200K rows, then delete half to end with 100K
             for i in range(20):
                 batch_df = generate_partitioned_data(spark, schema_spec, 10000, i * 10000)
                 batch_df = prepare_partitioned_df(batch_df, sort_cols, 3)
                 batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-            
+
             # Delete operations based on mode
             if "cow" in table_name:
                 # COW: Use overwrite to avoid delete files
@@ -1628,14 +1628,14 @@ def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, pa
             else:
                 # Posdelete: Use DELETE to create position delete files
                 spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name} WHERE id > 100000")
-        
+
         elif pattern_name == "update_heavy":
             # Create 120K rows, then delete in cycles, end with 100K
             for i in range(12):
                 batch_df = generate_partitioned_data(spark, schema_spec, 10000, i * 10000)
                 batch_df = prepare_partitioned_df(batch_df, sort_cols, 3)
                 batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-            
+
             # Update cycles based on mode
             if "cow" in table_name:
                 # COW: Use overwrite operations
@@ -1646,14 +1646,14 @@ def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, pa
             else:
                 # Posdelete: DELETE then INSERT to maintain 100K final count
                 spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name} WHERE id > 100000")
-        
+
         elif pattern_name == "mixed_chaos":
             # Create 150K rows, delete 1/3, add back to reach 100K
             for i in range(15):
                 batch_df = generate_partitioned_data(spark, schema_spec, 10000, i * 10000)
                 batch_df = prepare_partitioned_df(batch_df, sort_cols, 3)
                 batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-            
+
             if "cow" in table_name:
                 # COW: Use overwrite
                 final_df = generate_partitioned_data(spark, schema_spec, 100000, 0)
@@ -1675,17 +1675,17 @@ def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, pa
                         final_df = prepare_partitioned_df(final_df, sort_cols, 3)
                         final_df.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
                         break
-        
+
         else:
             # Default: append-only pattern (100K rows)
             for i in range(10):
                 batch_df = generate_partitioned_data(spark, schema_spec, 10000, i * 10000)
                 batch_df = prepare_partitioned_df(batch_df, sort_cols, 3)
                 batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
-        
+
         # Disable compaction
         disable_table_compaction(spark, catalog, namespace, table_name, warehouse_path)
-        
+
         return True
     except Exception as e:
         print(f"Error creating {table_name}: {e}")
@@ -1718,17 +1718,17 @@ def generate_partitioned_tables(args, spark, warehouse_path):
     # Minimal set of 4 essential partition transforms
     minimal_transforms = [
         ["identity(category)"],                    # Direct partitioning
-        ["bucket(4, id)"],                       # Hash partitioning  
+        ["bucket(4, id)"],                       # Hash partitioning
         ["months(timestamp)"],                   # Temporal partitioning
         ["identity(category)", "bucket(4, id)"]  # Multi-column partitioning
     ]
-    
+
     patterns = ['mixed_chaos']  # Only mixed_chaos pattern
     delete_modes = ['cow', 'posdelete']  # Test both modes
-    
+
     total = len(minimal_transforms) * len(patterns) * len(delete_modes)
     print(f"Generating {total} partitioned tables (minimal set: mixed_chaos pattern only)...")
-    
+
     # Build list of all tables to create
     tables = []
     for transform in minimal_transforms:
@@ -1737,7 +1737,7 @@ def generate_partitioned_tables(args, spark, warehouse_path):
                 transform_name = "_".join(transform).replace('(', '_').replace(')', '').replace('[', '').replace(']', '').replace(',', '_').replace(' ', '')
                 table_name = f"part_{transform_name}_{pattern}_{delete_mode}"
                 tables.append((table_name, pattern, transform))
-    
+
     created = 0
     if args.num_parallel > 1:
         # Parallel execution
@@ -1746,7 +1746,7 @@ def generate_partitioned_tables(args, spark, warehouse_path):
                 executor.submit(create_partitioned_table_worker_with_session, warehouse_path, name, pat, spec): name
                 for name, pat, spec in tables
             }
-            
+
             for future in as_completed(futures):
                 table_name = futures[future]
                 try:
@@ -1765,9 +1765,9 @@ def generate_partitioned_tables(args, spark, warehouse_path):
             should_stop = True
         else:
             should_stop = False
-        
+
         spark.conf.set("spark.sql.iceberg.fanout-enabled", "true")
-        
+
         try:
             for i, (table_name, pattern, partition_spec) in enumerate(tables, 1):
                 try:
@@ -1779,7 +1779,7 @@ def generate_partitioned_tables(args, spark, warehouse_path):
         finally:
             if should_stop:
                 spark.stop()
-    
+
     print(f"\nCompleted: {created}/{total} partitioned tables created")
 
 def main():
@@ -1787,11 +1787,11 @@ def main():
     parser.add_argument('--warehouse-path', required=True, help='Warehouse path or S3 table bucket ARN')
     parser.add_argument('--specs', required=True, help='Path to table specs YAML file')
     parser.add_argument('--num-parallel', type=int, default=1, help='Number of parallel workers')
-    parser.add_argument('--table-type', choices=['simple', 'write-patterns', 'partitioned', 'all', 'minimal'], default='simple', 
+    parser.add_argument('--table-type', choices=['simple', 'write-patterns', 'partitioned', 'all', 'minimal'], default='simple',
                        help='Type of tables to generate: simple (all combos), write-patterns (comprehensive), partitioned, all (all types), or minimal (80 tables: plain+snappy+v2 only)')
-    
+
     args = parser.parse_args()
-    
+
     # Handle warehouse path - create directory only for local paths
     if is_s3_table_warehouse(args.warehouse_path):
         warehouse_path = args.warehouse_path
@@ -1801,22 +1801,22 @@ def main():
         warehouse_path = Path(args.warehouse_path)
         warehouse_path.mkdir(parents=True, exist_ok=True)
         warehouse_path = f"file://{warehouse_path}"
-    
+
     # Only create Spark session for sequential processing
     spark = None
     if args.num_parallel == 1:
         spark = create_spark_session(warehouse_path)
-    
+
     try:
         if args.table_type in ['simple', 'all', 'minimal']:
             generate_single_tables(args, spark, warehouse_path)
-        
+
         if args.table_type in ['write-patterns', 'all']:
             generate_write_pattern_tables(args, spark, warehouse_path)
-        
+
         if args.table_type in ['partitioned', 'all']:
             generate_partitioned_tables(args, spark, warehouse_path)
-    
+
     finally:
         if spark is not None:
             spark.stop()
@@ -1826,7 +1826,7 @@ if __name__ == '__main__':
 
 def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
     """Generate data for evolution tables with schema-aware column mapping"""
-    
+
     # Get current table schema if table exists
     current_schema = None
     if table_name:
@@ -1835,17 +1835,17 @@ def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
             print(f"    → Current schema columns: {[f.name for f in current_schema.fields]}")
         except Exception as e:
             print(f"    → Could not read schema: {e}")
-    
+
     # Generate base data
     categories = ["A", "B", "C", "D", "E"]
-    
+
     if current_schema:
         # Use current table schema - create data matching evolved schema
         data = []
         for i in range(num_rows):
             row_id = row_offset + i + 1
             row_values = []
-            
+
             # Only generate data for columns that exist in current schema
             for field in current_schema.fields:
                 field_name = field.name
@@ -1877,9 +1877,9 @@ def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
                         row_values.append(row_id % 2 == 0)
                     else:
                         row_values.append(None)
-            
+
             data.append(tuple(row_values))
-        
+
         df = spark.createDataFrame(data, current_schema)
     else:
         # Use base schema for initial creation
@@ -1891,7 +1891,7 @@ def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
             StructField("timestamp", TimestampType(), True),
             StructField("active", BooleanType(), True)
         ])
-        
+
         data = []
         for i in range(num_rows):
             row_id = row_offset + i + 1
@@ -1903,21 +1903,21 @@ def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
                 None,  # Will be set using SQL functions
                 row_id % 2 == 0
             ))
-        
+
         df = spark.createDataFrame(data, base_schema)
-    
+
     # Add timestamp using SQL functions
     if "timestamp" in [f.name for f in df.schema.fields]:
-        df = df.withColumn("timestamp", 
+        df = df.withColumn("timestamp",
                           date_add(lit("2020-01-01"), (col("id") % 1460).cast("int")))
-    
+
     return df
 
 def create_evolution_table(spark, warehouse_path, table_name, table_spec, delete_existing=True):
     """Create a single evolution table with specified evolution operations"""
     # Get catalog and namespace using the same function as other table types
     catalog, namespace = get_catalog_and_namespace(warehouse_path, "evolution")
-    
+
     try:
         # Check if table exists and skip if delete_existing is False
         if not delete_existing:
@@ -1927,28 +1927,28 @@ def create_evolution_table(spark, warehouse_path, table_name, table_spec, delete
                 return True
             except Exception:
                 pass  # Table doesn't exist, continue with creation
-        
+
         print(f"Creating evolution table: {table_name}")
-        
+
         # Create namespace if not exists
         create_namespace_if_not_exists(spark, catalog, namespace)
-        
+
         # Drop existing table only if delete_existing is True
         if delete_existing:
-            drop_table_if_exists(spark, catalog, namespace, table_name)  
-        
+            drop_table_if_exists(spark, catalog, namespace, table_name)
+
         # Get table configuration
         initial_format_version = table_spec.get('initial_format_version', 2)
         schema_type = table_spec.get('schema', 'base')
         partition_spec = table_spec.get('partition_spec') or table_spec.get('initial_partition_spec')
         sort_order = table_spec.get('sort_order') or table_spec.get('initial_sort_order')
-        
+
         # Build table properties
         props = {
             'format-version': str(initial_format_version),
             'write.distribution-mode': 'none'  # Support all partition transforms
         }
-        
+
         # Add initial properties
         initial_props = table_spec.get('initial_properties', {})
         if 'compression' in initial_props:
@@ -1961,23 +1961,23 @@ def create_evolution_table(spark, warehouse_path, table_name, table_spec, delete
                     'write.delete.mode': 'merge-on-read',
                     'write.update.mode': 'merge-on-read'
                 })
-        
+
         # Create base schema
         base_columns = [
             "id BIGINT",
-            "name STRING", 
+            "name STRING",
             "category STRING",
             "value INT",
             "timestamp TIMESTAMP",
             "active BOOLEAN"
         ]
-        
+
         # Add extended schema columns if needed
         if schema_type == 'extended':
             base_columns.append("description STRING")
-        
+
         schema_sql = ", ".join(base_columns)
-        
+
         # Build partition clause
         partition_clause = ""
         if partition_spec:
@@ -1985,19 +1985,19 @@ def create_evolution_table(spark, warehouse_path, table_name, table_spec, delete
             for spec in partition_spec:
                 partition_transforms.append(spec)
             partition_clause = f"PARTITIONED BY ({', '.join(partition_transforms)})"
-        
-        # Build sort clause  
+
+        # Build sort clause
         sort_clause = ""
         if sort_order:
             sort_clause = f"TBLPROPERTIES ('write.sort-order' = '{', '.join(sort_order)}')"
-        
+
         # Build properties clause
         props_items = [f"'{k}' = '{v}'" for k, v in props.items()]
         if sort_clause:
             props_clause = f"TBLPROPERTIES ({', '.join(props_items)})"
         else:
             props_clause = f"TBLPROPERTIES ({', '.join(props_items)})"
-        
+
         # Create table
         create_sql = f"""
         CREATE TABLE IF NOT EXISTS {catalog}.{namespace}.{table_name} (
@@ -2006,13 +2006,13 @@ def create_evolution_table(spark, warehouse_path, table_name, table_spec, delete
         {partition_clause}
         {props_clause}
         """
-        
+
         spark.sql(create_sql)
         print(f"  → Created table {catalog}.{namespace}.{table_name}")
-        
+
         # Execute evolution sequence
         evolution_ops = []
-        
+
         # Single operation types
         if 'schema_evolution' in table_spec:
             evolution_ops.extend(table_spec['schema_evolution'])
@@ -2024,16 +2024,16 @@ def create_evolution_table(spark, warehouse_path, table_name, table_spec, delete
             evolution_ops.extend(table_spec['property_evolution'])
         if 'metadata_evolution' in table_spec:
             evolution_ops.extend(table_spec['metadata_evolution'])
-            
+
         # Combined evolution sequence
         if 'evolution_sequence' in table_spec:
             evolution_ops.extend(table_spec['evolution_sequence'])
-        
+
         # Execute evolution operations with data insertions
         total_rows = 0
         target_rows = 1000
         full_table_name = f"{catalog}.{namespace}.{table_name}"
-        
+
         # Initial data insertion
         if not evolution_ops:
             # Simple case: just insert 1000 rows
@@ -2042,31 +2042,31 @@ def create_evolution_table(spark, warehouse_path, table_name, table_spec, delete
         else:
             # Complex case: insert data between evolution operations
             rows_per_step = target_rows // (len(evolution_ops) + 1)
-            
+
             # Initial data - use table schema for extended tables
             initial_df = generate_evolution_data(spark, full_table_name, rows_per_step, total_rows)
             initial_df.writeTo(full_table_name).append()
             total_rows += rows_per_step
-            
+
             # Execute evolution operations
             for i, op in enumerate(evolution_ops):
                 execute_evolution_operation(spark, catalog, namespace, table_name, op)
-                
+
                 # Insert data after evolution (except last operation)
                 if i < len(evolution_ops) - 1:
                     step_df = generate_evolution_data(spark, full_table_name, rows_per_step, total_rows)
                     step_df.writeTo(full_table_name).append()
                     total_rows += rows_per_step
-            
+
             # Final data to reach exactly 1000 rows
             remaining_rows = target_rows - total_rows
             if remaining_rows > 0:
                 final_df = generate_evolution_data(spark, full_table_name, remaining_rows, total_rows)
                 final_df.writeTo(full_table_name).append()
-        
+
         print(f"  ✓ Created evolution table {table_name} with {target_rows} rows")
         return True
-        
+
     except Exception as e:
         print(f"  ✗ Failed to create evolution table {table_name}: {e}")
         return False
@@ -2075,53 +2075,53 @@ def execute_evolution_operation(spark, catalog, namespace, table_name, operation
     """Execute a single evolution operation"""
     full_table_name = f"{catalog}.{namespace}.{table_name}"
     op_type = operation['operation']
-    
+
     try:
         if op_type == 'upgrade_format':
             # Upgrade table format version
             to_version = operation['to_version']
             spark.sql(f"ALTER TABLE {full_table_name} SET TBLPROPERTIES ('format-version' = '{to_version}')")
             print(f"    → Upgraded format to v{to_version}")
-            
+
         elif op_type == 'add_column':
             # Add new column
             column = operation['column']
             col_type = operation['type']
             spark.sql(f"ALTER TABLE {full_table_name} ADD COLUMN {column} {col_type}")
             print(f"    → Added column {column} {col_type}")
-            
+
         elif op_type == 'drop_column':
             # Drop column
             column = operation['column']
             spark.sql(f"ALTER TABLE {full_table_name} DROP COLUMN {column}")
             print(f"    → Dropped column {column}")
-            
+
         elif op_type == 'rename_column':
             # Rename column
             old_name = operation['old_name']
             new_name = operation['new_name']
             spark.sql(f"ALTER TABLE {full_table_name} RENAME COLUMN {old_name} TO {new_name}")
             print(f"    → Renamed column {old_name} to {new_name}")
-            
+
         elif op_type == 'widen_type':
             # Widen column type (INT to BIGINT)
             column = operation['column']
             to_type = operation['to_type']
             spark.sql(f"ALTER TABLE {full_table_name} ALTER COLUMN {column} TYPE {to_type}")
             print(f"    → Widened {column} to {to_type}")
-            
+
         elif op_type == 'add_partition':
             # Add partition field
             field = operation['field']
             spark.sql(f"ALTER TABLE {full_table_name} ADD PARTITION FIELD {field}")
             print(f"    → Added partition field {field}")
-            
+
         elif op_type == 'drop_partition':
             # Drop partition field
             field = operation['field']
             spark.sql(f"ALTER TABLE {full_table_name} DROP PARTITION FIELD {field}")
             print(f"    → Dropped partition field {field}")
-            
+
         elif op_type == 'replace_partition':
             # Replace partition transform
             old_field = operation['old_field']
@@ -2129,38 +2129,38 @@ def execute_evolution_operation(spark, catalog, namespace, table_name, operation
             spark.sql(f"ALTER TABLE {full_table_name} DROP PARTITION FIELD {old_field}")
             spark.sql(f"ALTER TABLE {full_table_name} ADD PARTITION FIELD {new_field}")
             print(f"    → Replaced partition {old_field} with {new_field}")
-            
+
         elif op_type == 'add_sort':
             # Add sort order
             fields = operation['fields']
             sort_spec = ', '.join(fields)
             spark.sql(f"ALTER TABLE {full_table_name} WRITE ORDERED BY {sort_spec}")
             print(f"    → Added sort order: {sort_spec}")
-            
+
         elif op_type == 'change_sort':
             # Change sort order
             new_fields = operation['new_fields']
             sort_spec = ', '.join(new_fields)
             spark.sql(f"ALTER TABLE {full_table_name} WRITE ORDERED BY {sort_spec}")
             print(f"    → Changed sort order: {sort_spec}")
-            
+
         elif op_type == 'remove_sort':
             # Remove sort order
             spark.sql(f"ALTER TABLE {full_table_name} WRITE UNORDERED")
             print(f"    → Removed sort order")
-            
+
         elif op_type == 'change_compression':
             # Change compression codec
             to_codec = operation['to']
             spark.sql(f"ALTER TABLE {full_table_name} SET TBLPROPERTIES ('write.parquet.compression-codec' = '{to_codec}')")
             print(f"    → Changed compression to {to_codec}")
-            
+
         elif op_type == 'change_encoding':
             # Change encoding
             to_encoding = operation['to']
             spark.sql(f"ALTER TABLE {full_table_name} SET TBLPROPERTIES ('write.parquet.encoding' = '{to_encoding}')")
             print(f"    → Changed encoding to {to_encoding}")
-            
+
         elif op_type == 'change_delete_mode':
             # Change delete mode
             to_mode = operation['to']
@@ -2169,7 +2169,7 @@ def execute_evolution_operation(spark, catalog, namespace, table_name, operation
             else:
                 spark.sql(f"ALTER TABLE {full_table_name} SET TBLPROPERTIES ('write.delete.mode' = 'copy-on-write')")
             print(f"    → Changed delete mode to {to_mode}")
-            
+
         elif op_type == 'add_comments':
             # Add table and column comments
             if 'table_comment' in operation:
@@ -2179,41 +2179,41 @@ def execute_evolution_operation(spark, catalog, namespace, table_name, operation
                 for col, comment in operation['column_comments'].items():
                     spark.sql(f"ALTER TABLE {full_table_name} ALTER COLUMN {col} COMMENT '{comment}'")
             print(f"    → Added comments")
-            
+
         elif op_type == 'add_custom_properties':
             # Add custom properties
             properties = operation['properties']
             prop_items = [f"'{k}' = '{v}'" for k, v in properties.items()]
             spark.sql(f"ALTER TABLE {full_table_name} SET TBLPROPERTIES ({', '.join(prop_items)})")
             print(f"    → Added custom properties")
-            
+
         else:
             print(f"    → Skipped unsupported operation: {op_type}")
-            
+
     except Exception as e:
         print(f"    ✗ Evolution operation {op_type} failed: {e}")
 
 def generate_evolution_tables(args, spark, warehouse_path):
     """Generate evolution tables for testing Iceberg evolution features"""
-    
+
     with open(args.specs, 'r') as f:
         specs = yaml.safe_load(f)
-    
+
     evolution_tables = specs.get('evolution_tables', [])
-    
+
     # Apply random selection if specified
     if args.random and args.random < len(evolution_tables):
         evolution_tables = random.sample(evolution_tables, args.random)
-    
+
     total = len(evolution_tables)
     print(f"Generating {total} evolution tables...")
-    
+
     created = 0
     for i, table_spec in enumerate(evolution_tables, 1):
         table_name = table_spec['name']
         print(f"Creating evolution table {i}/{total}: {table_name}")
-        
+
         if create_evolution_table(spark, warehouse_path, table_name, table_spec, delete_existing=True):
             created += 1
-    
+
     print(f"\nCompleted evolution tables: {created}/{total} tables created successfully")

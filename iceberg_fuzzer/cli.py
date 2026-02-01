@@ -80,61 +80,61 @@ def main():
         description='Apache Iceberg Table Fuzzer: Generate and validate Apache Iceberg tables',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    
+
     subparsers = parser.add_subparsers(dest='command', required=True, help='Command to execute')
-    
+
     # Generate subcommand
-    generate_parser = subparsers.add_parser('generate', 
+    generate_parser = subparsers.add_parser('generate',
         help='Generate Iceberg tables',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Generate simple tables with PySpark
   python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml
-  
+
   # Generate write-pattern tables with PySpark (parallel)
   python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/write_patterns.yaml --num-parallel 4
-  
+
   # Generate partitioned tables with PySpark
   python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/partitioned.yaml --num-parallel 8
-  
+
   # Generate minimal set with any backend
   python3 cli.py generate --backend polars --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal
-  
+
   # Generate random subset
   python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 50
         """)
-    
-    generate_parser.add_argument('--backend', 
-                       choices=['pyspark', 'pyiceberg', 'polars'], 
+
+    generate_parser.add_argument('--backend',
+                       choices=['pyspark', 'pyiceberg', 'polars'],
                        required=True,
                        help='Backend to use for table generation')
-    generate_parser.add_argument('--warehouse-path', 
-                       required=True, 
+    generate_parser.add_argument('--warehouse-path',
+                       required=True,
                        help='Warehouse path (local path or S3 Tables ARN for pyspark)')
-    generate_parser.add_argument('--specs', 
-                       required=True, 
+    generate_parser.add_argument('--specs',
+                       required=True,
                        help='Path to table specs YAML file')
-    generate_parser.add_argument('--num-parallel', 
-                       type=int, 
-                       default=1, 
+    generate_parser.add_argument('--num-parallel',
+                       type=int,
+                       default=1,
                        help='Number of parallel workers (default: 1)')
-    generate_parser.add_argument('--minimal', 
+    generate_parser.add_argument('--minimal',
                        action='store_true',
                        help='Generate minimal set (none compression, plain encoding only)')
-    generate_parser.add_argument('--random', 
+    generate_parser.add_argument('--random',
                        type=int,
                        metavar='N',
                        help='Generate N randomly chosen tables from the available set')
-    generate_parser.add_argument('--validate', 
+    generate_parser.add_argument('--validate',
                        action='store_true',
                        help='Validate tables after generation')
-    generate_parser.add_argument('--delete-existing', 
+    generate_parser.add_argument('--delete-existing',
                        action='store_true',
                        help='Delete existing tables before generating new ones')
-    generate_parser.add_argument('--table-name', 
+    generate_parser.add_argument('--table-name',
                        help='Generate only the specified table by name')
-    
+
     # Validate subcommand
     validate_parser = subparsers.add_parser('validate',
         help='Validate existing Iceberg tables',
@@ -143,20 +143,20 @@ Examples:
 Examples:
   # Validate tables with parallel workers
   python3 cli.py validate --warehouse-path /tmp/warehouse --specs specs/simple.yaml --num-parallel 16
-  
+
   # Full content validation (slower)
   python3 cli.py validate --warehouse-path /tmp/warehouse --specs specs/simple.yaml --full-content-validation
         """)
-    
-    validate_parser.add_argument('--warehouse-path', 
-                       required=True, 
+
+    validate_parser.add_argument('--warehouse-path',
+                       required=True,
                        help='Warehouse path')
-    validate_parser.add_argument('--specs', 
-                       required=True, 
+    validate_parser.add_argument('--specs',
+                       required=True,
                        help='Path to table specs YAML file')
-    validate_parser.add_argument('--num-parallel', 
-                       type=int, 
-                       default=1, 
+    validate_parser.add_argument('--num-parallel',
+                       type=int,
+                       default=1,
                        help='Number of parallel workers (default: 1)')
     validate_parser.add_argument('--full-content-validation',
                        action='store_true',
@@ -167,7 +167,7 @@ Examples:
     validate_parser.add_argument('--primitives-only',
                        action='store_true',
                        help='Validate only primitive types (skip lists, maps, structs)')
-    
+
     # Delete subcommand
     delete_parser = subparsers.add_parser('delete',
         help='Delete all tables in warehouse',
@@ -176,31 +176,31 @@ Examples:
 Examples:
   # Delete all tables in local warehouse (with confirmation)
   python3 cli.py delete --backend pyspark --warehouse-path /tmp/warehouse
-  
+
   # Delete all tables in S3 Tables bucket (with confirmation)
   python3 cli.py delete --backend pyspark --warehouse-path "arn:aws:s3tables:us-west-2:123456789012:bucket/my-bucket"
-  
+
   # Delete without interactive confirmation
   python3 cli.py delete --backend pyspark --warehouse-path /tmp/warehouse --confirm
         """)
-    
-    delete_parser.add_argument('--backend', 
-                       choices=['pyspark', 'pyiceberg'], 
+
+    delete_parser.add_argument('--backend',
+                       choices=['pyspark', 'pyiceberg'],
                        required=True,
                        help='Backend to use for table deletion')
-    delete_parser.add_argument('--warehouse-path', 
-                       required=True, 
+    delete_parser.add_argument('--warehouse-path',
+                       required=True,
                        help='Warehouse path (local path or S3 Tables ARN for pyspark)')
-    delete_parser.add_argument('--confirm', 
+    delete_parser.add_argument('--confirm',
                        action='store_true',
                        help='Confirm deletion without interactive prompt')
-    delete_parser.add_argument('--num-parallel', 
-                       type=int, 
-                       default=1, 
+    delete_parser.add_argument('--num-parallel',
+                       type=int,
+                       default=1,
                        help='Number of parallel workers for deletion (default: 1)')
-    
+
     args = parser.parse_args()
-    
+
     # Handle delete command
     if args.command == 'delete':
         if not args.confirm:
@@ -208,7 +208,7 @@ Examples:
             if response.lower() != 'yes':
                 print("Deletion cancelled.")
                 sys.exit(0)
-        
+
         # Import and instantiate the appropriate generator for deletion
         if args.backend == 'pyspark':
             from iceberg_fuzzer.backend.pyspark.generator import PySparkGenerator
@@ -219,16 +219,16 @@ Examples:
         else:
             print(f"Error: Backend '{args.backend}' does not support delete operation")
             sys.exit(1)
-        
+
         try:
             generator.delete_all_tables(args.num_parallel)
             print("All tables deleted successfully.")
         except Exception as e:
             print(f"Error deleting tables: {e}")
             sys.exit(1)
-        
+
         sys.exit(0)
-    
+
     # Handle validate command
     if args.command == 'validate':
         import subprocess
@@ -244,10 +244,10 @@ Examples:
             validator_cmd.append('--minimal')
         if args.primitives_only:
             validator_cmd.append('--primitives-only')
-        
+
         result = subprocess.run(validator_cmd)
         sys.exit(result.returncode)
-    
+
     # Handle generate command
     # Validate backend-specific constraints
     _validate_backend_constraints(args.backend, args.warehouse_path)
@@ -263,7 +263,7 @@ Examples:
     else:  # polars
         from iceberg_fuzzer.backend.polars.generator import PolarsGenerator
         generator = PolarsGenerator(args.warehouse_path, args.specs)
-    
+
     try:
         # Handle single table generation
         if args.table_name:
@@ -276,7 +276,7 @@ Examples:
             print("\n" + "="*80)
             print("Starting table validation...")
             print("="*80 + "\n")
-            
+
             import subprocess
             validator_cmd = [
                 'python3', 'validator/local_duckdb/validator_duckdb.py',
@@ -289,13 +289,13 @@ Examples:
             # PyIceberg only supports primitives
             if args.backend == 'pyiceberg':
                 validator_cmd.append('--primitives-only')
-            
+
             result = subprocess.run(validator_cmd, capture_output=False)
             if result.returncode != 0:
                 print(f"\n⚠️  Validation completed with errors (exit code: {result.returncode})")
             else:
                 print("\n✅ Validation completed successfully")
-    
+
     except Exception as e:
         print(f"Error generating tables: {e}")
         sys.exit(1)
