@@ -23,6 +23,8 @@ Unified CLI for generating Apache Iceberg tables with PySpark, PyIceberg, or Pol
 """
 
 import argparse
+import os
+import subprocess
 import sys
 
 def _validate_backend_constraints(backend, warehouse_path):
@@ -34,7 +36,7 @@ def _validate_backend_constraints(backend, warehouse_path):
 
 def _generate_tables_for_specs(generator, args):
     """Generate tables based on specs file type."""
-    specs_file = args.specs.lower()
+    specs_file = os.path.basename(args.specs).lower()
 
     if 'simple' in specs_file:
         generator.generate_simple_tables(args.num_parallel, minimal=args.minimal, random_count=args.random, delete_existing=args.delete_existing)
@@ -231,7 +233,6 @@ Examples:
 
     # Handle validate command
     if args.command == 'validate':
-        import subprocess
         validator_cmd = [
             'python3', 'validator/local_duckdb/validator_duckdb.py',
             '--warehouse-path', args.warehouse_path,
@@ -245,15 +246,21 @@ Examples:
         if args.primitives_only:
             validator_cmd.append('--primitives-only')
 
-        result = subprocess.run(validator_cmd)
-        sys.exit(result.returncode)
+        try:
+            result = subprocess.run(validator_cmd)
+            sys.exit(result.returncode)
+        except FileNotFoundError:
+            print("Error: Validator script not found. Ensure validator/local_duckdb/validator_duckdb.py exists.")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error running validator: {e}")
+            sys.exit(1)
 
     # Handle generate command
     # Validate backend-specific constraints
     _validate_backend_constraints(args.backend, args.warehouse_path)
 
     # Import and instantiate the appropriate generator
-    generator = None
     if args.backend == 'pyspark':
         from iceberg_fuzzer.backend.pyspark.generator import PySparkGenerator
         generator = PySparkGenerator(args.warehouse_path, args.specs)
@@ -277,7 +284,6 @@ Examples:
             print("Starting table validation...")
             print("="*80 + "\n")
 
-            import subprocess
             validator_cmd = [
                 'python3', 'validator/local_duckdb/validator_duckdb.py',
                 '--warehouse-path', args.warehouse_path,
@@ -290,19 +296,23 @@ Examples:
             if args.backend == 'pyiceberg':
                 validator_cmd.append('--primitives-only')
 
-            result = subprocess.run(validator_cmd, capture_output=False)
-            if result.returncode != 0:
-                print(f"\n⚠️  Validation completed with errors (exit code: {result.returncode})")
-            else:
-                print("\n✅ Validation completed successfully")
+            try:
+                result = subprocess.run(validator_cmd, capture_output=False)
+                if result.returncode != 0:
+                    print(f"\n⚠️  Validation completed with errors (exit code: {result.returncode})")
+                else:
+                    print("\n✅ Validation completed successfully")
+            except FileNotFoundError:
+                print("\n❌ Error: Validator script not found. Ensure validator/local_duckdb/validator_duckdb.py exists.")
+            except Exception as e:
+                print(f"\n❌ Error running validator: {e}")
 
     except Exception as e:
         print(f"Error generating tables: {e}")
         sys.exit(1)
 
     finally:
-        if generator is not None:
-            generator.cleanup()
+        generator.cleanup()
 
 if __name__ == '__main__':
     main()
