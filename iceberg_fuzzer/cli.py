@@ -25,6 +25,56 @@ Unified CLI for generating Apache Iceberg tables with PySpark, PyIceberg, or Pol
 import argparse
 import sys
 
+def _validate_backend_constraints(backend, warehouse_path):
+    """Validate backend-specific constraints for warehouse path."""
+    if backend in ['pyiceberg', 'polars']:
+        if warehouse_path.startswith('arn:aws:s3tables:'):
+            print(f"Error: {backend} backend does not support S3 Tables ARNs")
+            sys.exit(1)
+
+def _generate_tables_for_specs(generator, args):
+    """Generate tables based on specs file type."""
+    specs_file = args.specs.lower()
+
+    if 'simple' in specs_file:
+        generator.generate_simple_tables(args.num_parallel, minimal=args.minimal, random_count=args.random, delete_existing=args.delete_existing)
+    elif 'write_pattern' in specs_file:
+        generator.generate_write_pattern_tables(args.num_parallel, random_count=args.random, delete_existing=args.delete_existing)
+    elif 'partitioned' in specs_file:
+        generator.generate_partitioned_tables(args.num_parallel, random_count=args.random, minimal=args.minimal, delete_existing=args.delete_existing)
+    elif 'evolution' in specs_file:
+        generator.generate_evolution_tables(args.num_parallel, random_count=args.random, delete_existing=args.delete_existing)
+    elif 'table_specs.yaml' in specs_file:
+        _generate_all_table_types(generator, args)
+    else:
+        # Default to simple tables for backward compatibility
+        generator.generate_simple_tables(args.num_parallel, minimal=args.minimal, random_count=args.random, delete_existing=args.delete_existing)
+
+def _generate_all_table_types(generator, args):
+    """Generate all table types when using main table_specs.yaml."""
+    print("Generating all table types (simple + write-pattern + partitioned)...")
+
+    # Generate simple tables
+    print("\n" + "="*60)
+    print("GENERATING SIMPLE TABLES")
+    print("="*60)
+    generator.generate_simple_tables(args.num_parallel, minimal=args.minimal, random_count=args.random, delete_existing=args.delete_existing)
+
+    # Generate write-pattern tables
+    print("\n" + "="*60)
+    print("GENERATING WRITE-PATTERN TABLES")
+    print("="*60)
+    generator.generate_write_pattern_tables(args.num_parallel, random_count=args.random, delete_existing=False)  # Don't delete again
+
+    # Generate partitioned tables (PySpark only)
+    if args.backend == 'pyspark':
+        print("\n" + "="*60)
+        print("GENERATING PARTITIONED TABLES")
+        print("="*60)
+        generator.generate_partitioned_tables(args.num_parallel, random_count=args.random, minimal=args.minimal, delete_existing=False)  # Don't delete again
+    else:
+        print(f"\nSkipping partitioned tables - {args.backend} backend does not support partitioned tables")
+
 def main():
     parser = argparse.ArgumentParser(
         description='Apache Iceberg Table Fuzzer: Generate and validate Apache Iceberg tables',
@@ -200,12 +250,10 @@ Examples:
     
     # Handle generate command
     # Validate backend-specific constraints
-    if args.backend in ['pyiceberg', 'polars']:
-        if args.warehouse_path.startswith('arn:aws:s3tables:'):
-            print(f"Error: {args.backend} backend does not support S3 Tables ARNs")
-            sys.exit(1)
-    
+    _validate_backend_constraints(args.backend, args.warehouse_path)
+
     # Import and instantiate the appropriate generator
+    generator = None
     if args.backend == 'pyspark':
         from iceberg_fuzzer.backend.pyspark.generator import PySparkGenerator
         generator = PySparkGenerator(args.warehouse_path, args.specs)
@@ -221,44 +269,8 @@ Examples:
         if args.table_name:
             generator.generate_single_table(args.table_name, delete_existing=args.delete_existing)
         else:
-            # Determine table type from specs file name
-            specs_file = args.specs.lower()
-            if 'simple' in specs_file:
-                generator.generate_simple_tables(args.num_parallel, minimal=args.minimal, random_count=args.random, delete_existing=args.delete_existing)
-            elif 'write_pattern' in specs_file:
-                generator.generate_write_pattern_tables(args.num_parallel, random_count=args.random, delete_existing=args.delete_existing)
-            elif 'partitioned' in specs_file:
-                generator.generate_partitioned_tables(args.num_parallel, random_count=args.random, minimal=args.minimal, delete_existing=args.delete_existing)
-            elif 'evolution' in specs_file:
-                generator.generate_evolution_tables(args.num_parallel, random_count=args.random, delete_existing=args.delete_existing)
-            elif 'table_specs.yaml' in specs_file:
-                # Generate all table types when using main table_specs.yaml
-                print("Generating all table types (simple + write-pattern + partitioned)...")
-                
-                # Generate simple tables
-                print("\n" + "="*60)
-                print("GENERATING SIMPLE TABLES")
-                print("="*60)
-                generator.generate_simple_tables(args.num_parallel, minimal=args.minimal, random_count=args.random, delete_existing=args.delete_existing)
-                
-                # Generate write-pattern tables  
-                print("\n" + "="*60)
-                print("GENERATING WRITE-PATTERN TABLES")
-                print("="*60)
-                generator.generate_write_pattern_tables(args.num_parallel, random_count=args.random, delete_existing=False)  # Don't delete again
-                
-                # Generate partitioned tables (PySpark only)
-                if args.backend == 'pyspark':
-                    print("\n" + "="*60)
-                    print("GENERATING PARTITIONED TABLES")
-                    print("="*60)
-                    generator.generate_partitioned_tables(args.num_parallel, random_count=args.random, minimal=args.minimal, delete_existing=False)  # Don't delete again
-                else:
-                    print(f"\nSkipping partitioned tables - {args.backend} backend does not support partitioned tables")
-            else:
-                # Default to simple tables for backward compatibility
-                generator.generate_simple_tables(args.num_parallel, minimal=args.minimal, random_count=args.random, delete_existing=args.delete_existing)
-        
+            _generate_tables_for_specs(generator, args)
+
         # Validate tables if requested
         if args.validate:
             print("\n" + "="*80)
@@ -289,7 +301,8 @@ Examples:
         sys.exit(1)
 
     finally:
-        generator.cleanup()
+        if generator is not None:
+            generator.cleanup()
 
 if __name__ == '__main__':
     main()
