@@ -382,7 +382,7 @@ def validate_delete_file_types(table_path, delete_mode):
     except Exception as e:
         return False, f"Error reading metadata: {e}"
 
-def _generate_primitive_data(data_type, row_id):
+def generate_primitive_data(data_type, row_id):
     """Generate expected data for primitive types."""
     if data_type == 'boolean':
         return (row_id % 2) == 0
@@ -412,7 +412,7 @@ def _generate_primitive_data(data_type, row_id):
         return time(hour=(row_id % 24), minute=(row_id % 60))
     return f"value_{row_id}"
 
-def _generate_list_element(element_type, row_id, offset):
+def generate_list_element(element_type, row_id, offset):
     """Generate a single list element based on type."""
     if element_type == 'boolean':
         return True if offset == 0 else (False if offset == 1 else (row_id % 2) == 0)
@@ -442,11 +442,11 @@ def _generate_list_element(element_type, row_id, offset):
         return f"{((row_id + offset) % 24):02d}:00:00"
     return f"item_{row_id}_{offset}"
 
-def _generate_list_data(element_type, row_id):
+def generate_list_data(element_type, row_id):
     """Generate expected data for list types."""
-    return [_generate_list_element(element_type, row_id, j) for j in range(3)]
+    return [generate_list_element(element_type, row_id, j) for j in range(3)]
 
-def _generate_map_value(value_type, key):
+def generate_map_value(value_type, key):
     """Generate a single map value based on type."""
     if value_type == 'string':
         return f"value_{key}"
@@ -476,21 +476,21 @@ def _generate_map_value(value_type, key):
         return f"{(key % 24):02d}:00:00"
     return f"value_{key}"
 
-def _generate_map_data(value_type, row_id):
+def generate_map_data(value_type, row_id):
     """Generate expected data for map types."""
-    return {row_id: _generate_map_value(value_type, row_id),
-            row_id + 1: _generate_map_value(value_type, row_id + 1)}
+    return {row_id: generate_map_value(value_type, row_id),
+            row_id + 1: generate_map_value(value_type, row_id + 1)}
 
 def generate_expected_single_type_data(data_type, row_id):
     """Generate expected data for a single data type."""
     if data_type.startswith('list_'):
         element_type = data_type[5:]
-        return _generate_list_data(element_type, row_id)
+        return generate_list_data(element_type, row_id)
     elif data_type.startswith('map_int_'):
         value_type = data_type[8:]
-        return _generate_map_data(value_type, row_id)
+        return generate_map_data(value_type, row_id)
     else:
-        return _generate_primitive_data(data_type, row_id)
+        return generate_primitive_data(data_type, row_id)
 
 def generate_expected_write_pattern_data(row_id):
     """Generate expected data for a write-pattern table row"""
@@ -957,6 +957,189 @@ def validate_iceberg_metadata(conn, table_path, expected_spec):
             'metadata_accessible': False,
             'error': str(e)
         }
+def validate_basic_table_properties(conn, table_path, expected_spec):
+    """Validate basic table properties: row count, column count, and schema."""
+    # Try to scan the table
+    print(f"    ✓ Checking table accessibility...")
+    query = f"SELECT COUNT(*) as row_count FROM iceberg_scan('{table_path}')"
+    result = conn.execute(query).fetchone()
+    row_count = result[0] if result else 0
+
+    # Get schema information
+    print(f"    ✓ Checking schema...")
+    schema_query = f"DESCRIBE (SELECT * FROM iceberg_scan('{table_path}') LIMIT 0)"
+    schema_result = conn.execute(schema_query).fetchall()
+    column_count = len(schema_result)
+
+    # Validate row count
+    print(f"    ✓ Validating row count: {row_count} (expected: {expected_spec['expected_rows']})")
+    row_count_valid = row_count == expected_spec['expected_rows']
+
+    # Validate column count
+    print(f"    ✓ Validating column count: {column_count} (expected: {expected_spec['schema_columns']})")
+    column_count_valid = column_count == expected_spec['schema_columns']
+
+    return {
+        'row_count': row_count,
+        'column_count': column_count,
+        'row_count_valid': row_count_valid,
+        'column_count_valid': column_count_valid
+    }
+
+def validate_evolution_properties(conn, table_path, expected_spec):
+    """Validate evolution-specific properties for evolution tables."""
+    if expected_spec.get('type') != 'evolution':
+        return {'valid': True, 'evolution_validation': {}}
+
+    print(f"    ✓ Validating evolution-specific properties...")
+    evolution_validation = validate_evolution_table(conn, table_path, expected_spec)
+    evolution_valid = evolution_validation['valid']
+
+    # Print evolution validation details
+    if evolution_validation.get('evolution_checks'):
+        for check_name, check_result in evolution_validation['evolution_checks'].items():
+            if check_result.get('valid'):
+                expected = check_result.get('expected', 'N/A')
+                actual = check_result.get('actual', 'N/A')
+                print(f"      → {check_name}: {actual} (expected: {expected}) ✓")
+            else:
+                error = check_result.get('error', 'Failed')
+                errors = check_result.get('errors', [])
+                expected = check_result.get('expected', 'N/A')
+                actual = check_result.get('actual', 'N/A')
+                print(f"      → {check_name}: ✗ {error} (expected: {expected}, actual: {actual})")
+                if errors:
+                    for err in errors[:3]:  # Show first 3 errors
+                        print(f"        • {err}")
+                    if len(errors) > 3:
+                        print(f"        • ... and {len(errors) - 3} more errors")
+
+    return {'valid': evolution_valid, 'evolution_validation': evolution_validation}
+
+def validate_parquet_properties_for_table(table_path, expected_spec):
+    """Validate Parquet properties (compression & encoding) for single_type tables."""
+    if expected_spec['type'] != 'single_type':
+        return {'valid': True, 'parquet_validation': {}}
+
+    print(f"    ✓ Validating Parquet compression and encoding...")
+    parquet_validation = validate_parquet_properties(table_path, expected_spec)
+    parquet_valid = parquet_validation.get('valid', True)
+
+    return {'valid': parquet_valid, 'parquet_validation': parquet_validation}
+
+def determine_delete_mode(expected_spec):
+    """Determine delete mode from table name."""
+    if expected_spec['type'] not in ['write_pattern', 'partitioned']:
+        return None
+
+    print(f"    ✓ Checking delete mode...")
+    table_name = expected_spec['name']
+    if '_cow' in table_name:
+        delete_mode = 'cow'
+    elif '_posdelete' in table_name:
+        delete_mode = 'posdelete'
+    elif '_eqdelete' in table_name:
+        delete_mode = 'eqdelete'
+    else:
+        delete_mode = None
+
+    if delete_mode:
+        print(f"      → Delete mode: {delete_mode}")
+    return delete_mode
+
+def validate_partition_structure(table_path, expected_spec):
+    """Validate partition structure for partitioned tables."""
+    if expected_spec['type'] != 'partitioned':
+        return {'valid': True, 'partition_info': 'N/A', 'path_style_valid': True, 'path_style_info': 'N/A'}
+
+    print(f"    ✓ Validating partition structure...")
+    try:
+        # Check that data is distributed across partitions
+        data_dir = Path(table_path) / 'data'
+        if not data_dir.exists():
+            return {
+                'valid': False,
+                'partition_info': 'No data directory found',
+                'path_style_valid': True,
+                'path_style_info': 'N/A'
+            }
+
+        partition_dirs = [d for d in data_dir.iterdir() if d.is_dir()]
+        partition_count = len(partition_dirs)
+
+        # Check for multiple files per partition (for compaction testing)
+        files_per_partition = []
+        for part_dir in partition_dirs[:5]:  # Check first 5 partitions
+            parquet_files = list(part_dir.glob('**/*.parquet'))
+            files_per_partition.append(len(parquet_files))
+
+        avg_files = sum(files_per_partition) / len(files_per_partition) if files_per_partition else 0
+
+        # Require 2+ files per partition for compaction testing
+        if 'identity_int_col' in expected_spec.get('name', ''):
+            partition_valid = partition_count > 0 and avg_files >= 1
+        else:
+            partition_valid = partition_count > 0 and avg_files >= 2
+
+        partition_info = f"{partition_count} partitions, avg {avg_files:.1f} files/partition"
+        print(f"      → Found {partition_count} partitions, avg {avg_files:.1f} files/partition")
+
+        # Validate partition path style (always Hive-style)
+        print(f"    ✓ Validating partition path style...")
+        path_style_valid = True
+        path_style_info = 'N/A'
+
+        if partition_dirs:
+            sample_dir = partition_dirs[0].name
+            has_equals = '=' in sample_dir
+
+            if not has_equals:
+                path_style_valid = False
+                path_style_info = f"Expected Hive-style (column=value), got non-Hive ({sample_dir})"
+            else:
+                path_style_info = f"Hive-style confirmed ({sample_dir})"
+            print(f"      → {path_style_info}")
+
+        return {
+            'valid': partition_valid,
+            'partition_info': partition_info,
+            'path_style_valid': path_style_valid,
+            'path_style_info': path_style_info
+        }
+
+    except Exception as e:
+        return {
+            'valid': False,
+            'partition_info': f"Error: {e}",
+            'path_style_valid': True,
+            'path_style_info': 'N/A'
+        }
+
+def validate_delete_files(table_path, expected_spec, delete_mode):
+    """Validate delete files for write-pattern and partitioned tables."""
+    if not delete_mode:
+        return {'valid': True, 'delete_info': 'No delete validation needed'}
+
+    print(f"    ✓ Validating delete files for {delete_mode} mode...")
+
+    # Check if delete mode is compatible with format version
+    table_version = expected_spec.get('version', 'v2')
+    if table_version == 'v1' and delete_mode in ['posdelete', 'eqdelete']:
+        delete_info = f"Invalid: {delete_mode} not supported in Iceberg v1 format"
+        print(f"      → {delete_info}")
+        return {'valid': False, 'delete_info': delete_info}
+
+    delete_validation = validate_delete_file_types(table_path, delete_mode)
+    if isinstance(delete_validation, tuple):
+        delete_valid = delete_validation[0]
+        delete_info = delete_validation[1]
+    else:
+        delete_valid = delete_validation.get('valid', False)
+        delete_info = delete_validation.get('info', 'Unknown')
+    print(f"      → {delete_info}")
+
+    return {'valid': delete_valid, 'delete_info': delete_info}
+
 def validate_iceberg_table(conn, table_path, expected_spec):
     """Validate a single Iceberg table using DuckDB"""
     table_name = expected_spec.get('name', 'unknown')
@@ -966,25 +1149,8 @@ def validate_iceberg_table(conn, table_path, expected_spec):
         # Enable unsafe version guessing for DuckDB
         conn.execute("SET unsafe_enable_version_guessing = true")
 
-        # Try to scan the table
-        print(f"    ✓ Checking table accessibility...")
-        query = f"SELECT COUNT(*) as row_count FROM iceberg_scan('{table_path}')"
-        result = conn.execute(query).fetchone()
-        row_count = result[0] if result else 0
-
-        # Get schema information
-        print(f"    ✓ Checking schema...")
-        schema_query = f"DESCRIBE (SELECT * FROM iceberg_scan('{table_path}') LIMIT 0)"
-        schema_result = conn.execute(schema_query).fetchall()
-        column_count = len(schema_result)
-
-        # Validate row count
-        print(f"    ✓ Validating row count: {row_count} (expected: {expected_spec['expected_rows']})")
-        row_count_valid = row_count == expected_spec['expected_rows']
-
-        # Validate column count
-        print(f"    ✓ Validating column count: {column_count} (expected: {expected_spec['schema_columns']})")
-        column_count_valid = column_count == expected_spec['schema_columns']
+        # Validate basic properties
+        basic_props = validate_basic_table_properties(conn, table_path, expected_spec)
 
         # Validate table contents
         print(f"    ✓ Validating table contents...")
@@ -996,152 +1162,54 @@ def validate_iceberg_table(conn, table_path, expected_spec):
         metadata_validation = validate_iceberg_metadata(conn, table_path, expected_spec)
         metadata_valid = metadata_validation['valid']
 
-        # Validate evolution-specific properties for evolution tables
-        evolution_valid = True
-        evolution_validation = {}
-        if expected_spec.get('type') == 'evolution':
-            print(f"    ✓ Validating evolution-specific properties...")
-            evolution_validation = validate_evolution_table(conn, table_path, expected_spec)
-            evolution_valid = evolution_validation['valid']
+        # Validate evolution-specific properties
+        evolution_result = validate_evolution_properties(conn, table_path, expected_spec)
 
-            # Print evolution validation details
-            if evolution_validation.get('evolution_checks'):
-                for check_name, check_result in evolution_validation['evolution_checks'].items():
-                    if check_result.get('valid'):
-                        expected = check_result.get('expected', 'N/A')
-                        actual = check_result.get('actual', 'N/A')
-                        print(f"      → {check_name}: {actual} (expected: {expected}) ✓")
-                    else:
-                        error = check_result.get('error', 'Failed')
-                        errors = check_result.get('errors', [])
-                        expected = check_result.get('expected', 'N/A')
-                        actual = check_result.get('actual', 'N/A')
-                        print(f"      → {check_name}: ✗ {error} (expected: {expected}, actual: {actual})")
-                        if errors:
-                            for err in errors[:3]:  # Show first 3 errors
-                                print(f"        • {err}")
-                            if len(errors) > 3:
-                                print(f"        • ... and {len(errors) - 3} more errors")
+        # Validate Parquet properties
+        parquet_result = validate_parquet_properties_for_table(table_path, expected_spec)
 
-        # Validate Parquet properties (compression & encoding) for single_type tables
-        parquet_valid = True
-        parquet_validation = {}
-        if expected_spec['type'] == 'single_type':
-            print(f"    ✓ Validating Parquet compression and encoding...")
-            parquet_validation = validate_parquet_properties(table_path, expected_spec)
-            parquet_valid = parquet_validation.get('valid', True)
+        # Determine and validate delete mode
+        delete_mode = determine_delete_mode(expected_spec)
+        delete_result = validate_delete_files(table_path, expected_spec, delete_mode)
 
-        # Validate delete files for write-pattern and partitioned tables
-        delete_mode = None
-        if expected_spec['type'] in ['write_pattern', 'partitioned']:
-            print(f"    ✓ Checking delete mode...")
-            table_name = expected_spec['name']
-            if '_cow' in table_name:
-                delete_mode = 'cow'
-            elif '_posdelete' in table_name:
-                delete_mode = 'posdelete'
-            elif '_eqdelete' in table_name:
-                delete_mode = 'eqdelete'
-            print(f"      → Delete mode: {delete_mode}")
-
-        # Validate partitions for partitioned tables
-        partition_valid = True
-        partition_info = "N/A"
-        path_style_valid = True
-        path_style_info = "N/A"
-
-        if expected_spec['type'] == 'partitioned':
-            print(f"    ✓ Validating partition structure...")
-            try:
-                # Check that data is distributed across partitions
-                data_dir = Path(table_path) / 'data'
-                if data_dir.exists():
-                    partition_dirs = [d for d in data_dir.iterdir() if d.is_dir()]
-                    partition_count = len(partition_dirs)
-
-                    # Check for multiple files per partition (for compaction testing)
-                    files_per_partition = []
-                    for part_dir in partition_dirs[:5]:  # Check first 5 partitions
-                        parquet_files = list(part_dir.glob('**/*.parquet'))
-                        files_per_partition.append(len(parquet_files))
-
-                    avg_files = sum(files_per_partition) / len(files_per_partition) if files_per_partition else 0
-
-                    # Require 2+ files per partition for compaction testing
-                    # Exception: identity(int_col) creates many partitions with 1 file each
-                    # With 10 batches, each partition should have 10 files
-                    if 'identity_int_col' in expected_spec.get('name', ''):
-                        # For identity(int_col), allow 1 file per partition due to high cardinality
-                        partition_valid = partition_count > 0 and avg_files >= 1
-                    else:
-                        partition_valid = partition_count > 0 and avg_files >= 2
-                    partition_info = f"{partition_count} partitions, avg {avg_files:.1f} files/partition"
-                    print(f"      → Found {partition_count} partitions, avg {avg_files:.1f} files/partition")
-
-                    # Validate partition path style (always Hive-style)
-                    print(f"    ✓ Validating partition path style...")
-                    if partition_dirs:
-                        sample_dir = partition_dirs[0].name
-                        # Hive-style has '=' in directory names (e.g., category=A)
-                        has_equals = '=' in sample_dir
-
-                        if not has_equals:
-                            path_style_valid = False
-                            path_style_info = f"Expected Hive-style (column=value), got non-Hive ({sample_dir})"
-                        else:
-                            path_style_info = f"Hive-style confirmed ({sample_dir})"
-                        print(f"      → {path_style_info}")
-                else:
-                    partition_valid = False
-                    partition_info = "No data directory found"
-                    print(f"      → No data directory found")
-            except Exception as e:
-                partition_valid = False
-                partition_info = f"Error: {e}"
-
-        if delete_mode:
-            print(f"    ✓ Validating delete files for {delete_mode} mode...")
-
-            # Check if delete mode is compatible with format version
-            table_version = expected_spec.get('version', 'v2')
-            if table_version == 'v1' and delete_mode in ['posdelete', 'eqdelete']:
-                delete_valid = False
-                delete_info = f"Invalid: {delete_mode} not supported in Iceberg v1 format"
-                print(f"      → {delete_info}")
-            else:
-                delete_validation = validate_delete_file_types(table_path, delete_mode)
-                delete_valid = delete_validation[0] if isinstance(delete_validation, tuple) else delete_validation.get('valid', False)
-                delete_info = delete_validation[1] if isinstance(delete_validation, tuple) else delete_validation.get('info', 'Unknown')
-                print(f"      → {delete_info}")
-        else:
-            delete_valid = True
-            delete_info = "No delete validation needed"
+        # Validate partitions
+        partition_result = validate_partition_structure(table_path, expected_spec)
 
         # Overall validation result
-        overall_valid = row_count_valid and column_count_valid and content_valid and metadata_valid and delete_valid and partition_valid and path_style_valid and parquet_valid and evolution_valid
+        overall_valid = (
+            basic_props['row_count_valid'] and
+            basic_props['column_count_valid'] and
+            content_valid and
+            metadata_valid and
+            delete_result['valid'] and
+            partition_result['valid'] and
+            partition_result['path_style_valid'] and
+            parquet_result['valid'] and
+            evolution_result['valid']
+        )
         status = "✓ PASS" if overall_valid else "✗ FAIL"
         print(f"    → Validation result: {status}")
 
         return {
             'valid': overall_valid,
-            'row_count': row_count,
-            'column_count': column_count,
-            'row_count_valid': row_count_valid,
-            'column_count_valid': column_count_valid,
+            'row_count': basic_props['row_count'],
+            'column_count': basic_props['column_count'],
+            'row_count_valid': basic_props['row_count_valid'],
+            'column_count_valid': basic_props['column_count_valid'],
             'content_valid': content_valid,
             'content_validation': content_validation,
             'metadata_valid': metadata_valid,
             'metadata_validation': metadata_validation,
-            'delete_valid': delete_valid,
-            'delete_info': delete_info,
-            'partition_valid': partition_valid,
-            'partition_info': partition_info,
-            'path_style_valid': path_style_valid,
-            'path_style_info': path_style_info,
-            'parquet_valid': parquet_valid,
-            'parquet_validation': parquet_validation,
-            'evolution_valid': evolution_valid,
-            'evolution_validation': evolution_validation,
+            'delete_valid': delete_result['valid'],
+            'delete_info': delete_result['delete_info'],
+            'partition_valid': partition_result['valid'],
+            'partition_info': partition_result['partition_info'],
+            'path_style_valid': partition_result['path_style_valid'],
+            'path_style_info': partition_result['path_style_info'],
+            'parquet_valid': parquet_result['valid'],
+            'parquet_validation': parquet_result.get('parquet_validation', {}),
+            'evolution_valid': evolution_result['valid'],
+            'evolution_validation': evolution_result.get('evolution_validation', {}),
             'error': None
         }
 
