@@ -19,7 +19,7 @@
 #
 """Apache Iceberg Table Fuzzer
 
-Generate a comprehensive variety of Apache Iceberg tables for testing compaction, 
+Generate a comprehensive variety of Apache Iceberg tables for testing compaction,
 compression, encoding, and cross-engine compatibility scenarios.
 """
 
