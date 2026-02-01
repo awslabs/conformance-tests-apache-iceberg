@@ -136,7 +136,10 @@ class PySparkGenerator(TableGenerator):
                     return f"✓ Deleted: {table_info['namespace']}.{table_info['name']} ({delete_time:.2f}s)"
                 except Exception as e:
                     delete_time = time.time() - delete_start
-                    return f"✗ Failed to delete {table_info['namespace']}.{table_info['name']} ({delete_time:.2f}s): {e}"
+                    return (
+                        f"✗ Failed to delete {table_info['namespace']}.{table_info['name']} "
+                        f"({delete_time:.2f}s): {e}"
+                    )
 
             # Delete in parallel using AWS SDK
             print(f"Starting parallel deletion with {min(num_parallel, 20)} workers...")
@@ -442,7 +445,13 @@ class PySparkGenerator(TableGenerator):
         if self.spark is None:
             self.spark = create_spark_session(self.warehouse_path)
 
-    def generate_simple_tables(self, num_parallel: int = 1, minimal: bool = False, random_count: int = None, delete_existing: bool = False):
+    def generate_simple_tables(
+        self,
+        num_parallel: int = 1,
+        minimal: bool = False,
+        random_count: int = None,
+        delete_existing: bool = False
+    ):
         """Generate simple single-type tables"""
         if delete_existing:
             print("Deleting existing simple tables before generation...")
@@ -472,7 +481,12 @@ class PySparkGenerator(TableGenerator):
                     batch_end = min(batch_start + batch_size, len(table_specs))
                     batch = table_specs[batch_start:batch_end]
 
-                    futures = {executor.submit(create_table_worker, self.spark, self.warehouse_path, spec, delete_existing): spec for spec in batch}
+                    futures = {
+                        executor.submit(
+                            create_table_worker, self.spark, self.warehouse_path, spec, delete_existing
+                        ): spec
+                        for spec in batch
+                    }
                     for future in as_completed(futures):
                         table_name, success = future.result()
                         if success:
@@ -483,7 +497,10 @@ class PySparkGenerator(TableGenerator):
         else:
             self._ensure_spark()
             for i, spec in enumerate(table_specs, 1):
-                success = create_single_type_table(self.spark, self.warehouse_path, spec['name'], spec, f"{i}/{total_count}", delete_existing)
+                success = create_single_type_table(
+                    self.spark, self.warehouse_path, spec['name'], spec,
+                    f"{i}/{total_count}", delete_existing
+                )
                 if success:
                     success_count += 1
                     print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
@@ -512,7 +529,12 @@ class PySparkGenerator(TableGenerator):
             print(f"✗ Failed to create table: {table_name}")
 
 
-    def generate_write_pattern_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
+    def generate_write_pattern_tables(
+        self,
+        num_parallel: int = 1,
+        random_count: int = None,
+        delete_existing: bool = False
+    ):
         """Generate write-pattern tables"""
         if delete_existing:
             print("Deleting existing write-pattern tables before generation...")
@@ -583,7 +605,13 @@ class PySparkGenerator(TableGenerator):
 
         print(f"\nCompleted write-pattern tables: {success_count}/{total_count} tables created successfully")
 
-    def generate_partitioned_tables(self, num_parallel: int = 1, random_count: int = None, minimal: bool = False, delete_existing: bool = False):
+    def generate_partitioned_tables(
+        self,
+        num_parallel: int = 1,
+        random_count: int = None,
+        minimal: bool = False,
+        delete_existing: bool = False
+    ):
         """Generate partitioned tables"""
         if delete_existing:
             print("Deleting existing partitioned tables before generation...")
@@ -706,8 +734,14 @@ class PySparkGenerator(TableGenerator):
         # Apply random selection if specified
         table_specs = self._random_select_tables(table_specs, random_count)
 
-        mode_str = "minimal (16 transforms, mixed_chaos, posdelete)" if minimal else "full (37 transforms, 4 patterns, 2 modes)"
-        print(f"Generating {len(table_specs)} partitioned tables ({mode_str}) with {num_parallel} parallel workers...")
+        mode_str = (
+            "minimal (16 transforms, mixed_chaos, posdelete)" if minimal
+            else "full (37 transforms, 4 patterns, 2 modes)"
+        )
+        print(
+            f"Generating {len(table_specs)} partitioned tables ({mode_str}) "
+            f"with {num_parallel} parallel workers..."
+        )
 
         success_count = 0
         total_count = len(table_specs)
@@ -716,8 +750,11 @@ class PySparkGenerator(TableGenerator):
             self._ensure_spark()
             with ThreadPoolExecutor(max_workers=num_parallel) as executor:
                 futures = {
-                    executor.submit(create_partitioned_table, self.spark, self.warehouse_path,
-                                  spec['name'], spec['pattern'], ",".join(spec['transform']), delete_existing=delete_existing): spec
+                    executor.submit(
+                        create_partitioned_table, self.spark, self.warehouse_path,
+                        spec['name'], spec['pattern'], ",".join(spec['transform']),
+                        delete_existing=delete_existing
+                    ): spec
                     for spec in table_specs
                 }
                 for future in as_completed(futures):
@@ -735,8 +772,11 @@ class PySparkGenerator(TableGenerator):
             self._ensure_spark()
             for i, spec in enumerate(table_specs, 1):
                 try:
-                    success = create_partitioned_table(self.spark, self.warehouse_path,
-                                                     spec['name'], spec['pattern'], ",".join(spec['transform']), delete_existing=delete_existing)
+                    success = create_partitioned_table(
+                        self.spark, self.warehouse_path,
+                        spec['name'], spec['pattern'], ",".join(spec['transform']),
+                        delete_existing=delete_existing
+                    )
                     if success:
                         success_count += 1
                         print(f"✓ Created {spec['name']} ({success_count}/{total_count})")
@@ -761,7 +801,10 @@ class PySparkGenerator(TableGenerator):
         if num_parallel > 1:
             self._ensure_spark()
             with ThreadPoolExecutor(max_workers=num_parallel) as executor:
-                futures = {executor.submit(create_table_worker, self.spark, self.warehouse_path, spec): spec for spec in table_specs}
+                futures = {
+                    executor.submit(create_table_worker, self.spark, self.warehouse_path, spec): spec
+                    for spec in table_specs
+                }
                 for future in as_completed(futures):
                     table_name, success = future.result()
                     if success:
@@ -772,7 +815,9 @@ class PySparkGenerator(TableGenerator):
         else:
             self._ensure_spark()
             for i, spec in enumerate(table_specs, 1):
-                success = create_single_type_table(self.spark, self.warehouse_path, spec['name'], spec, f"{i}/{total_count}")
+                success = create_single_type_table(
+                    self.spark, self.warehouse_path, spec['name'], spec, f"{i}/{total_count}"
+                )
                 if success:
                     success_count += 1
                     print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")

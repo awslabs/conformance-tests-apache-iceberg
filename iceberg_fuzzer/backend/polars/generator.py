@@ -182,26 +182,70 @@ class PolarsGenerator(TableGenerator):
                         result.append([False, True, True])
                 return result
             elif element_type == 'int':
-                return [[i + row_offset, i + 1 + row_offset, i + 2 + row_offset] for i in range(num_rows)]
+                return [[i + row_offset, i + 1 + row_offset, i + 2 + row_offset]
+                        for i in range(num_rows)]
             elif element_type == 'long':
-                return [[(i + row_offset) * 1000, (i + 1 + row_offset) * 1000, (i + 2 + row_offset) * 1000] for i in range(num_rows)]
+                return [
+                    [(i + row_offset) * 1000, (i + 1 + row_offset) * 1000,
+                     (i + 2 + row_offset) * 1000]
+                    for i in range(num_rows)
+                ]
             elif element_type == 'float':
-                return [[float(i + row_offset) + 0.5, float(i + 1 + row_offset) + 0.5, float(i + 2 + row_offset) + 0.5] for i in range(num_rows)]
+                return [
+                    [float(i + row_offset) + 0.5, float(i + 1 + row_offset) + 0.5,
+                     float(i + 2 + row_offset) + 0.5]
+                    for i in range(num_rows)
+                ]
             elif element_type == 'double':
-                return [[float(i + row_offset) * 1.5, float(i + 1 + row_offset) * 1.5, float(i + 2 + row_offset) * 1.5] for i in range(num_rows)]
+                return [
+                    [float(i + row_offset) * 1.5, float(i + 1 + row_offset) * 1.5,
+                     float(i + 2 + row_offset) * 1.5]
+                    for i in range(num_rows)
+                ]
             elif element_type.startswith('decimal'):
-                return [[Decimal(f"{i + row_offset}.{(i + row_offset) % 100:02d}"), Decimal(f"{i + 1 + row_offset}.{(i + 1 + row_offset) % 100:02d}"), Decimal(f"{i + 2 + row_offset}.{(i + 2 + row_offset) % 100:02d}")] for i in range(num_rows)]
+                return [
+                    [
+                        Decimal(f"{i + row_offset}.{(i + row_offset) % 100:02d}"),
+                        Decimal(f"{i + 1 + row_offset}.{(i + 1 + row_offset) % 100:02d}"),
+                        Decimal(f"{i + 2 + row_offset}.{(i + 2 + row_offset) % 100:02d}")
+                    ]
+                    for i in range(num_rows)
+                ]
             elif element_type == 'date':
-                return [[date(2023, 1, ((i + row_offset) % 28) + 1), date(2023, 1, ((i + 1 + row_offset) % 28) + 1), date(2023, 1, ((i + 2 + row_offset) % 28) + 1)] for i in range(num_rows)]
+                return [
+                    [date(2023, 1, ((i + row_offset) % 28) + 1),
+                     date(2023, 1, ((i + 1 + row_offset) % 28) + 1),
+                     date(2023, 1, ((i + 2 + row_offset) % 28) + 1)]
+                    for i in range(num_rows)
+                ]
             elif element_type == 'uuid':
-                return [[f"uuid_{i + row_offset}".encode()[:16].ljust(16, b'\x00'), f"uuid_{i + 1 + row_offset}".encode()[:16].ljust(16, b'\x00'), f"uuid_{i + 2 + row_offset}".encode()[:16].ljust(16, b'\x00')] for i in range(num_rows)]
+                return [
+                    [f"uuid_{i + row_offset}".encode()[:16].ljust(16, b'\x00'),
+                     f"uuid_{i + 1 + row_offset}".encode()[:16].ljust(16, b'\x00'),
+                     f"uuid_{i + 2 + row_offset}".encode()[:16].ljust(16, b'\x00')]
+                    for i in range(num_rows)
+                ]
             elif element_type == 'string':
-                return [[f"item_{i + row_offset}_0", f"item_{i + row_offset}_1", f"item_{i + row_offset}_2"] for i in range(num_rows)]
+                return [
+                    [f"item_{i + row_offset}_0", f"item_{i + row_offset}_1",
+                     f"item_{i + row_offset}_2"]
+                    for i in range(num_rows)
+                ]
             elif element_type in ['binary', 'fixed']:
                 if 'fixed' in field_name:
-                    return [[f"fixed_{i + row_offset:010d}".encode()[:16].ljust(16, b'0'), f"fixed_{i + 1000 + row_offset:010d}".encode()[:16].ljust(16, b'0'), f"fixed_{i + 2000 + row_offset:010d}".encode()[:16].ljust(16, b'0')] for i in range(num_rows)]
+                    return [
+                        [f"fixed_{i + row_offset:010d}".encode()[:16].ljust(16, b'0'),
+                         f"fixed_{i + 1000 + row_offset:010d}".encode()[:16].ljust(16, b'0'),
+                         f"fixed_{i + 2000 + row_offset:010d}".encode()[:16].ljust(16, b'0')]
+                        for i in range(num_rows)
+                    ]
                 else:
-                    return [[f"item_{i + row_offset}_0".encode(), f"item_{i + row_offset}_1".encode(), f"item_{i + row_offset}_2".encode()] for i in range(num_rows)]
+                    return [
+                        [f"item_{i + row_offset}_0".encode(),
+                         f"item_{i + row_offset}_1".encode(),
+                         f"item_{i + row_offset}_2".encode()]
+                        for i in range(num_rows)
+                    ]
             else:
                 return [["item1", "item2", "item3"] for i in range(num_rows)]
         else:
@@ -341,7 +385,13 @@ class PolarsGenerator(TableGenerator):
             # Silently fail - expected for unsupported types (map, struct)
             return False
 
-    def generate_simple_tables(self, num_parallel: int = 1, minimal: bool = False, random_count: int = None, delete_existing: bool = False):
+    def generate_simple_tables(
+        self,
+        num_parallel: int = 1,
+        minimal: bool = False,
+        random_count: int = None,
+        delete_existing: bool = False
+    ):
         """Generate simple single-type tables"""
         table_specs = load_table_specs(self.specs_path, minimal=minimal)
 
@@ -350,7 +400,10 @@ class PolarsGenerator(TableGenerator):
 
         print(f"Generating {len(table_specs)} simple tables with Polars + PyIceberg...")
         print("\n📊 Polars Backend Support Status:")
-        print("  ✅ Supported: All primitive types (boolean, int, long, float, double, string, binary, date, time, timestamp, decimal, uuid, fixed)")
+        print(
+            "  ✅ Supported: All primitive types (boolean, int, long, float, double, "
+            "string, binary, date, time, timestamp, decimal, uuid, fixed)"
+        )
         print("  ✅ Supported: All list types (list<primitive>)")
         print("  ⚠️  Skipped: Map types (Polars/PyArrow limitation)")
         print("  ⚠️  Skipped: Struct types (PyArrow flattening issue)")
@@ -462,11 +515,22 @@ class PolarsGenerator(TableGenerator):
 
         return False
 
-    def generate_write_pattern_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
+    def generate_write_pattern_tables(
+        self,
+        num_parallel: int = 1,
+        random_count: int = None,
+        delete_existing: bool = False
+    ):
         """Write-pattern tables not supported in Polars"""
         raise NotImplementedError("Write-pattern tables only supported in PySpark backend")
 
-    def generate_partitioned_tables(self, num_parallel: int = 1, random_count: int = None, minimal: bool = False, delete_existing: bool = False):
+    def generate_partitioned_tables(
+        self,
+        num_parallel: int = 1,
+        random_count: int = None,
+        minimal: bool = False,
+        delete_existing: bool = False
+    ):
         """Partitioned tables not supported in Polars"""
         raise NotImplementedError("Partitioned tables only supported in PySpark backend")
 

@@ -106,26 +106,44 @@ def generate_sample_data(table_spec, num_rows=100):
             data[field_name] = pa.array([f"value_{i}" for i in range(num_rows)])
         elif field_type == 'date':
             base_date = date(2023, 1, 1)
-            data[field_name] = pa.array([base_date.replace(day=min(28, (i % 28) + 1)) for i in range(num_rows)], type=pa.date32())
+            data[field_name] = pa.array(
+                [base_date.replace(day=min(28, (i % 28) + 1)) for i in range(num_rows)],
+                type=pa.date32()
+            )
         elif field_type == 'time':
-            data[field_name] = pa.array([time(hour=(i % 24), minute=(i % 60)) for i in range(num_rows)], type=pa.time64('us'))
+            data[field_name] = pa.array(
+                [time(hour=(i % 24), minute=(i % 60)) for i in range(num_rows)],
+                type=pa.time64('us')
+            )
         elif field_type == 'timestamp':
             base_ts = datetime(2023, 1, 1)
-            data[field_name] = pa.array([base_ts.replace(hour=(i % 24)) for i in range(num_rows)], type=pa.timestamp('us'))
+            data[field_name] = pa.array(
+                [base_ts.replace(hour=(i % 24)) for i in range(num_rows)],
+                type=pa.timestamp('us')
+            )
         elif field_type == 'timestamptz':
             base_ts = datetime(2023, 1, 1)
-            data[field_name] = pa.array([base_ts.replace(hour=(i % 24)) for i in range(num_rows)], type=pa.timestamp('us', tz='UTC'))
+            data[field_name] = pa.array(
+                [base_ts.replace(hour=(i % 24)) for i in range(num_rows)],
+                type=pa.timestamp('us', tz='UTC')
+            )
         elif field_type.startswith('decimal('):
             parts = field_type[8:-1].split(',')
             precision = int(parts[0])
             scale = int(parts[1]) if len(parts) > 1 else 0
-            data[field_name] = pa.array([Decimal(f"{i}.{i%100:02d}") for i in range(num_rows)], type=pa.decimal128(precision, scale))
+            data[field_name] = pa.array(
+                [Decimal(f"{i}.{i%100:02d}") for i in range(num_rows)],
+                type=pa.decimal128(precision, scale)
+            )
         elif field_type == 'uuid':
             # Generate deterministic UUIDs based on row index
             data[field_name] = pa.array([uuid.UUID(int=i).bytes for i in range(num_rows)], type=pa.binary(16))
         elif field_type.startswith('fixed('):
             length = int(field_type[6:-1])
-            data[field_name] = pa.array([f"fixed_{i}".ljust(length, '0')[:length].encode() for i in range(num_rows)], type=pa.binary(length))
+            data[field_name] = pa.array(
+                [f"fixed_{i}".ljust(length, '0')[:length].encode() for i in range(num_rows)],
+                type=pa.binary(length)
+            )
         elif field_type.startswith('list<') or field_type.startswith('map<') or field_type.startswith('struct<'):
             # Complex types not fully supported in PyIceberg - use string placeholder
             data[field_name] = pa.array([f"value_{i}" for i in range(num_rows)])
@@ -251,17 +269,35 @@ def generate_comprehensive_row_data(row_id, num_rows=1):
 
     # Date/time columns
     base_date = date(2023, 1, 1)
-    data["date_col"] = pa.array([base_date.replace(day=min(28, ((row_id + i) % 28) + 1)) for i in range(num_rows)], type=pa.date32())
-    data["time_col"] = pa.array([time(hour=((row_id + i) % 24), minute=((row_id + i) % 60)) for i in range(num_rows)], type=pa.time64('us'))
+    data["date_col"] = pa.array(
+        [base_date.replace(day=min(28, ((row_id + i) % 28) + 1)) for i in range(num_rows)],
+        type=pa.date32()
+    )
+    data["time_col"] = pa.array(
+        [time(hour=((row_id + i) % 24), minute=((row_id + i) % 60)) for i in range(num_rows)],
+        type=pa.time64('us')
+    )
 
     base_ts = datetime(2023, 1, 1)
-    data["timestamp_col"] = pa.array([base_ts.replace(hour=((row_id + i) % 24)) for i in range(num_rows)], type=pa.timestamp('us'))
-    data["timestamptz_col"] = pa.array([base_ts.replace(hour=((row_id + i) % 24)) for i in range(num_rows)], type=pa.timestamp('us', tz='UTC'))
+    data["timestamp_col"] = pa.array(
+        [base_ts.replace(hour=((row_id + i) % 24)) for i in range(num_rows)],
+        type=pa.timestamp('us')
+    )
+    data["timestamptz_col"] = pa.array(
+        [base_ts.replace(hour=((row_id + i) % 24)) for i in range(num_rows)],
+        type=pa.timestamp('us', tz='UTC')
+    )
 
     # Special types
-    data["decimal_col"] = pa.array([Decimal(f"{row_id + i}.{(row_id + i) % 100:02d}") for i in range(num_rows)], type=pa.decimal128(10, 2))
+    data["decimal_col"] = pa.array(
+        [Decimal(f"{row_id + i}.{(row_id + i) % 100:02d}") for i in range(num_rows)],
+        type=pa.decimal128(10, 2)
+    )
     data["uuid_col"] = pa.array([uuid.UUID(int=(row_id + i)).bytes for i in range(num_rows)], type=pa.binary(16))
-    data["fixed_col"] = pa.array([f"fixed_{row_id + i}".ljust(16, '0')[:16].encode() for i in range(num_rows)], type=pa.binary(16))
+    data["fixed_col"] = pa.array(
+        [f"fixed_{row_id + i}".ljust(16, '0')[:16].encode() for i in range(num_rows)],
+        type=pa.binary(16)
+    )
 
     # String variants
     data["string_small_col"] = pa.array([f"s{row_id + i}" for i in range(num_rows)])
@@ -275,7 +311,10 @@ def generate_comprehensive_row_data(row_id, num_rows=1):
 
     # List columns - fix element types to match schema
     data["list_boolean_col"] = pa.array([[True, False, (row_id + i) % 2 == 0] for i in range(num_rows)])
-    data["list_int_col"] = pa.array([[row_id + i, row_id + i + 1, row_id + i + 2] for i in range(num_rows)], type=pa.list_(pa.int32()))
+    data["list_int_col"] = pa.array(
+        [[row_id + i, row_id + i + 1, row_id + i + 2] for i in range(num_rows)],
+        type=pa.list_(pa.int32())
+    )
     data["list_string_col"] = pa.array([[f"item_{row_id + i}_{j}" for j in range(3)] for i in range(num_rows)])
 
     return pa.Table.from_arrays(list(data.values()), names=list(data.keys()))
