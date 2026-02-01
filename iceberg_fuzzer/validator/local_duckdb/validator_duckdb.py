@@ -28,7 +28,6 @@ from decimal import Decimal
 from pathlib import Path
 import argparse
 import json
-import os
 import sys
 import uuid as uuid_lib
 
@@ -105,11 +104,11 @@ def extract_expected_write_pattern_tables(specs):
     tables = []
 
     # Load write_patterns.yaml - get path relative to this file
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(current_dir))
-    write_patterns_path = os.path.join(project_root, 'specs', 'write_patterns.yaml')
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent.parent
+    write_patterns_path = project_root / 'specs' / 'write_patterns.yaml'
 
-    if not os.path.exists(write_patterns_path):
+    if not write_patterns_path.exists():
         print(f"Warning: write_patterns.yaml not found at {write_patterns_path}")
         return tables
 
@@ -158,11 +157,11 @@ def extract_expected_partitioned_tables(specs):
     tables = []
 
     # Load partitioned.yaml - get path relative to this file
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(current_dir))
-    partitioned_path = os.path.join(project_root, 'specs', 'partitioned.yaml')
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent.parent
+    partitioned_path = project_root / 'specs' / 'partitioned.yaml'
 
-    if not os.path.exists(partitioned_path):
+    if not partitioned_path.exists():
         print(f"Warning: partitioned.yaml not found at {partitioned_path}")
         return tables
 
@@ -258,16 +257,16 @@ def extract_expected_partitioned_tables(specs):
 
     return tables
 
-def extract_expected_evolution_tables(specs):
+def extract_expected_evolution_tables(specs_path):
     """Extract expected evolution table specifications from evolution.yaml"""
 
     tables = []
 
     # Get specs directory
-    specs_dir = os.path.dirname(specs)
-    evolution_path = os.path.join(specs_dir, 'evolution.yaml')
+    specs_path = Path(specs_path)
+    evolution_path = specs_path.parent / 'evolution.yaml'
 
-    if not os.path.exists(evolution_path):
+    if not evolution_path.exists():
         print(f"Warning: evolution.yaml not found at {evolution_path}")
         return tables
 
@@ -337,20 +336,20 @@ def extract_expected_evolution_tables(specs):
 def validate_delete_file_types(table_path, delete_mode):
     """Validate that the correct delete files are present for the delete mode"""
 
-    metadata_dir = os.path.join(table_path, 'metadata')
-    if not os.path.exists(metadata_dir):
+    table_path = Path(table_path)
+    metadata_dir = table_path / 'metadata'
+    if not metadata_dir.exists():
         return False, "No metadata directory found"
 
     # Find the latest metadata file
-    metadata_files = [f for f in os.listdir(metadata_dir) if f.startswith('v') and f.endswith('.metadata.json')]
+    metadata_files = [f for f in metadata_dir.iterdir() if f.name.startswith('v') and f.name.endswith('.metadata.json')]
     if not metadata_files:
         return False, "No metadata files found"
 
-    latest_metadata = sorted(metadata_files)[-1]
-    metadata_path = os.path.join(metadata_dir, latest_metadata)
+    latest_metadata = sorted(metadata_files, key=lambda f: f.name)[-1]
 
     try:
-        with open(metadata_path, 'r') as f:
+        with open(latest_metadata, 'r') as f:
             metadata = json.load(f)
 
         # Check snapshots for delete files
@@ -383,8 +382,8 @@ def validate_delete_file_types(table_path, delete_mode):
     except Exception as e:
         return False, f"Error reading metadata: {e}"
 
-def generate_expected_single_type_data(data_type, row_id):
-
+def _generate_primitive_data(data_type, row_id):
+    """Generate expected data for primitive types."""
     if data_type == 'boolean':
         return (row_id % 2) == 0
     elif data_type == 'int':
@@ -411,67 +410,87 @@ def generate_expected_single_type_data(data_type, row_id):
         return f"fixed_{row_id}".ljust(16, '0')[:16].encode()
     elif data_type == 'time':
         return time(hour=(row_id % 24), minute=(row_id % 60))
-    elif data_type.startswith('list_'):
+    return f"value_{row_id}"
+
+def _generate_list_element(element_type, row_id, offset):
+    """Generate a single list element based on type."""
+    if element_type == 'boolean':
+        return True if offset == 0 else (False if offset == 1 else (row_id % 2) == 0)
+    elif element_type == 'int':
+        return row_id + offset
+    elif element_type == 'long':
+        return (row_id + offset) * 1000
+    elif element_type == 'float':
+        return float(row_id + offset) + 0.5
+    elif element_type == 'double':
+        return float(row_id + offset) * 1.5
+    elif element_type in ['string_small', 'string_medium']:
+        return f"item_{row_id}_{offset}"
+    elif element_type.startswith('binary'):
+        return f"item_{row_id}_{offset}".encode()
+    elif element_type == 'date':
+        return date(2023, 1, min(28, ((row_id + offset) % 28) + 1))
+    elif element_type in ['timestamp', 'timestamptz']:
+        return datetime(2023, 1, 1, hour=((row_id + offset) % 24))
+    elif element_type == 'decimal':
+        return Decimal(f"{row_id + offset}.{(row_id + offset)%100:02d}")
+    elif element_type == 'uuid':
+        return uuid_lib.UUID(int=row_id + offset).bytes
+    elif element_type == 'fixed' or element_type.startswith('fixed('):
+        return f"fixed_{row_id + offset}".ljust(16, '0')[:16].encode()
+    elif element_type == 'time':
+        return f"{((row_id + offset) % 24):02d}:00:00"
+    return f"item_{row_id}_{offset}"
+
+def _generate_list_data(element_type, row_id):
+    """Generate expected data for list types."""
+    return [_generate_list_element(element_type, row_id, j) for j in range(3)]
+
+def _generate_map_value(value_type, key):
+    """Generate a single map value based on type."""
+    if value_type == 'string':
+        return f"value_{key}"
+    elif value_type == 'int':
+        return key * 10
+    elif value_type == 'long':
+        return key * 1000
+    elif value_type == 'float':
+        return float(key) + 0.5
+    elif value_type == 'double':
+        return float(key) * 1.5
+    elif value_type == 'boolean':
+        return (key % 2) == 0
+    elif value_type.startswith('binary'):
+        return f"value_{key}".encode()
+    elif value_type == 'date':
+        return date(2023, 1, min(28, (key % 28) + 1))
+    elif value_type in ['timestamp', 'timestamptz']:
+        return datetime(2023, 1, 1, hour=(key % 24))
+    elif value_type == 'decimal':
+        return Decimal(f"{key}.{key % 100:02d}")
+    elif value_type == 'uuid':
+        return uuid_lib.UUID(int=key).bytes
+    elif value_type == 'fixed' or value_type.startswith('fixed('):
+        return f"fixed_{key}".ljust(16, '0')[:16].encode()
+    elif value_type == 'time':
+        return f"{(key % 24):02d}:00:00"
+    return f"value_{key}"
+
+def _generate_map_data(value_type, row_id):
+    """Generate expected data for map types."""
+    return {row_id: _generate_map_value(value_type, row_id),
+            row_id + 1: _generate_map_value(value_type, row_id + 1)}
+
+def generate_expected_single_type_data(data_type, row_id):
+    """Generate expected data for a single data type."""
+    if data_type.startswith('list_'):
         element_type = data_type[5:]
-        if element_type == 'boolean':
-            return [True, False, (row_id % 2) == 0]
-        elif element_type == 'int':
-            return [row_id, row_id + 1, row_id + 2]
-        elif element_type == 'long':
-            return [row_id * 1000, (row_id + 1) * 1000, (row_id + 2) * 1000]
-        elif element_type == 'float':
-            return [float(row_id) + 0.5, float(row_id + 1) + 0.5, float(row_id + 2) + 0.5]
-        elif element_type == 'double':
-            return [float(row_id) * 1.5, float(row_id + 1) * 1.5, float(row_id + 2) * 1.5]
-        elif element_type in ['string_small', 'string_medium']:
-            return [f"item_{row_id}_{j}" for j in range(3)]
-        elif element_type.startswith('binary'):
-            return [f"item_{row_id}_{j}".encode() for j in range(3)]
-        elif element_type == 'date':
-            return [date(2023, 1, min(28, ((row_id + j) % 28) + 1)) for j in range(3)]
-        elif element_type in ['timestamp', 'timestamptz']:
-            return [datetime(2023, 1, 1, hour=((row_id + j) % 24)) for j in range(3)]
-        elif element_type == 'decimal':
-            return [Decimal(f"{row_id + j}.{(row_id + j)%100:02d}") for j in range(3)]
-        elif element_type == 'uuid':
-            return [uuid_lib.UUID(int=row_id + j).bytes for j in range(3)]
-        elif element_type == 'fixed' or element_type.startswith('fixed('):
-            return [f"fixed_{row_id + j}".ljust(16, '0')[:16].encode() for j in range(3)]
-        elif element_type == 'time':
-            return [f"{((row_id + j) % 24):02d}:00:00" for j in range(3)]
-        else:
-            return [f"item_{row_id}_{j}" for j in range(3)]
+        return _generate_list_data(element_type, row_id)
     elif data_type.startswith('map_int_'):
         value_type = data_type[8:]
-        if value_type == 'string':
-            return {row_id: f"value_{row_id}", row_id + 1: f"value_{row_id + 1}"}
-        elif value_type == 'int':
-            return {row_id: row_id * 10, row_id + 1: (row_id + 1) * 10}
-        elif value_type == 'long':
-            return {row_id: row_id * 1000, row_id + 1: (row_id + 1) * 1000}
-        elif value_type == 'float':
-            return {row_id: float(row_id) + 0.5, row_id + 1: float(row_id + 1) + 0.5}
-        elif value_type == 'double':
-            return {row_id: float(row_id) * 1.5, row_id + 1: float(row_id + 1) * 1.5}
-        elif value_type == 'boolean':
-            return {row_id: (row_id % 2) == 0, row_id + 1: ((row_id + 1) % 2) == 0}
-        elif value_type.startswith('binary'):
-            return {row_id: f"value_{row_id}".encode(), row_id + 1: f"value_{row_id + 1}".encode()}
-        elif value_type == 'date':
-            return {row_id: date(2023, 1, min(28, (row_id % 28) + 1)), row_id + 1: date(2023, 1, min(28, ((row_id + 1) % 28) + 1))}
-        elif value_type in ['timestamp', 'timestamptz']:
-            return {row_id: datetime(2023, 1, 1, hour=(row_id % 24)), row_id + 1: datetime(2023, 1, 1, hour=((row_id + 1) % 24))}
-        elif value_type == 'decimal':
-            return {row_id: Decimal(f"{row_id}.{row_id % 100:02d}"), row_id + 1: Decimal(f"{row_id + 1}.{(row_id + 1) % 100:02d}")}
-        elif value_type == 'uuid':
-            return {row_id: uuid_lib.UUID(int=row_id).bytes, row_id + 1: uuid_lib.UUID(int=row_id + 1).bytes}
-        elif value_type == 'fixed' or value_type.startswith('fixed('):
-            return {row_id: f"fixed_{row_id}".ljust(16, '0')[:16].encode(), row_id + 1: f"fixed_{row_id + 1}".ljust(16, '0')[:16].encode()}
-        elif value_type == 'time':
-            return {row_id: f"{(row_id % 24):02d}:00:00", row_id + 1: f"{((row_id + 1) % 24):02d}:00:00"}
-        return {row_id: f"value_{row_id}", row_id + 1: f"value_{row_id + 1}"}
+        return _generate_map_data(value_type, row_id)
     else:
-        return f"value_{row_id}"
+        return _generate_primitive_data(data_type, row_id)
 
 def generate_expected_write_pattern_data(row_id):
     """Generate expected data for a write-pattern table row"""
@@ -1485,10 +1504,10 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
     if num_parallel > 1:
         # Parallel validation
         with ProcessPoolExecutor(max_workers=num_parallel) as executor:
-            futures = {executor.submit(validate_table_worker, path, spec, full_content_validation): spec['name']
-                      for path, spec in tables_to_validate}
+            future_to_spec = {executor.submit(validate_table_worker, path, spec, full_content_validation): spec
+                             for path, spec in tables_to_validate}
 
-            for future in as_completed(futures):
+            for future in as_completed(future_to_spec):
                 table_name, result = future.result()
                 validation_results[table_name] = result
 
