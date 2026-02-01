@@ -608,7 +608,7 @@ def validate_parquet_properties(table_path, expected_spec):
                     # For write-pattern tables, check for dictionary encoding
                     encoding_valid = any(
                         'DICTIONARY' in str(enc).upper() or 'PLAIN' in str(enc).upper()
-                        for enc in encodings
+                        for enc in actual_encoding
                     )
                 elif expected_spec.get('type') == 'partitioned':
                     # For partitioned tables, check for plain encoding (Spark default)
@@ -670,7 +670,7 @@ def validate_table_contents(conn, table_path, expected_spec):
                     if abs(actual_row[1] - expected_value) > 0.001:
                         content_errors.append(
                             f"Row {row_id}: Value mismatch - "
-                            f"expected ~{expected_value}, got {actual_val}"
+                            f"expected ~{expected_value}, got {actual_row[1]}"
                         )
                 elif expected_spec['data_type'] == 'uuid':
                     # UUID stored as binary, should be 16 bytes
@@ -699,7 +699,7 @@ def validate_table_contents(conn, table_path, expected_spec):
                     if str(actual_row[1]) != str(expected_value):
                         content_errors.append(
                             f"Row {row_id}: Value mismatch - "
-                            f"expected {expected_value}, got {actual_val}"
+                            f"expected {expected_value}, got {actual_row[1]}"
                         )
                 elif expected_spec['data_type'] in ['timestamp', 'timestamptz']:
                     # Strip timezone info for comparison
@@ -709,7 +709,7 @@ def validate_table_contents(conn, table_path, expected_spec):
                     if actual_ts != expected_value:
                         content_errors.append(
                             f"Row {row_id}: Value mismatch - "
-                            f"expected {expected_value}, got {actual_val}"
+                            f"expected {expected_value}, got {actual_ts}"
                         )
                 elif expected_spec['data_type'].startswith('list_') or expected_spec['data_type'].startswith('map_'):
                     # For lists and maps, compare as collections, stripping timezone from timestamps
@@ -747,19 +747,19 @@ def validate_table_contents(conn, table_path, expected_spec):
                             if actual_val != expected_val:
                                 content_errors.append(
                                     f"Row {row_id}: Value mismatch - "
-                                    f"expected {expected_value}, got {actual_val}"
+                                    f"expected {expected_value}, got {actual_row[1]}"
                                 )
                     else:
                         if actual_val != expected_val:
                             content_errors.append(
                                 f"Row {row_id}: Value mismatch - "
-                                f"expected {expected_value}, got {actual_val}"
+                                f"expected {expected_value}, got {actual_row[1]}"
                             )
                 else:
                     if actual_row[1] != expected_value:
                         content_errors.append(
                             f"Row {row_id}: Value mismatch - "
-                            f"expected {expected_value}, got {actual_val}"
+                            f"expected {expected_value}, got {actual_row[1]}"
                         )
 
             elif expected_spec['type'] == 'write_pattern':

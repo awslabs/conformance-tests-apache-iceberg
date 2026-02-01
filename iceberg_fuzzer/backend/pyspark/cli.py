@@ -1211,8 +1211,8 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                 # Posdelete mode: use DELETE + INSERT to create position deletes
                 for i in range(5):
                     # Delete a range of rows
-                    delete_start = i * 2000 + 1
-                    delete_end = (i + 1) * 2000
+                    start_id = i * 2000 + 1
+                    end_id = (i + 1) * 2000
                     try:
                         spark.sql(
                             f"DELETE FROM {catalog}.{namespace}.{table_name} "
@@ -1412,7 +1412,7 @@ def generate_single_tables(args, spark, warehouse_path):
 
                 futures = {
                     executor.submit(create_table_worker_with_session, warehouse_path, spec): spec
-                    for spec in table_specs
+                    for spec in batch
                 }
                 for future in as_completed(futures):
                     table_name, success = future.result()
@@ -1645,11 +1645,9 @@ def prepare_partitioned_df(df, sort_cols, num_partitions):
 
 def create_partitioned_table(
     spark, warehouse_path, table_name, pattern_name, partition_spec,
-    counter=None, delete_existing=False
+    delete_existing=False
 ):
     """Create a partitioned table"""
-    counter_str = f" ({counter})" if counter else ""
-
     # Get catalog and namespace
     catalog, namespace = get_catalog_and_namespace(warehouse_path, "partitioned")
 
@@ -1730,15 +1728,17 @@ def create_partitioned_table(
             del props['write.distribution-mode']
 
         props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
-        props_clause = f"TBLPROPERTIES ({props_sql})" if props_sql else ""
 
         # Create table with schema (no CTAS to avoid staged create)
         schema_df = generate_partitioned_data(spark, schema_spec, 1, 0)
         schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in schema_df.schema.fields])
-        spark.sql(
-            f"CREATE TABLE {catalog}.{namespace}.{table_name} "
-            f"({schema_fields}) USING iceberg "
-        )
+
+        # Build CREATE TABLE statement with properties
+        create_sql = f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg"
+        if props_sql:
+            create_sql += f" TBLPROPERTIES ({props_sql})"
+
+        spark.sql(create_sql)
 
         # Apply pattern-specific logic
         if pattern_name == "insert_heavy":
@@ -1849,7 +1849,7 @@ def create_partitioned_table_worker(spark, warehouse_path, table_name, pattern, 
     try:
         result = create_partitioned_table(
             spark, warehouse_path, table_name, pattern, partition_spec,
-            counter=counter, delete_existing=delete_existing
+            delete_existing=delete_existing
         )
         return (table_name, result)
     except Exception as e:
@@ -1918,7 +1918,7 @@ def generate_partitioned_tables(args, spark, warehouse_path):
                 try:
                     if create_partitioned_table(
                         spark, warehouse_path, table_name, pattern, partition_spec,
-                        counter=counter, delete_existing=delete_existing
+                        delete_existing=delete_existing
                     ):
                         created += 1
                         print(f"✓ Created {table_name} ({created}/{total})")
