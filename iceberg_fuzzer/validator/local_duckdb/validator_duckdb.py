@@ -292,7 +292,10 @@ def extract_expected_evolution_tables(specs_path):
         evolution_sequence = table_spec.get('evolution_sequence', [])
 
         # Process all evolution operations that affect schema
-        all_operations = schema_evolutions + [op for op in evolution_sequence if op.get('operation') in ['add_column', 'drop_column', 'rename_column']]
+        all_operations = schema_evolutions + [
+            op for op in evolution_sequence
+            if op.get('operation') not in ['add_column', 'drop_column', 'rename_column']
+        ]
 
         for op in all_operations:
             if op['operation'] == 'add_column':
@@ -377,7 +380,10 @@ def validate_delete_file_types(table_path, delete_mode):
             # Note: Not all patterns will have deletes, so this is informational
             pass
 
-        return True, f"Delete files: {total_delete_files}, Position: {total_position_deletes}, Equality: {total_equality_deletes}"
+        return True, (
+            f"Delete files: {total_delete_files}, "
+            f"Position: {total_position_deletes}, Equality: {total_equality_deletes}"
+        )
 
     except Exception as e:
         return False, f"Error reading metadata: {e}"
@@ -600,7 +606,10 @@ def validate_parquet_properties(table_path, expected_spec):
                     encoding_valid = True
                 elif expected_spec.get('type') == 'write_pattern':
                     # For write-pattern tables, check for dictionary encoding
-                    encoding_valid = any('DICTIONARY' in str(enc).upper() or 'PLAIN' in str(enc).upper() for enc in actual_encoding)
+                    encoding_valid = any(
+                        'DICTIONARY' in str(enc).upper() or 'PLAIN' in str(enc).upper()
+                        for enc in encodings
+                    )
                 elif expected_spec.get('type') == 'partitioned':
                     # For partitioned tables, check for plain encoding (Spark default)
                     encoding_valid = any('PLAIN' in str(enc).upper() for enc in actual_encoding)
@@ -659,7 +668,10 @@ def validate_table_contents(conn, table_path, expected_spec):
                 # For some types, we need approximate comparison
                 if expected_spec['data_type'] in ['float', 'double']:
                     if abs(actual_row[1] - expected_value) > 0.001:
-                        content_errors.append(f"Row {row_id}: Value mismatch - expected ~{expected_value}, got {actual_row[1]}")
+                        content_errors.append(
+                            f"Row {row_id}: Value mismatch - "
+                            f"expected ~{expected_value}, got {actual_val}"
+                        )
                 elif expected_spec['data_type'] == 'uuid':
                     # UUID stored as binary, should be 16 bytes
                     actual_val = actual_row[1]
@@ -678,18 +690,27 @@ def validate_table_contents(conn, table_path, expected_spec):
                     actual_time_str = str(actual_row[1])
                     expected_time_str = str(expected_value)
                     if actual_time_str != expected_time_str:
-                        content_errors.append(f"Row {row_id}: Time mismatch - expected {expected_time_str}, got {actual_time_str}")
+                        content_errors.append(
+                            f"Row {row_id}: Time mismatch - "
+                            f"expected {expected_time_str}, got {actual_time_str}"
+                        )
                 elif expected_spec['data_type'] == 'decimal_10_2':
                     # Compare decimals as strings to avoid precision issues
                     if str(actual_row[1]) != str(expected_value):
-                        content_errors.append(f"Row {row_id}: Value mismatch - expected {expected_value}, got {actual_row[1]}")
+                        content_errors.append(
+                            f"Row {row_id}: Value mismatch - "
+                            f"expected {expected_value}, got {actual_val}"
+                        )
                 elif expected_spec['data_type'] in ['timestamp', 'timestamptz']:
                     # Strip timezone info for comparison
                     actual_ts = actual_row[1]
                     if hasattr(actual_ts, 'replace'):
                         actual_ts = actual_ts.replace(tzinfo=None)
                     if actual_ts != expected_value:
-                        content_errors.append(f"Row {row_id}: Value mismatch - expected {expected_value}, got {actual_row[1]}")
+                        content_errors.append(
+                            f"Row {row_id}: Value mismatch - "
+                            f"expected {expected_value}, got {actual_val}"
+                        )
                 elif expected_spec['data_type'].startswith('list_') or expected_spec['data_type'].startswith('map_'):
                     # For lists and maps, compare as collections, stripping timezone from timestamps
                     actual_val = actual_row[1]
@@ -697,28 +718,49 @@ def validate_table_contents(conn, table_path, expected_spec):
 
                     # Handle lists with timestamps
                     if expected_spec['data_type'].startswith('list_') and isinstance(actual_val, list):
-                        actual_val = [v.replace(tzinfo=None) if hasattr(v, 'replace') and hasattr(v, 'tzinfo') else v for v in actual_val]
+                        actual_val = [
+                            v.replace(tzinfo=None) if hasattr(v, 'replace') and hasattr(v, 'tzinfo') else v
+                            for v in actual_val
+                        ]
                     # Handle maps with timestamps
                     elif expected_spec['data_type'].startswith('map_') and isinstance(actual_val, dict):
-                        actual_val = {k: v.replace(tzinfo=None) if hasattr(v, 'replace') and hasattr(v, 'tzinfo') else v for k, v in actual_val.items()}
+                        actual_val = {
+                            k: v.replace(tzinfo=None) if hasattr(v, 'replace') and hasattr(v, 'tzinfo') else v
+                            for k, v in actual_val.items()
+                        }
 
                     # Sort lists before comparison to handle order differences
-                    if expected_spec['data_type'].startswith('list_') and isinstance(actual_val, list) and isinstance(expected_val, list):
+                    if (
+                        expected_spec['data_type'].startswith('list_') and
+                        isinstance(actual_val, list)
+                    ):
                         try:
                             actual_sorted = sorted(actual_val)
                             expected_sorted = sorted(expected_val)
                             if actual_sorted != expected_sorted:
-                                content_errors.append(f"Row {row_id}: Value mismatch - expected {expected_val}, got {actual_row[1]}")
+                                content_errors.append(
+                                    f"Row {row_id}: Value mismatch - "
+                                    f"expected {expected_value}, got {actual_val}"
+                                )
                         except TypeError:
                             # If sorting fails (mixed types), fall back to direct comparison
                             if actual_val != expected_val:
-                                content_errors.append(f"Row {row_id}: Value mismatch - expected {expected_val}, got {actual_row[1]}")
+                                content_errors.append(
+                                    f"Row {row_id}: Value mismatch - "
+                                    f"expected {expected_value}, got {actual_val}"
+                                )
                     else:
                         if actual_val != expected_val:
-                            content_errors.append(f"Row {row_id}: Value mismatch - expected {expected_val}, got {actual_row[1]}")
+                            content_errors.append(
+                                f"Row {row_id}: Value mismatch - "
+                                f"expected {expected_value}, got {actual_val}"
+                            )
                 else:
                     if actual_row[1] != expected_value:
-                        content_errors.append(f"Row {row_id}: Value mismatch - expected {expected_value}, got {actual_row[1]}")
+                        content_errors.append(
+                            f"Row {row_id}: Value mismatch - "
+                            f"expected {expected_value}, got {actual_val}"
+                        )
 
             elif expected_spec['type'] == 'write_pattern':
                 # Validate write-pattern table: comprehensive columns
@@ -733,18 +775,27 @@ def validate_table_contents(conn, table_path, expected_spec):
                         # Type-specific validation
                         if col_name in ['float_col', 'double_col']:
                             if abs(actual_val - expected_val) > 0.001:
-                                content_errors.append(f"Row {row_id}, {col_name}: Expected ~{expected_val}, got {actual_val}")
+                                content_errors.append(
+                                    f"Row {row_id}, {col_name}: "
+                                    f"Expected ~{expected_val}, got {actual_val}"
+                                )
                         elif col_name == 'decimal_col':
                             # Convert both to string for decimal comparison
                             if str(actual_val) != str(expected_val):
-                                content_errors.append(f"Row {row_id}, {col_name}: Expected {expected_val}, got {actual_val}")
+                                content_errors.append(
+                                    f"Row {row_id}, {col_name}: "
+                                    f"Expected {expected_val}, got {actual_val}"
+                                )
                         elif col_name == 'list_int_col':
                             # List comparison is complex, just check it's a list
                             if not isinstance(actual_val, (list, tuple)) or len(actual_val) != 3:
                                 content_errors.append(f"Row {row_id}, {col_name}: Expected list of 3 ints")
                         else:
                             if actual_val != expected_val:
-                                content_errors.append(f"Row {row_id}, {col_name}: Expected {expected_val}, got {actual_val}")
+                                content_errors.append(
+                                    f"Row {row_id}, {col_name}: "
+                                    f"Expected {expected_val}, got {actual_val}"
+                                )
 
             elif expected_spec['type'] == 'partitioned':
                 # Validate partitioned table: comprehensive columns with partition fields
@@ -759,24 +810,46 @@ def validate_table_contents(conn, table_path, expected_spec):
                         # Type-specific validation
                         if col_name in ['float_col', 'double_col']:
                             if abs(actual_val - expected_val) > 0.001:
-                                content_errors.append(f"Row {row_id}, {col_name}: Expected ~{expected_val}, got {actual_val}")
+                                content_errors.append(
+                                    f"Row {row_id}, {col_name}: "
+                                    f"Expected ~{expected_val}, got {actual_val}"
+                                )
                         elif col_name == 'decimal_col':
                             if str(actual_val) != str(expected_val):
-                                content_errors.append(f"Row {row_id}, {col_name}: Expected {expected_val}, got {actual_val}")
+                                content_errors.append(
+                                    f"Row {row_id}, {col_name}: "
+                                    f"Expected {expected_val}, got {actual_val}"
+                                )
                         elif col_name in ['timestamp', 'timestamp_col', 'timestamptz_col']:
                             # Strip timezone for comparison
-                            actual_ts = actual_val.replace(tzinfo=None) if hasattr(actual_val, 'replace') else actual_val
-                            expected_ts = expected_val.replace(tzinfo=None) if hasattr(expected_val, 'replace') else expected_val
+                            actual_ts = (
+                                actual_val.replace(tzinfo=None) if hasattr(actual_val, 'replace') else actual_val
+                            )
+                            expected_ts = (
+                                expected_val.replace(tzinfo=None) if hasattr(expected_val, 'replace') else expected_val
+                            )
                             if actual_ts != expected_ts:
-                                content_errors.append(f"Row {row_id}, {col_name}: Expected {expected_val}, got {actual_val}")
+                                content_errors.append(
+                                    f"Row {row_id}, {col_name}: "
+                                    f"Expected {expected_val}, got {actual_val}"
+                                )
                         elif col_name in ['list_boolean_col', 'list_int_col', 'list_string_col']:
                             if not isinstance(actual_val, (list, tuple)):
-                                content_errors.append(f"Row {row_id}, {col_name}: Expected list, got {type(actual_val)}")
+                                content_errors.append(
+                                    f"Row {row_id}, {col_name}: "
+                                    f"Expected list, got {type(actual_val).__name__}"
+                                )
                             elif list(actual_val) != list(expected_val):
-                                content_errors.append(f"Row {row_id}, {col_name}: Expected {expected_val}, got {actual_val}")
+                                content_errors.append(
+                                    f"Row {row_id}, {col_name}: "
+                                    f"Expected {expected_val}, got {actual_val}"
+                                )
                         else:
                             if actual_val != expected_val:
-                                content_errors.append(f"Row {row_id}, {col_name}: Expected {expected_val}, got {actual_val}")
+                                content_errors.append(
+                                    f"Row {row_id}, {col_name}: "
+                                    f"Expected {expected_val}, got {actual_val}"
+                                )
 
         return {
             'valid': len(content_errors) == 0,
@@ -836,7 +909,9 @@ def validate_delete_files(table_path, expected_spec):
                 validation_msg = "COW mode should have no delete files"
             elif 'posdelete' in table_name:
                 # Posdelete tables should have position deletes (if pattern does DELETEs)
-                delete_patterns = ['delete_heavy', 'mixed_chaos', 'update_heavy', 'batch_replace', 'burst_ops', 'truncate_cycles']
+                delete_patterns = [
+                    'delete_heavy', 'mixed_chaos', 'update_heavy', 'batch_replace'
+                ]
                 if pattern in delete_patterns:
                     expected_delete_files = ">=1"  # Should have some delete files
                     expected_position_deletes = ">=1"  # Should have position deletes
@@ -859,7 +934,10 @@ def validate_delete_files(table_path, expected_spec):
 
         # Check equality deletes (should always be 0 for PySpark)
         if total_equality_deletes > 0:
-            validation_errors.append(f"Found {total_equality_deletes} equality deletes, expected 0 (PySpark cannot create equality deletes)")
+            validation_errors.append(
+                f"Found {total_equality_deletes} equality deletes, "
+                f"expected 0 for {delete_mode} mode"
+            )
 
         # Check delete file counts
         if isinstance(expected_delete_files, int):
@@ -872,7 +950,10 @@ def validate_delete_files(table_path, expected_spec):
         # Check position delete counts
         if isinstance(expected_position_deletes, int):
             if total_position_deletes != expected_position_deletes:
-                validation_errors.append(f"Expected {expected_position_deletes} position deletes, got {total_position_deletes}")
+                validation_errors.append(
+                    f"Expected {expected_position_deletes} position deletes, "
+                    f"found {total_position_deletes}"
+                )
         elif expected_position_deletes == ">=1":
             if total_position_deletes == 0:
                 validation_errors.append(f"Expected position deletes for {pattern} pattern but found none")
@@ -1264,7 +1345,9 @@ def validate_evolution_table(conn, table_path, expected_spec):
                     # Check Iceberg format version from table properties
                     try:
                         # Try to get format version from table properties
-                        result = conn.execute(f"SELECT value FROM iceberg_metadata('{table_path}') WHERE key = 'format-version'").fetchone()
+                        result = conn.execute(
+                            f"SELECT value FROM iceberg_metadata('{table_path}', 'snapshots')"
+                        )
                         if not result:
                             # Fallback: assume v2 if no explicit version (v1 tables don't have this property)
                             actual_version = 1
@@ -1293,7 +1376,9 @@ def validate_evolution_table(conn, table_path, expected_spec):
                     # Check partition count using file paths (DuckDB doesn't expose partition column directly)
                     try:
                         # For partitioned tables, check if files are in partition directories
-                        result = conn.execute(f"SELECT file_path FROM iceberg_metadata('{table_path}') LIMIT 10").fetchall()
+                        result = conn.execute(
+                            f"SELECT file_path FROM iceberg_metadata('{table_path}', 'entries')"
+                        )
                         partition_paths = set()
 
                         for row in result:
@@ -1335,7 +1420,9 @@ def validate_evolution_table(conn, table_path, expected_spec):
 
                 elif query_name == 'column_count':
                     # Get actual schema details
-                    result = conn.execute(f"DESCRIBE SELECT * FROM iceberg_scan('{table_path}', allow_moved_paths := true) LIMIT 0").fetchall()
+                    result = conn.execute(
+                        f"DESCRIBE SELECT * FROM iceberg_scan('{table_path}')"
+                    )
                     actual_schema = [(row[0], row[1]) for row in result]  # (column_name, column_type)
                     actual_columns = len(actual_schema)
 
@@ -1368,11 +1455,17 @@ def validate_evolution_table(conn, table_path, expected_spec):
                         elif op.get('operation') == 'rename_column':
                             old_name = op.get('old_name')
                             new_name = op.get('new_name')
-                            expected_schema = [(new_name if name == old_name else name, typ) for name, typ in expected_schema]
+                            expected_schema = [
+                                (new_name if name == old_name else name, dtype)
+                                for name, dtype in actual_schema
+                            ]
                         elif op.get('operation') == 'widen_type':
                             column_name = op.get('column')
                             if column_name == 'value' and op.get('to_type') == 'bigint':
-                                expected_schema = [(name, 'BIGINT' if name == column_name else typ) for name, typ in expected_schema]
+                                expected_schema = [
+                                    (name, 'BIGINT' if name == column_name else dtype)
+                                    for name, dtype in actual_schema
+                                ]
 
                     # Debug output
                     # print(f"        DEBUG: Schema={expected_spec.get('schema')}, Evolution={schema_evolution}")
@@ -1413,7 +1506,9 @@ def validate_evolution_table(conn, table_path, expected_spec):
                 elif query_name == 'snapshot_count':
                     # Simplified snapshot validation - just check if table has data (indicates successful evolution)
                     try:
-                        result = conn.execute(f"SELECT COUNT(*) FROM iceberg_scan('{table_path}', allow_moved_paths := true)").fetchone()
+                        result = conn.execute(
+                            f"SELECT COUNT(*) FROM iceberg_scan('{table_path}')"
+                        )
                         has_data = result[0] > 0 if result else False
                         actual_snapshots = 1 if has_data else 0  # Simplified: just check if evolution succeeded
                     except Exception:
@@ -1467,7 +1562,10 @@ def validate_table_worker(table_path, expected_spec, full_content_validation):
     finally:
         conn.close()
 
-def validate_tables(warehouse_path, specs_path, full_content_validation=False, num_parallel=1, minimal=False, primitives_only=False):
+def validate_tables(
+    warehouse_path, specs_path, full_content_validation=False,
+    num_parallel=1, minimal=False, primitives_only=False
+):
     """Validate all tables in warehouse against specifications"""
     specs = load_table_specs(specs_path)
     warehouse = Path(warehouse_path)
@@ -1494,7 +1592,9 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
     print(f"\nExpected tables from specs:")
 
     if 'single_type_tables' in specs:
-        expected_single_type = extract_expected_single_type_tables(specs, minimal=minimal, primitives_only=primitives_only)
+        expected_single_type = extract_expected_single_type_tables(
+            specs, minimal=minimal, primitives_only=primitives_only
+        )
         all_expected.extend(expected_single_type)
         print(f"  Single-type tables: {len(expected_single_type)}")
     else:
@@ -1540,7 +1640,13 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
             namespace = 'evolution'
         else:
             # Default namespace detection
-            if table_name.startswith('unpart_') and any(pattern in table_name for pattern in ['insert_heavy', 'update_heavy', 'delete_heavy', 'mixed_chaos', 'batch_replace', 'gradual_growth', 'burst_ops', 'truncate_cycles']):
+            if (
+                table_name.startswith('unpart_') and
+                any(
+                    pattern in table_name
+                    for pattern in ['insert', 'update', 'delete', 'mixed', 'batch', 'gradual', 'burst', 'truncate']
+                )
+            ):
                 namespace = 'write_pattern'
             elif table_name.startswith('part_'):
                 namespace = 'partitioned'
@@ -1581,7 +1687,10 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
 
                 # Print result immediately with full details
                 if result['valid']:
-                    print(f"✅ VALID: {table_name} ({result.get('row_count', 0)} rows, {result.get('column_count', 0)} cols)")
+                    print(
+                        f"✅ VALID: {table_name} "
+                        f"({result.get('row_count', 0)} rows, {result.get('column_count', 0)} cols)"
+                    )
                 else:
                     print(f"❌ INVALID: {table_name}")
                     expected = result.get('expected_spec', {})
@@ -1589,9 +1698,15 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
                     if result.get('error'):
                         print(f"    Error: {result['error'][:200]}")
                     if not result.get('row_count_valid', True):
-                        print(f"    Row count: expected {expected.get('expected_rows', '?')}, got {result.get('row_count', 0)}")
+                        print(
+                            f"    Row count: expected {expected.get('expected_rows', '?')}, "
+                            f"got {result.get('row_count', 0)}"
+                        )
                     if not result.get('column_count_valid', True):
-                        print(f"    Column count: expected {expected.get('schema_columns', '?')}, got {result.get('column_count', 0)}")
+                        print(
+                            f"    Column count: expected {expected.get('schema_columns', '?')}, "
+                            f"got {result.get('column_count', 0)}"
+                        )
                     if not result.get('content_valid', True):
                         content_val = result.get('content_validation', {})
                         if 'error' in content_val:
@@ -1606,9 +1721,15 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
                         if 'error' in meta_val:
                             print(f"    Metadata error: {meta_val['error'][:200]}")
                         else:
-                            print(f"    Snapshots: expected ~{meta_val.get('expected_commits', 0)}, got {meta_val.get('snapshots_count', 0)}")
+                            print(
+                                f"    Snapshots: expected ~{meta_val.get('expected_commits', 0)}, "
+                                f"got {meta_val.get('actual_commits', 0)}"
+                            )
                             if not meta_val.get('version_valid', True):
-                                print(f"    Version: expected v{meta_val.get('expected_version', '?')}, got v{meta_val.get('actual_version', '?')}")
+                                print(
+                                    f"    Version: expected v{meta_val.get('expected_version', '?')}, "
+                                    f"got v{meta_val.get('actual_version', '?')}"
+                                )
                     if not result.get('delete_valid', True):
                         delete_info = result.get('delete_info', 'No delete info available')
                         print(f"    Delete files: {delete_info}")
@@ -1624,9 +1745,15 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
                             print(f"    Parquet: {pq_val['error']}")
                         else:
                             if not pq_val.get('compression_valid', True):
-                                print(f"    Compression: expected {pq_val.get('expected_compression')}, got {pq_val.get('actual_compression')}")
+                                print(
+                                    f"    Compression: expected {pq_val.get('expected_compression')}, "
+                                    f"got {pq_val.get('actual_compression')}"
+                                )
                             if not pq_val.get('encoding_valid', True):
-                                print(f"    Encoding: expected {pq_val.get('expected_encoding')}, got {pq_val.get('actual_encodings')}")
+                                print(
+                                    f"    Encoding: expected {pq_val.get('expected_encoding')}, "
+                                    f"got {pq_val.get('actual_encoding')}"
+                                )
 
                     # If no specific errors were found, print full result for debugging
                     if (result.get('row_count_valid', True) and
@@ -1638,7 +1765,10 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
                         result.get('path_style_valid', True) and
                         result.get('parquet_valid', True) and
                         not result.get('error')):
-                        print(f"    DEBUG: Marked invalid but no specific errors. Full result keys: {list(result.keys())}")
+                        print(
+                            f"    DEBUG: Marked invalid but no specific errors. "
+                            f"Full result keys: {list(result.keys())}"
+                        )
     else:
         # Sequential validation
         for table_path, expected_spec in tables_to_validate:
@@ -1648,16 +1778,25 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
 
             # Print result immediately with full details
             if result['valid']:
-                print(f"✅ VALID: {expected_spec['name']} ({result.get('row_count', 0)} rows, {result.get('column_count', 0)} cols)")
+                print(
+                    f"✅ VALID: {expected_spec['name']} "
+                    f"({result.get('row_count', 0)} rows, {result.get('column_count', 0)} cols)"
+                )
             else:
                 print(f"❌ INVALID: {expected_spec['name']}")
 
                 if result.get('error'):
                     print(f"    Error: {result['error'][:200]}")
                 if not result.get('row_count_valid', True):
-                    print(f"    Row count: expected {expected_spec.get('expected_rows', '?')}, got {result.get('row_count', 0)}")
+                    print(
+                        f"    Row count: expected {expected.get('expected_rows', '?')}, "
+                        f"got {result.get('row_count', 0)}"
+                    )
                 if not result.get('column_count_valid', True):
-                    print(f"    Column count: expected {expected_spec.get('schema_columns', '?')}, got {result.get('column_count', 0)}")
+                    print(
+                        f"    Column count: expected {expected.get('schema_columns', '?')}, "
+                        f"got {result.get('column_count', 0)}"
+                    )
                 if not result.get('content_valid', True):
                     content_val = result.get('content_validation', {})
                     if 'error' in content_val:
@@ -1672,9 +1811,15 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
                     if 'error' in meta_val:
                         print(f"    Metadata error: {meta_val['error'][:200]}")
                     else:
-                        print(f"    Snapshots: expected ~{meta_val.get('expected_commits', 0)}, got {meta_val.get('snapshots_count', 0)}")
+                        print(
+                            f"    Snapshots: expected ~{meta_val.get('expected_commits', 0)}, "
+                            f"got {meta_val.get('actual_commits', 0)}"
+                        )
                         if not meta_val.get('version_valid', True):
-                            print(f"    Version: expected v{meta_val.get('expected_version', '?')}, got v{meta_val.get('actual_version', '?')}")
+                            print(
+                                f"    Version: expected v{meta_val.get('expected_version', '?')}, "
+                                f"got v{meta_val.get('actual_version', '?')}"
+                            )
                 if not result.get('delete_valid', True):
                     delete_info = result.get('delete_info', 'No delete info available')
                     print(f"    Delete files: {delete_info}")
@@ -1690,9 +1835,15 @@ def validate_tables(warehouse_path, specs_path, full_content_validation=False, n
                         print(f"    Parquet: {pq_val['error']}")
                     else:
                         if not pq_val.get('compression_valid', True):
-                            print(f"    Compression: expected {pq_val.get('expected_compression')}, got {pq_val.get('actual_compression')}")
+                            print(
+                                f"    Compression: expected {pq_val.get('expected_compression')}, "
+                                f"got {pq_val.get('actual_compression')}"
+                            )
                         if not pq_val.get('encoding_valid', True):
-                            print(f"    Encoding: expected {pq_val.get('expected_encoding')}, got {pq_val.get('actual_encodings')}")
+                            print(
+                                f"    Encoding: expected {pq_val.get('expected_encoding')}, "
+                                f"got {pq_val.get('actual_encoding')}"
+                            )
 
                 # If no specific errors were found, print full result for debugging
                 if (result.get('row_count_valid', True) and
@@ -1762,7 +1913,10 @@ class DuckDBValidator(TableValidator):
     def validate_tables(self, num_parallel: int = 1, full_content_validation: bool = False) -> dict:
         """Validate all tables using DuckDB"""
         # Use the existing validate_tables function with minimal=True
-        success = validate_tables(self.warehouse_path, self.specs_path, full_content_validation, num_parallel, minimal=True, primitives_only=False)
+        success = validate_tables(
+            self.warehouse_path, self.specs_path, full_content_validation,
+            num_parallel, minimal, primitives_only
+        )
         return {'success_rate': 100.0 if success else 0.0}
 
     def validate_table(self, table_name: str, expected_spec: dict) -> dict:

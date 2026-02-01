@@ -16,7 +16,11 @@ def load_table_specs(yaml_path, minimal=False):
 
     # Filter out time types if minimal mode
     if minimal:
-        all_types = [t for t in all_types if not ('time' in t.get('name', '') and t.get('name') not in ['timestamp', 'timestamptz'])]
+        # Exclude time types except timestamp/timestamptz
+        all_types = [
+            t for t in all_types
+            if not ('time' in t.get('name', '') and t.get('name') not in ['timestamp', 'timestamptz'])
+        ]
         all_types = [t for t in all_types if t.get('name') not in ['uuid', 'fixed_16']]
 
     # Generate table specs

@@ -39,18 +39,41 @@ def _generate_tables_for_specs(generator, args):
     specs_file = os.path.basename(args.specs).lower()
 
     if 'simple' in specs_file:
-        generator.generate_simple_tables(args.num_parallel, minimal=args.minimal, random_count=args.random, delete_existing=args.delete_existing)
+        generator.generate_simple_tables(
+            args.num_parallel,
+            minimal=args.minimal,
+            random_count=args.random,
+            delete_existing=args.delete_existing
+        )
     elif 'write_pattern' in specs_file:
-        generator.generate_write_pattern_tables(args.num_parallel, random_count=args.random, delete_existing=args.delete_existing)
+        generator.generate_write_pattern_tables(
+            args.num_parallel,
+            random_count=args.random,
+            delete_existing=args.delete_existing
+        )
     elif 'partitioned' in specs_file:
-        generator.generate_partitioned_tables(args.num_parallel, random_count=args.random, minimal=args.minimal, delete_existing=args.delete_existing)
+        generator.generate_partitioned_tables(
+            args.num_parallel,
+            random_count=args.random,
+            minimal=args.minimal,
+            delete_existing=args.delete_existing
+        )
     elif 'evolution' in specs_file:
-        generator.generate_evolution_tables(args.num_parallel, random_count=args.random, delete_existing=args.delete_existing)
+        generator.generate_evolution_tables(
+            args.num_parallel,
+            random_count=args.random,
+            delete_existing=args.delete_existing
+        )
     elif 'table_specs.yaml' in specs_file:
         _generate_all_table_types(generator, args)
     else:
         # Default to simple tables for backward compatibility
-        generator.generate_simple_tables(args.num_parallel, minimal=args.minimal, random_count=args.random, delete_existing=args.delete_existing)
+        generator.generate_simple_tables(
+            args.num_parallel,
+            minimal=args.minimal,
+            random_count=args.random,
+            delete_existing=args.delete_existing
+        )
 
 def _generate_all_table_types(generator, args):
     """Generate all table types when using main table_specs.yaml."""
@@ -60,22 +83,39 @@ def _generate_all_table_types(generator, args):
     print("\n" + "="*60)
     print("GENERATING SIMPLE TABLES")
     print("="*60)
-    generator.generate_simple_tables(args.num_parallel, minimal=args.minimal, random_count=args.random, delete_existing=args.delete_existing)
+    generator.generate_simple_tables(
+        args.num_parallel,
+        minimal=args.minimal,
+        random_count=args.random,
+        delete_existing=args.delete_existing
+    )
 
     # Generate write-pattern tables
     print("\n" + "="*60)
     print("GENERATING WRITE-PATTERN TABLES")
     print("="*60)
-    generator.generate_write_pattern_tables(args.num_parallel, random_count=args.random, delete_existing=False)  # Don't delete again
+    generator.generate_write_pattern_tables(
+        args.num_parallel,
+        random_count=args.random,
+        delete_existing=False  # Don't delete again
+    )
 
     # Generate partitioned tables (PySpark only)
     if args.backend == 'pyspark':
         print("\n" + "="*60)
         print("GENERATING PARTITIONED TABLES")
         print("="*60)
-        generator.generate_partitioned_tables(args.num_parallel, random_count=args.random, minimal=args.minimal, delete_existing=False)  # Don't delete again
+        generator.generate_partitioned_tables(
+            args.num_parallel,
+            random_count=args.random,
+            minimal=args.minimal,
+            delete_existing=False  # Don't delete again
+        )
     else:
-        print(f"\nSkipping partitioned tables - {args.backend} backend does not support partitioned tables")
+        print(
+            f"\nSkipping partitioned tables - {args.backend} backend "
+            "does not support partitioned tables"
+        )
 
 def main():
     parser = argparse.ArgumentParser(
@@ -95,10 +135,12 @@ Examples:
   python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml
 
   # Generate write-pattern tables with PySpark (parallel)
-  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/write_patterns.yaml --num-parallel 4
+  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse \
+      --specs specs/write_patterns.yaml --num-parallel 4
 
   # Generate partitioned tables with PySpark
-  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/partitioned.yaml --num-parallel 8
+  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse \
+      --specs specs/partitioned.yaml --num-parallel 8
 
   # Generate minimal set with any backend
   python3 cli.py generate --backend polars --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal
@@ -303,7 +345,10 @@ Examples:
                 else:
                     print("\n✅ Validation completed successfully")
             except FileNotFoundError:
-                print("\n❌ Error: Validator script not found. Ensure validator/local_duckdb/validator_duckdb.py exists.")
+                print(
+                    "\n❌ Error: Validator script not found. "
+                    "Ensure validator/local_duckdb/validator_duckdb.py exists."
+                )
             except Exception as e:
                 print(f"\n❌ Error running validator: {e}")
 

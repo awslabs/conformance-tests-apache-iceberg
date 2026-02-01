@@ -146,7 +146,13 @@ class PyIcebergGenerator(TableGenerator):
 
             print(f"\nCompleted: {success_count}/{len(tables_to_delete)} tables deleted successfully")
 
-    def generate_simple_tables(self, num_parallel: int = 1, minimal: bool = False, random_count: int = None, delete_existing: bool = False):
+    def generate_simple_tables(
+        self,
+        num_parallel: int = 1,
+        minimal: bool = False,
+        random_count: int = None,
+        delete_existing: bool = False
+    ):
         """Generate simple single-type tables"""
         table_specs = load_table_specs(self.specs_path, minimal=minimal)
 
@@ -243,11 +249,22 @@ class PyIcebergGenerator(TableGenerator):
 
         return False
 
-    def generate_write_pattern_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
+    def generate_write_pattern_tables(
+        self,
+        num_parallel: int = 1,
+        random_count: int = None,
+        delete_existing: bool = False
+    ):
         """Write-pattern tables not supported in PyIceberg"""
         raise NotImplementedError("Write-pattern tables only supported in PySpark backend")
 
-    def generate_partitioned_tables(self, num_parallel: int = 1, random_count: int = None, minimal: bool = False, delete_existing: bool = False):
+    def generate_partitioned_tables(
+        self,
+        num_parallel: int = 1,
+        random_count: int = None,
+        minimal: bool = False,
+        delete_existing: bool = False
+    ):
         """Not supported in PyIceberg"""
         raise NotImplementedError("Partitioned tables not supported in PyIceberg backend")
 

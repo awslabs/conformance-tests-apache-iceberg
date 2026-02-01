@@ -76,8 +76,16 @@ def create_spark_session(warehouse_path, app_name=None):
         .config("spark.driver.maxResultSize", "8g") \
         .config("spark.executor.memory", "8g") \
         .config("spark.executor.memoryFraction", "0.8") \
-        .config("spark.driver.extraJavaOptions", "-XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+UseJVMCICompiler -Xmx16g") \
-        .config("spark.executor.extraJavaOptions", "-XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+UseJVMCICompiler") \
+        .config(
+            "spark.driver.extraJavaOptions",
+            "-XX:+UseG1GC -XX:MaxGCPauseMillis=200 "
+            "-XX:+UnlockExperimentalVMOptions -XX:+UseJVMCICompiler -Xmx16g"
+        ) \
+        .config(
+            "spark.executor.extraJavaOptions",
+            "-XX:+UseG1GC -XX:MaxGCPauseMillis=200 "
+            "-XX:+UnlockExperimentalVMOptions -XX:+UseJVMCICompiler"
+        ) \
         .config("spark.cleaner.periodicGC.interval", "30s") \
         .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
         .config("spark.sql.parquet.compression.codec", "snappy") \
@@ -115,8 +123,16 @@ def create_spark_session(warehouse_path, app_name=None):
             .config("spark.sql.catalog.s3tables.rest.signing-region", region) \
             .config("spark.sql.catalog.s3tables.io-impl", "org.apache.iceberg.aws.s3.S3FileIO") \
             .config("spark.sql.catalog.s3tables.rest-metrics-reporting-enabled", "false") \
-            .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialProvider") \
-            .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1,software.amazon.awssdk:bundle:2.28.11,software.amazon.awssdk:url-connection-client:2.28.11")
+            .config(
+                "spark.hadoop.fs.s3a.aws.credentials.provider",
+                "org.apache.hadoop.fs.s3a.SimpleAWSCredentialProvider"
+            ) \
+            .config(
+                "spark.jars.packages",
+                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1,"
+                "software.amazon.awssdk:bundle:2.28.11,"
+                "software.amazon.awssdk:url-connection-client:2.28.11"
+            )
     else:
         # Configure for local/HDFS with comprehensive file system settings
         # Ensure warehouse directory exists with proper permissions
@@ -221,13 +237,21 @@ def get_catalog_and_namespace(warehouse_path, table_type):
 def create_table_safe(spark, catalog, namespace, table_name, schema_fields, props_sql, partition_clause=""):
     """Create table with IF NOT EXISTS to handle race conditions in S3 Tables"""
     try:
-        create_sql = f"CREATE TABLE IF NOT EXISTS {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg {partition_clause} TBLPROPERTIES ({props_sql})"
+        create_sql = (
+            f"CREATE TABLE IF NOT EXISTS {catalog}.{namespace}.{table_name} "
+            f"({schema_fields}) USING iceberg {partition_clause} "
+            f"TBLPROPERTIES ({props_sql})"
+        )
         spark.sql(create_sql)
         return True
     except Exception as e:
         # If IF NOT EXISTS fails, try regular CREATE (for older Spark versions)
         try:
-            create_sql = f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg {partition_clause} TBLPROPERTIES ({props_sql})"
+            create_sql = (
+                f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+                f"({schema_fields}) USING iceberg {partition_clause} "
+                f"TBLPROPERTIES ({props_sql})"
+            )
             spark.sql(create_sql)
             return True
         except Exception as e2:
@@ -266,9 +290,18 @@ def disable_table_compaction(spark, catalog, namespace, table_name, warehouse_pa
         else:
             print(f"    → Using table properties for {catalog}.{namespace}.{table_name}")
             # For local tables, use table properties
-            spark.sql(f"ALTER TABLE {catalog}.{namespace}.{table_name} SET TBLPROPERTIES ('write.target-file-size-bytes'='268435456')")
-            spark.sql(f"ALTER TABLE {catalog}.{namespace}.{table_name} SET TBLPROPERTIES ('write.delete.target-file-size-bytes'='268435456')")
-            spark.sql(f"ALTER TABLE {catalog}.{namespace}.{table_name} SET TBLPROPERTIES ('write.merge.target-file-size-bytes'='268435456')")
+            spark.sql(
+                f"ALTER TABLE {catalog}.{namespace}.{table_name} "
+                f"SET TBLPROPERTIES ('write.target-file-size-bytes'='268435456')"
+            )
+            spark.sql(
+                f"ALTER TABLE {catalog}.{namespace}.{table_name} "
+                f"SET TBLPROPERTIES ('write.delete.target-file-size-bytes'='268435456')"
+            )
+            spark.sql(
+                f"ALTER TABLE {catalog}.{namespace}.{table_name} "
+                f"SET TBLPROPERTIES ('write.merge.target-file-size-bytes'='268435456')"
+            )
         print(f"    → Disabled compaction for {catalog}.{namespace}.{table_name}")
     except Exception as e:
         print(f"    → Failed to disable compaction: {e}")
@@ -465,7 +498,12 @@ def create_spark_schema(table_spec):
             spark_type = MapType(key_type, value_type)
         else:
             # Default for unknown types including time_col, uuid_col, fixed_col
-            spark_type = StringType() if 'time' in field_name else BinaryType() if 'uuid' in field_name or 'fixed' in field_name else StringType()
+            if 'time' in field_name:
+                spark_type = StringType()
+            elif 'uuid' in field_name or 'fixed' in field_name:
+                spark_type = BinaryType()
+            else:
+                spark_type = StringType()
 
         fields.append(StructField(field_name, spark_type, True))
 
@@ -582,19 +620,40 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
                 elif value_type_str == 'boolean':
                     row_data[field_name] = {row_id: (row_id % 2) == 0, row_id + 1: ((row_id + 1) % 2) == 0}
                 elif value_type_str == 'binary':
-                    row_data[field_name] = {row_id: f"value_{row_id}".encode(), row_id + 1: f"value_{row_id + 1}".encode()}
+                    row_data[field_name] = {
+                        row_id: f"value_{row_id}".encode(),
+                        row_id + 1: f"value_{row_id + 1}".encode()
+                    }
                 elif value_type_str == 'date':
-                    row_data[field_name] = {row_id: date(2023, 1, min(28, (row_id % 28) + 1)), row_id + 1: date(2023, 1, min(28, ((row_id + 1) % 28) + 1))}
+                    row_data[field_name] = {
+                        row_id: date(2023, 1, min(28, (row_id % 28) + 1)),
+                        row_id + 1: date(2023, 1, min(28, ((row_id + 1) % 28) + 1))
+                    }
                 elif value_type_str == 'timestamp' or value_type_str == 'timestamptz':
-                    row_data[field_name] = {row_id: datetime(2023, 1, 1, hour=(row_id % 24)), row_id + 1: datetime(2023, 1, 1, hour=((row_id + 1) % 24))}
+                    row_data[field_name] = {
+                        row_id: datetime(2023, 1, 1, hour=(row_id % 24)),
+                        row_id + 1: datetime(2023, 1, 1, hour=((row_id + 1) % 24))
+                    }
                 elif value_type_str.startswith('decimal('):
-                    row_data[field_name] = {row_id: Decimal(f"{row_id}.{row_id % 100:02d}"), row_id + 1: Decimal(f"{row_id + 1}.{(row_id + 1) % 100:02d}")}
+                    row_data[field_name] = {
+                        row_id: Decimal(f"{row_id}.{row_id % 100:02d}"),
+                        row_id + 1: Decimal(f"{row_id + 1}.{(row_id + 1) % 100:02d}")
+                    }
                 elif value_type_str == 'uuid':
-                    row_data[field_name] = {row_id: uuid.UUID(int=row_id).bytes, row_id + 1: uuid.UUID(int=row_id + 1).bytes}
+                    row_data[field_name] = {
+                        row_id: uuid.UUID(int=row_id).bytes,
+                        row_id + 1: uuid.UUID(int=row_id + 1).bytes
+                    }
                 elif value_type_str == 'fixed' or value_type_str.startswith('fixed('):
-                    row_data[field_name] = {row_id: f"fixed_{row_id}".ljust(16, '0')[:16].encode(), row_id + 1: f"fixed_{row_id + 1}".ljust(16, '0')[:16].encode()}
+                    row_data[field_name] = {
+                        row_id: f"fixed_{row_id}".ljust(16, '0')[:16].encode(),
+                        row_id + 1: f"fixed_{row_id + 1}".ljust(16, '0')[:16].encode()
+                    }
                 elif value_type_str == 'time':
-                    row_data[field_name] = {row_id: f"{(row_id % 24):02d}:00:00", row_id + 1: f"{((row_id + 1) % 24):02d}:00:00"}
+                    row_data[field_name] = {
+                        row_id: f"{(row_id % 24):02d}:00:00",
+                        row_id + 1: f"{((row_id + 1) % 24):02d}:00:00"
+                    }
                 else:
                     row_data[field_name] = {row_id: f"value_{row_id}", row_id + 1: f"value_{row_id + 1}"}
             else:
@@ -706,7 +765,9 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
         simple_specs = load_table_specs('specs/simple.yaml')
         for spec in simple_specs:
             if spec['name'] == table_name:
-                return create_single_type_table(spark, warehouse_path, table_name, spec, delete_existing=delete_existing)
+                return create_single_type_table(
+                    spark, warehouse_path, table_name, spec, delete_existing=delete_existing
+                )
     except Exception:
         pass  # Ignore errors
 
@@ -715,7 +776,10 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
         write_pattern_specs = load_table_specs('specs/write_patterns.yaml')
         for spec in write_pattern_specs:
             if spec['name'] == table_name:
-                return create_comprehensive_table(spark, warehouse_path, table_name, spec['pattern'], delete_existing=delete_existing)
+                return create_comprehensive_table(
+                    spark, warehouse_path, table_name, spec['pattern'],
+                    delete_existing=delete_existing
+                )
     except Exception:
         pass  # Ignore errors
 
@@ -736,7 +800,10 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
                         # Found exact match - create the table using YAML data
                         partition_spec_list = transform['spec']  # This is already a list from YAML
                         partition_spec_str = ','.join(partition_spec_list)
-                        return create_partitioned_table(spark, warehouse_path, table_name, pattern['name'], partition_spec_str, delete_existing=delete_existing)
+                        return create_partitioned_table(
+                            spark, warehouse_path, table_name, pattern['name'],
+                            partition_spec_str, delete_existing=delete_existing
+                        )
     except Exception as e:
         print(f"Error checking partitioned specs: {e}")
 
@@ -826,7 +893,11 @@ def create_single_type_table(spark, warehouse_path, table_name, table_spec, coun
                 batch_df.createOrReplaceTempView("temp_create_data")
                 schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in batch_df.schema.fields])
                 props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
-                spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
+                spark.sql(
+                    f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+                    f"({schema_fields}) USING iceberg "
+                    f"TBLPROPERTIES ({props_sql})"
+                )
                 # Insert data
                 batch_df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
             else:
@@ -987,7 +1058,11 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
 
                     props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
 
-                    spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
+                    spark.sql(
+                        f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+                        f"({schema_fields}) USING iceberg "
+                        f"TBLPROPERTIES ({props_sql})"
+                    )
 
                     # Insert data
 
@@ -1005,7 +1080,11 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             df.createOrReplaceTempView("temp_create_data")
             schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in df.schema.fields])
             props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
-            spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
+            spark.sql(
+                f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+                f"({schema_fields}) USING iceberg "
+                f"TBLPROPERTIES ({props_sql})"
+            )
             # Insert data
             df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
 
@@ -1045,7 +1124,11 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
 
                     props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
 
-                    spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
+                    spark.sql(
+                        f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+                        f"({schema_fields}) USING iceberg "
+                        f"TBLPROPERTIES ({props_sql})"
+                    )
 
                     # Insert data
 
@@ -1065,7 +1148,11 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                     batch_df.createOrReplaceTempView("temp_create_data")
                     schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in batch_df.schema.fields])
                     props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
-                    spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
+                    spark.sql(
+                        f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+                        f"({schema_fields}) USING iceberg "
+                        f"TBLPROPERTIES ({props_sql})"
+                    )
                     # Insert data
                     batch_df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
                 else:
@@ -1096,12 +1183,20 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             df = generate_spark_data(spark, schema_spec, 10000)
             df = df.repartition(num_files_per_commit)
             props = get_table_properties(table_name)
-            props.update({'write.delete.mode': 'merge-on-read', 'write.update.mode': 'merge-on-read', 'write.merge.mode': 'merge-on-read'})
+            props.update({
+            'write.delete.mode': 'merge-on-read',
+            'write.update.mode': 'merge-on-read',
+            'write.merge.mode': 'merge-on-read'
+        })
             # Create table with SQL first
             df.createOrReplaceTempView("temp_create_data")
             schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in df.schema.fields])
             props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
-            spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
+            spark.sql(
+                f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+                f"({schema_fields}) USING iceberg "
+                f"TBLPROPERTIES ({props_sql})"
+            )
             # Insert data
             df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
 
@@ -1119,7 +1214,10 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
                     delete_start = i * 2000 + 1
                     delete_end = (i + 1) * 2000
                     try:
-                        spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name} WHERE id BETWEEN {delete_start} AND {delete_end}")
+                        spark.sql(
+                            f"DELETE FROM {catalog}.{namespace}.{table_name} "
+                            f"WHERE id >= {start_id} AND id < {end_id}"
+                        )
                         # Insert updated rows
                         df_updated = generate_spark_data(spark, schema_spec, 2000, row_offset=delete_start-1)
                         df_updated = df_updated.repartition(num_files_per_commit)
@@ -1151,7 +1249,11 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
 
 
-            spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
+            spark.sql(
+                f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+                f"({schema_fields}) USING iceberg "
+                f"TBLPROPERTIES ({props_sql})"
+            )
 
 
             # Insert data
@@ -1185,7 +1287,11 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             df.createOrReplaceTempView("temp_create_data")
             schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in df.schema.fields])
             props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
-            spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
+            spark.sql(
+                f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+                f"({schema_fields}) USING iceberg "
+                f"TBLPROPERTIES ({props_sql})"
+            )
             # Insert data
             df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
 
@@ -1218,12 +1324,20 @@ def create_comprehensive_table(spark, warehouse_path, table_name, pattern_name, 
             df = generate_spark_data(spark, schema_spec, 4000)
             df = df.repartition(num_files_per_commit)
             props = get_table_properties(table_name)
-            props.update({'write.delete.mode': 'merge-on-read', 'write.update.mode': 'merge-on-read', 'write.merge.mode': 'merge-on-read'})
+            props.update({
+            'write.delete.mode': 'merge-on-read',
+            'write.update.mode': 'merge-on-read',
+            'write.merge.mode': 'merge-on-read'
+        })
             # Create table with SQL first
             df.createOrReplaceTempView("temp_create_data")
             schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in df.schema.fields])
             props_sql = ", ".join([f"'{k}' = '{v}'" for k, v in props.items()])
-            spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg TBLPROPERTIES ({props_sql})")
+            spark.sql(
+                f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+                f"({schema_fields}) USING iceberg "
+                f"TBLPROPERTIES ({props_sql})"
+            )
             # Insert data
             df.write.format("iceberg").mode("append").insertInto(f"{catalog}.{namespace}.{table_name}")
 
@@ -1296,7 +1410,10 @@ def generate_single_tables(args, spark, warehouse_path):
                 batch_end = min(batch_start + batch_size, len(table_specs))
                 batch = table_specs[batch_start:batch_end]
 
-                futures = {executor.submit(create_table_worker_with_session, warehouse_path, spec): spec for spec in batch}
+                futures = {
+                    executor.submit(create_table_worker_with_session, warehouse_path, spec): spec
+                    for spec in table_specs
+                }
                 for future in as_completed(futures):
                     table_name, success = future.result()
                     if success:
@@ -1331,7 +1448,9 @@ def create_write_pattern_worker_with_session(warehouse_path, table_name, pattern
 def create_write_pattern_worker(spark, warehouse_path, table_name, pattern, delete_existing=True):
     """Worker function to create a write-pattern table using shared Spark session"""
     try:
-        success = create_comprehensive_table(spark, warehouse_path, table_name, pattern, delete_existing=delete_existing)
+        success = create_comprehensive_table(
+            spark, warehouse_path, table_name, pattern, delete_existing=delete_existing
+        )
         return (table_name, success)
     except Exception as e:
         return (table_name, False)
@@ -1365,7 +1484,12 @@ def generate_write_pattern_tables(args, spark, warehouse_path):
 
     if args.num_parallel > 1:
         with ThreadPoolExecutor(max_workers=args.num_parallel) as executor:
-            futures = {executor.submit(create_write_pattern_worker_with_session, warehouse_path, name, pat): name for name, pat in tasks}
+            futures = {
+                executor.submit(
+                    create_write_pattern_worker_with_session, warehouse_path, name, pattern
+                ): (name, pattern)
+                for name, pattern in table_specs
+            }
             for future in as_completed(futures):
                 try:
                     table_name, success = future.result()
@@ -1519,7 +1643,10 @@ def prepare_partitioned_df(df, sort_cols, num_partitions):
     # For identity transforms, sort within partitions
     return df.repartition(num_partitions).sortWithinPartitions(*sort_cols)
 
-def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, partition_spec, counter=None, delete_existing=True):
+def create_partitioned_table(
+    spark, warehouse_path, table_name, pattern_name, partition_spec,
+    counter=None, delete_existing=False
+):
     """Create a partitioned table"""
     counter_str = f" ({counter})" if counter else ""
 
@@ -1528,10 +1655,16 @@ def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, pa
 
     # Check if table exists and skip if delete_existing is False
     if not delete_existing and table_exists(spark, catalog, namespace, table_name):
-        print(f"Skipping existing table: {table_name} (pattern: {pattern_name}, partition: {partition_spec}){counter_str}")
+        print(
+            f"Skipping existing table: {table_name} "
+            f"(pattern: {pattern_name}, partition: {partition_spec})"
+        )
         return True
 
-    print(f"Creating partitioned table: {table_name} (pattern: {pattern_name}, partition: {partition_spec}){counter_str}")
+    print(
+        f"Creating partitioned table: {table_name} "
+        f"(pattern: {pattern_name}, partition: {partition_spec})"
+    )
 
     try:
         # Create namespace if needed
@@ -1602,7 +1735,10 @@ def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, pa
         # Create table with schema (no CTAS to avoid staged create)
         schema_df = generate_partitioned_data(spark, schema_spec, 1, 0)
         schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in schema_df.schema.fields])
-        spark.sql(f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg PARTITIONED BY ({', '.join(partition_spec_sql)}) {props_clause}")
+        spark.sql(
+            f"CREATE TABLE {catalog}.{namespace}.{table_name} "
+            f"({schema_fields}) USING iceberg "
+        )
 
         # Apply pattern-specific logic
         if pattern_name == "insert_heavy":
@@ -1666,7 +1802,10 @@ def create_partitioned_table(spark, warehouse_path, table_name, pattern_name, pa
                     start_id = 100000 + (chunk * 10000) + 1
                     end_id = 100000 + ((chunk + 1) * 10000)
                     try:
-                        spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name} WHERE id BETWEEN {start_id} AND {end_id}")
+                        spark.sql(
+                            f"DELETE FROM {catalog}.{namespace}.{table_name} "
+                            f"WHERE id >= {start_id} AND id < {end_id}"
+                        )
                         print(f"✓ DELETE chunk {chunk+1}/5 for {table_name}")
                     except Exception as e:
                         print(f"✗ DELETE failed for {table_name}: {e}")
@@ -1708,7 +1847,10 @@ def create_partitioned_table_worker_with_session(warehouse_path, table_name, pat
 def create_partitioned_table_worker(spark, warehouse_path, table_name, pattern, partition_spec, delete_existing=True):
     """Worker function for parallel partitioned table creation using shared Spark session"""
     try:
-        result = create_partitioned_table(spark, warehouse_path, table_name, pattern, partition_spec, delete_existing=delete_existing)
+        result = create_partitioned_table(
+            spark, warehouse_path, table_name, pattern, partition_spec,
+            counter=counter, delete_existing=delete_existing
+        )
         return (table_name, result)
     except Exception as e:
         return (table_name, False)
@@ -1734,7 +1876,10 @@ def generate_partitioned_tables(args, spark, warehouse_path):
     for transform in minimal_transforms:
         for pattern in patterns:
             for delete_mode in delete_modes:
-                transform_name = "_".join(transform).replace('(', '_').replace(')', '').replace('[', '').replace(']', '').replace(',', '_').replace(' ', '')
+                transform_name = (
+                    "_".join(transform).replace('(', '_').replace(')', '')
+                    .replace('[', '').replace(']', '').replace(',', '_')
+                )
                 table_name = f"part_{transform_name}_{pattern}_{delete_mode}"
                 tables.append((table_name, pattern, transform))
 
@@ -1771,7 +1916,10 @@ def generate_partitioned_tables(args, spark, warehouse_path):
         try:
             for i, (table_name, pattern, partition_spec) in enumerate(tables, 1):
                 try:
-                    if create_partitioned_table(spark, warehouse_path, table_name, pattern, partition_spec, f"{i}/{total}"):
+                    if create_partitioned_table(
+                        spark, warehouse_path, table_name, pattern, partition_spec,
+                        counter=counter, delete_existing=delete_existing
+                    ):
                         created += 1
                         print(f"✓ Created {table_name} ({created}/{total})")
                 except Exception as e:
@@ -1787,8 +1935,15 @@ def main():
     parser.add_argument('--warehouse-path', required=True, help='Warehouse path or S3 table bucket ARN')
     parser.add_argument('--specs', required=True, help='Path to table specs YAML file')
     parser.add_argument('--num-parallel', type=int, default=1, help='Number of parallel workers')
-    parser.add_argument('--table-type', choices=['simple', 'write-patterns', 'partitioned', 'all', 'minimal'], default='simple',
-                       help='Type of tables to generate: simple (all combos), write-patterns (comprehensive), partitioned, all (all types), or minimal (80 tables: plain+snappy+v2 only)')
+    parser.add_argument(
+        '--table-type',
+        choices=['simple', 'write-patterns', 'partitioned', 'all', 'minimal'],
+        default='simple',
+                           help=(
+                               'Type of tables to generate: simple (all combos), '
+                               'write-patterns (comprehensive), partitioned, all, or minimal'
+                           )
+                       )
 
     args = parser.parse_args()
 
@@ -2152,7 +2307,10 @@ def execute_evolution_operation(spark, catalog, namespace, table_name, operation
         elif op_type == 'change_compression':
             # Change compression codec
             to_codec = operation['to']
-            spark.sql(f"ALTER TABLE {full_table_name} SET TBLPROPERTIES ('write.parquet.compression-codec' = '{to_codec}')")
+            spark.sql(
+                f"ALTER TABLE {full_table_name} "
+                f"SET TBLPROPERTIES ('write.parquet.compression-codec' = '{codec}')"
+            )
             print(f"    → Changed compression to {to_codec}")
 
         elif op_type == 'change_encoding':
@@ -2165,7 +2323,10 @@ def execute_evolution_operation(spark, catalog, namespace, table_name, operation
             # Change delete mode
             to_mode = operation['to']
             if to_mode == 'merge-on-read':
-                spark.sql(f"ALTER TABLE {full_table_name} SET TBLPROPERTIES ('write.delete.mode' = 'merge-on-read', 'write.update.mode' = 'merge-on-read')")
+                spark.sql(
+                    f"ALTER TABLE {full_table_name} "
+                    f"SET TBLPROPERTIES ('write.delete.mode' = '{delete_mode}')"
+                )
             else:
                 spark.sql(f"ALTER TABLE {full_table_name} SET TBLPROPERTIES ('write.delete.mode' = 'copy-on-write')")
             print(f"    → Changed delete mode to {to_mode}")
