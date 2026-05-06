@@ -35,14 +35,14 @@ import duckdb
 import pyarrow.parquet as pq
 import yaml
 
-from validator import TableValidator
+from iceberg_fuzzer.validator import TableValidator
 
-def load_table_specs(yaml_path):
+def _load_table_specs(yaml_path):
     """Load table specifications from YAML file"""
     with open(yaml_path, 'r') as f:
         return yaml.safe_load(f)
 
-def extract_expected_single_type_tables(specs, minimal=False, primitives_only=False):
+def _extract_expected_single_type_tables(specs, minimal=False, primitives_only=False):
     """Extract expected single-type table specifications"""
     tables = []
 
@@ -98,7 +98,7 @@ def extract_expected_single_type_tables(specs, minimal=False, primitives_only=Fa
 
     return tables
 
-def extract_expected_write_pattern_tables(specs):
+def _extract_expected_write_pattern_tables(specs):
     """Extract expected write-pattern table specifications from write_patterns.yaml"""
 
     tables = []
@@ -151,7 +151,7 @@ def extract_expected_write_pattern_tables(specs):
 
     return tables
 
-def extract_expected_partitioned_tables(specs):
+def _extract_expected_partitioned_tables(specs):
     """Extract expected partitioned table specifications from partitioned.yaml"""
 
     tables = []
@@ -257,7 +257,7 @@ def extract_expected_partitioned_tables(specs):
 
     return tables
 
-def extract_expected_evolution_tables(specs_path):
+def _extract_expected_evolution_tables(specs_path):
     """Extract expected evolution table specifications from evolution.yaml"""
 
     tables = []
@@ -336,7 +336,7 @@ def extract_expected_evolution_tables(specs_path):
 
     return tables
 
-def validate_delete_file_types(table_path, delete_mode):
+def _validate_delete_file_types(table_path, delete_mode):
     """Validate that the correct delete files are present for the delete mode"""
 
     table_path = Path(table_path)
@@ -388,7 +388,7 @@ def validate_delete_file_types(table_path, delete_mode):
     except Exception as e:
         return False, f"Error reading metadata: {e}"
 
-def generate_primitive_data(data_type, row_id):
+def _generate_primitive_data(data_type, row_id):
     """Generate expected data for primitive types."""
     if data_type == 'boolean':
         return (row_id % 2) == 0
@@ -418,7 +418,7 @@ def generate_primitive_data(data_type, row_id):
         return time(hour=(row_id % 24), minute=(row_id % 60))
     return f"value_{row_id}"
 
-def generate_list_element(element_type, row_id, offset):
+def _generate_list_element(element_type, row_id, offset):
     """Generate a single list element based on type."""
     if element_type == 'boolean':
         return True if offset == 0 else (False if offset == 1 else (row_id % 2) == 0)
@@ -448,11 +448,11 @@ def generate_list_element(element_type, row_id, offset):
         return f"{((row_id + offset) % 24):02d}:00:00"
     return f"item_{row_id}_{offset}"
 
-def generate_list_data(element_type, row_id):
+def _generate_list_data(element_type, row_id):
     """Generate expected data for list types."""
-    return [generate_list_element(element_type, row_id, j) for j in range(3)]
+    return [_generate_list_element(element_type, row_id, j) for j in range(3)]
 
-def generate_map_value(value_type, key):
+def _generate_map_value(value_type, key):
     """Generate a single map value based on type."""
     if value_type == 'string':
         return f"value_{key}"
@@ -482,23 +482,23 @@ def generate_map_value(value_type, key):
         return f"{(key % 24):02d}:00:00"
     return f"value_{key}"
 
-def generate_map_data(value_type, row_id):
+def _generate_map_data(value_type, row_id):
     """Generate expected data for map types."""
-    return {row_id: generate_map_value(value_type, row_id),
-            row_id + 1: generate_map_value(value_type, row_id + 1)}
+    return {row_id: _generate_map_value(value_type, row_id),
+            row_id + 1: _generate_map_value(value_type, row_id + 1)}
 
-def generate_expected_single_type_data(data_type, row_id):
+def _generate_expected_single_type_data(data_type, row_id):
     """Generate expected data for a single data type."""
     if data_type.startswith('list_'):
         element_type = data_type[5:]
-        return generate_list_data(element_type, row_id)
+        return _generate_list_data(element_type, row_id)
     elif data_type.startswith('map_int_'):
         value_type = data_type[8:]
-        return generate_map_data(value_type, row_id)
+        return _generate_map_data(value_type, row_id)
     else:
-        return generate_primitive_data(data_type, row_id)
+        return _generate_primitive_data(data_type, row_id)
 
-def generate_expected_write_pattern_data(row_id):
+def _generate_expected_write_pattern_data(row_id):
     """Generate expected data for a write-pattern table row"""
 
     return {
@@ -515,7 +515,7 @@ def generate_expected_write_pattern_data(row_id):
         'list_int_col': [row_id, row_id + 1, row_id + 2]
     }
 
-def generate_expected_partitioned_data(row_id):
+def _generate_expected_partitioned_data(row_id):
     """Generate expected data for a partitioned table row"""
 
     categories = ['A', 'B', 'C', 'D', 'E']
@@ -547,7 +547,7 @@ def generate_expected_partitioned_data(row_id):
         'list_string_col': [f'item_{row_id}', f'item_{row_id + 1}']
     }
 
-def validate_parquet_properties(table_path, expected_spec):
+def _validate_parquet_properties(table_path, expected_spec):
     """Validate Parquet file compression and encoding"""
     try:
 
@@ -633,7 +633,7 @@ def validate_parquet_properties(table_path, expected_spec):
     except Exception as e:
         return {'valid': False, 'error': f'Failed to read parquet metadata: {str(e)}'}
 
-def validate_table_contents(conn, table_path, expected_spec):
+def _validate_table_contents(conn, table_path, expected_spec):
     """Validate actual table contents against expected data"""
     try:
         # Check ALL rows, not just a sample
@@ -660,7 +660,7 @@ def validate_table_contents(conn, table_path, expected_spec):
                     continue
 
                 expected_id = row_id
-                expected_value = generate_expected_single_type_data(expected_spec['data_type'], row_id)
+                expected_value = _generate_expected_single_type_data(expected_spec['data_type'], row_id)
 
                 if actual_row[0] != expected_id:
                     content_errors.append(f"Row {row_id}: ID mismatch - expected {expected_id}, got {actual_row[0]}")
@@ -764,7 +764,7 @@ def validate_table_contents(conn, table_path, expected_spec):
 
             elif expected_spec['type'] == 'write_pattern':
                 # Validate write-pattern table: comprehensive columns
-                expected_data = generate_expected_write_pattern_data(row_id)
+                expected_data = _generate_expected_write_pattern_data(row_id)
 
                 # Check key columns that we can validate easily
                 for col_idx, col_name in enumerate(columns):
@@ -799,7 +799,7 @@ def validate_table_contents(conn, table_path, expected_spec):
 
             elif expected_spec['type'] == 'partitioned':
                 # Validate partitioned table: comprehensive columns with partition fields
-                expected_data = generate_expected_partitioned_data(row_id)
+                expected_data = _generate_expected_partitioned_data(row_id)
 
                 # Check key columns
                 for col_idx, col_name in enumerate(columns):
@@ -861,7 +861,7 @@ def validate_table_contents(conn, table_path, expected_spec):
     except Exception as e:
         return {'valid': False, 'error': f"Content validation failed: {str(e)}"}
 
-def validate_delete_files(table_path, expected_spec):
+def _validate_delete_files(table_path, expected_spec):
     """Validate delete files and metadata for tables with delete operations"""
     try:
         table_dir = Path(table_path)
@@ -975,7 +975,7 @@ def validate_delete_files(table_path, expected_spec):
     except Exception as e:
         return {'valid': False, 'error': f"Delete file validation failed: {str(e)}"}
 
-def validate_iceberg_metadata(conn, table_path, expected_spec):
+def _validate_iceberg_metadata(conn, table_path, expected_spec):
     """Validate Iceberg metadata using DuckDB metadata functions"""
     try:
         # Get snapshots info
@@ -1038,7 +1038,7 @@ def validate_iceberg_metadata(conn, table_path, expected_spec):
             'metadata_accessible': False,
             'error': str(e)
         }
-def validate_basic_table_properties(conn, table_path, expected_spec):
+def _validate_basic_table_properties(conn, table_path, expected_spec):
     """Validate basic table properties: row count, column count, and schema."""
     # Try to scan the table
     print(f"    ✓ Checking table accessibility...")
@@ -1067,13 +1067,13 @@ def validate_basic_table_properties(conn, table_path, expected_spec):
         'column_count_valid': column_count_valid
     }
 
-def validate_evolution_properties(conn, table_path, expected_spec):
+def _validate_evolution_properties(conn, table_path, expected_spec):
     """Validate evolution-specific properties for evolution tables."""
     if expected_spec.get('type') != 'evolution':
         return {'valid': True, 'evolution_validation': {}}
 
     print(f"    ✓ Validating evolution-specific properties...")
-    evolution_validation = validate_evolution_table(conn, table_path, expected_spec)
+    evolution_validation = _validate_evolution_table(conn, table_path, expected_spec)
     evolution_valid = evolution_validation['valid']
 
     # Print evolution validation details
@@ -1097,18 +1097,18 @@ def validate_evolution_properties(conn, table_path, expected_spec):
 
     return {'valid': evolution_valid, 'evolution_validation': evolution_validation}
 
-def validate_parquet_properties_for_table(table_path, expected_spec):
+def _validate_parquet_properties_for_table(table_path, expected_spec):
     """Validate Parquet properties (compression & encoding) for single_type tables."""
     if expected_spec['type'] != 'single_type':
         return {'valid': True, 'parquet_validation': {}}
 
     print(f"    ✓ Validating Parquet compression and encoding...")
-    parquet_validation = validate_parquet_properties(table_path, expected_spec)
+    parquet_validation = _validate_parquet_properties(table_path, expected_spec)
     parquet_valid = parquet_validation.get('valid', True)
 
     return {'valid': parquet_valid, 'parquet_validation': parquet_validation}
 
-def determine_delete_mode(expected_spec):
+def _determine_delete_mode(expected_spec):
     """Determine delete mode from table name."""
     if expected_spec['type'] not in ['write_pattern', 'partitioned']:
         return None
@@ -1128,7 +1128,7 @@ def determine_delete_mode(expected_spec):
         print(f"      → Delete mode: {delete_mode}")
     return delete_mode
 
-def validate_partition_structure(table_path, expected_spec):
+def _validate_partition_structure(table_path, expected_spec):
     """Validate partition structure for partitioned tables."""
     if expected_spec['type'] != 'partitioned':
         return {'valid': True, 'partition_info': 'N/A', 'path_style_valid': True, 'path_style_info': 'N/A'}
@@ -1196,7 +1196,7 @@ def validate_partition_structure(table_path, expected_spec):
             'path_style_info': 'N/A'
         }
 
-def validate_delete_files(table_path, expected_spec, delete_mode):
+def _validate_delete_files(table_path, expected_spec, delete_mode):
     """Validate delete files for write-pattern and partitioned tables."""
     if not delete_mode:
         return {'valid': True, 'delete_info': 'No delete validation needed'}
@@ -1210,7 +1210,7 @@ def validate_delete_files(table_path, expected_spec, delete_mode):
         print(f"      → {delete_info}")
         return {'valid': False, 'delete_info': delete_info}
 
-    delete_validation = validate_delete_file_types(table_path, delete_mode)
+    delete_validation = _validate_delete_file_types(table_path, delete_mode)
     if isinstance(delete_validation, tuple):
         delete_valid = delete_validation[0]
         delete_info = delete_validation[1]
@@ -1221,7 +1221,7 @@ def validate_delete_files(table_path, expected_spec, delete_mode):
 
     return {'valid': delete_valid, 'delete_info': delete_info}
 
-def validate_iceberg_table(conn, table_path, expected_spec):
+def _validate_iceberg_table(conn, table_path, expected_spec):
     """Validate a single Iceberg table using DuckDB"""
     table_name = expected_spec.get('name', 'unknown')
     print(f"  Validating table: {table_name}")
@@ -1231,30 +1231,30 @@ def validate_iceberg_table(conn, table_path, expected_spec):
         conn.execute("SET unsafe_enable_version_guessing = true")
 
         # Validate basic properties
-        basic_props = validate_basic_table_properties(conn, table_path, expected_spec)
+        basic_props = _validate_basic_table_properties(conn, table_path, expected_spec)
 
         # Validate table contents
         print(f"    ✓ Validating table contents...")
-        content_validation = validate_table_contents(conn, table_path, expected_spec)
+        content_validation = _validate_table_contents(conn, table_path, expected_spec)
         content_valid = content_validation['valid']
 
         # Validate Iceberg metadata and snapshots
         print(f"    ✓ Validating Iceberg metadata and format version...")
-        metadata_validation = validate_iceberg_metadata(conn, table_path, expected_spec)
+        metadata_validation = _validate_iceberg_metadata(conn, table_path, expected_spec)
         metadata_valid = metadata_validation['valid']
 
         # Validate evolution-specific properties
-        evolution_result = validate_evolution_properties(conn, table_path, expected_spec)
+        evolution_result = _validate_evolution_properties(conn, table_path, expected_spec)
 
         # Validate Parquet properties
-        parquet_result = validate_parquet_properties_for_table(table_path, expected_spec)
+        parquet_result = _validate_parquet_properties_for_table(table_path, expected_spec)
 
         # Determine and validate delete mode
-        delete_mode = determine_delete_mode(expected_spec)
-        delete_result = validate_delete_files(table_path, expected_spec, delete_mode)
+        delete_mode = _determine_delete_mode(expected_spec)
+        delete_result = _validate_delete_files(table_path, expected_spec, delete_mode)
 
         # Validate partitions
-        partition_result = validate_partition_structure(table_path, expected_spec)
+        partition_result = _validate_partition_structure(table_path, expected_spec)
 
         # Overall validation result
         overall_valid = (
@@ -1331,7 +1331,7 @@ def _types_compatible(expected_type, actual_type):
 
     return expected_type == actual_type
 
-def validate_evolution_table(conn, table_path, expected_spec):
+def _validate_evolution_table(conn, table_path, expected_spec):
     """Validate evolution-specific properties of a table"""
     validation_results = {}
 
@@ -1546,13 +1546,13 @@ def validate_evolution_table(conn, table_path, expected_spec):
         'evolution_checks': validation_results
     }
 
-def validate_table_worker(table_path, expected_spec, full_content_validation):
+def _validate_table_worker(table_path, expected_spec, full_content_validation):
     """Worker function to validate a single table with its own DuckDB connection"""
     conn = duckdb.connect()
     try:
         conn.execute("INSTALL iceberg")
         conn.execute("LOAD iceberg")
-        result = validate_iceberg_table(conn, table_path, expected_spec)
+        result = _validate_iceberg_table(conn, table_path, expected_spec)
 
         # Add expected spec info to result for detailed error reporting
         result['expected_spec'] = expected_spec
@@ -1562,12 +1562,12 @@ def validate_table_worker(table_path, expected_spec, full_content_validation):
     finally:
         conn.close()
 
-def validate_tables(
+def _validate_tables(
     warehouse_path, specs_path, full_content_validation=False,
     num_parallel=1, minimal=False, primitives_only=False
 ):
     """Validate all tables in warehouse against specifications"""
-    specs = load_table_specs(specs_path)
+    specs = _load_table_specs(specs_path)
     warehouse = Path(warehouse_path)
 
     if not warehouse.exists():
@@ -1586,40 +1586,40 @@ def validate_tables(
         print(f"Error: Could not load Iceberg extension: {e}")
         return False
 
-    # Get expected tables - only extract types that exist in the YAML
+    # Determine which table types to validate based on specs filename,
+    # matching the CLI's dispatch logic.
+    specs_file = Path(specs_path).name.lower()
     all_expected = []
 
     print(f"\nExpected tables from specs:")
 
-    if 'single_type_tables' in specs:
-        expected_single_type = extract_expected_single_type_tables(
+    include_simple = 'simple' in specs_file or 'table_specs' in specs_file
+    include_write_patterns = 'write_pattern' in specs_file or 'table_specs' in specs_file
+    include_partitioned = 'partitioned' in specs_file or 'table_specs' in specs_file
+    include_evolution = 'evolution' in specs_file
+
+    if include_simple:
+        expected_single_type = _extract_expected_single_type_tables(
             specs, minimal=minimal, primitives_only=primitives_only
         )
         all_expected.extend(expected_single_type)
         print(f"  Single-type tables: {len(expected_single_type)}")
-    else:
-        print(f"  Single-type tables: 0")
 
-    if 'write_pattern_tables' in specs:
-        expected_write_patterns = extract_expected_write_pattern_tables(specs)
+    if include_write_patterns:
+        expected_write_patterns = _extract_expected_write_pattern_tables(specs)
         all_expected.extend(expected_write_patterns)
         print(f"  Write-pattern tables: {len(expected_write_patterns)}")
-    else:
-        print(f"  Write-pattern tables: 0")
 
-    if 'partitioned_tables' in specs:
-        expected_partitioned = extract_expected_partitioned_tables(specs)
+    if include_partitioned:
+        expected_partitioned = _extract_expected_partitioned_tables(specs)
         all_expected.extend(expected_partitioned)
         print(f"  Partitioned tables: {len(expected_partitioned)}")
-    else:
-        print(f"  Partitioned tables: 0")
 
-    if 'evolution_tables' in specs:
-        expected_evolution = extract_expected_evolution_tables(specs_path)
+    if include_evolution:
+        expected_evolution = _extract_expected_evolution_tables(specs_path)
         all_expected.extend(expected_evolution)
         print(f"  Evolution tables: {len(expected_evolution)}")
-    else:
-        print(f"  Evolution tables: 0")
+
     print(f"  Total expected: {len(all_expected)}")
 
     # Find only the expected tables, don't scan entire warehouse
@@ -1678,7 +1678,7 @@ def validate_tables(
     if num_parallel > 1:
         # Parallel validation
         with ProcessPoolExecutor(max_workers=num_parallel) as executor:
-            future_to_spec = {executor.submit(validate_table_worker, path, spec, full_content_validation): spec
+            future_to_spec = {executor.submit(_validate_table_worker, path, spec, full_content_validation): spec
                              for path, spec in tables_to_validate}
 
             for future in as_completed(future_to_spec):
@@ -1772,7 +1772,7 @@ def validate_tables(
     else:
         # Sequential validation
         for table_path, expected_spec in tables_to_validate:
-            result = validate_iceberg_table(conn, table_path, expected_spec)
+            result = _validate_iceberg_table(conn, table_path, expected_spec)
             result['expected_spec'] = expected_spec
             validation_results[expected_spec['name']] = result
 
@@ -1901,8 +1901,11 @@ def validate_tables(
 class DuckDBValidator(TableValidator):
     """DuckDB-based validator for local Iceberg tables"""
 
-    def __init__(self, warehouse_path: str, specs_path: str):
+    def __init__(self, warehouse_path: str, specs_path: str,
+                 minimal: bool = False, primitives_only: bool = False):
         super().__init__(warehouse_path, specs_path)
+        self.minimal = minimal
+        self.primitives_only = primitives_only
 
     def supports_s3_tables(self) -> bool:
         return False
@@ -1912,16 +1915,15 @@ class DuckDBValidator(TableValidator):
 
     def validate_tables(self, num_parallel: int = 1, full_content_validation: bool = False) -> dict:
         """Validate all tables using DuckDB"""
-        # Use the existing validate_tables function with minimal=True
-        success = validate_tables(
+        success = _validate_tables(
             self.warehouse_path, self.specs_path, full_content_validation,
-            num_parallel, minimal, primitives_only
+            num_parallel, self.minimal, self.primitives_only
         )
         return {'success_rate': 100.0 if success else 0.0}
 
     def validate_table(self, table_name: str, expected_spec: dict) -> dict:
         """Validate a single table using DuckDB"""
-        return validate_single_table(self.warehouse_path, table_name, expected_spec)
+        raise NotImplementedError
 
 def main():
     parser = argparse.ArgumentParser(description='Validate Iceberg tables using DuckDB')
@@ -1937,13 +1939,11 @@ def main():
 
     args = parser.parse_args()
 
-    # Create validator instance
-    validator = DuckDBValidator(args.warehouse_path, args.specs)
-
-    # Run validation
+    validator = DuckDBValidator(
+        args.warehouse_path, args.specs,
+        minimal=args.minimal, primitives_only=args.primitives_only
+    )
     result = validator.validate_tables(args.num_parallel, args.full_content_validation)
-
-    # Exit with appropriate code
     success = result.get('success_rate', 0) == 100.0
     sys.exit(0 if success else 1)
 

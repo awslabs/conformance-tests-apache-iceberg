@@ -33,7 +33,7 @@ jobs:
       run: uv sync
     - name: Test CLI and imports
       run: |
-        uv run python -c "import pyspark, pyiceberg, polars, pyarrow, yaml, boto3, sqlalchemy; print('All imports successful')"
+        uv run python -c "import pyspark, pyiceberg, polars, pyarrow, yaml, boto3, sqlalchemy, duckdb; print('All imports successful')"
         uv run python -m iceberg_fuzzer.cli --help
 
   pyiceberg:

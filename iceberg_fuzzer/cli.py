@@ -27,6 +27,12 @@ import os
 import subprocess
 import sys
 
+# Resolve validator script path relative to this file
+_CLI_DIR = os.path.dirname(os.path.abspath(__file__))
+_VALIDATOR_SCRIPT = os.path.join(
+    _CLI_DIR, 'validator', 'local_duckdb', 'validator_duckdb.py'
+)
+
 def _validate_backend_constraints(backend, warehouse_path):
     """Validate backend-specific constraints for warehouse path."""
     if backend in ['pyiceberg', 'polars']:
@@ -276,7 +282,7 @@ Examples:
     # Handle validate command
     if args.command == 'validate':
         validator_cmd = [
-            'python3', 'validator/local_duckdb/validator_duckdb.py',
+            sys.executable, _VALIDATOR_SCRIPT,
             '--warehouse-path', args.warehouse_path,
             '--specs', args.specs,
             '--num-parallel', str(args.num_parallel)
@@ -292,7 +298,7 @@ Examples:
             result = subprocess.run(validator_cmd)
             sys.exit(result.returncode)
         except FileNotFoundError:
-            print("Error: Validator script not found. Ensure validator/local_duckdb/validator_duckdb.py exists.")
+            print(f"Error: Validator script not found at {_VALIDATOR_SCRIPT}")
             sys.exit(1)
         except Exception as e:
             print(f"Error running validator: {e}")
@@ -327,7 +333,7 @@ Examples:
             print("="*80 + "\n")
 
             validator_cmd = [
-                'python3', 'validator/local_duckdb/validator_duckdb.py',
+                sys.executable, _VALIDATOR_SCRIPT,
                 '--warehouse-path', args.warehouse_path,
                 '--specs', args.specs,
                 '--num-parallel', str(args.num_parallel)
@@ -339,15 +345,16 @@ Examples:
                 validator_cmd.append('--primitives-only')
 
             try:
-                result = subprocess.run(validator_cmd, capture_output=False)
+                result = subprocess.run(
+                    validator_cmd, capture_output=False
+                )
                 if result.returncode != 0:
                     print(f"\n⚠️  Validation completed with errors (exit code: {result.returncode})")
                 else:
                     print("\n✅ Validation completed successfully")
             except FileNotFoundError:
                 print(
-                    "\n❌ Error: Validator script not found. "
-                    "Ensure validator/local_duckdb/validator_duckdb.py exists."
+                    f"\n❌ Error: Validator script not found at {_VALIDATOR_SCRIPT}"
                 )
             except Exception as e:
                 print(f"\n❌ Error running validator: {e}")
