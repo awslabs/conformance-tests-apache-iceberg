@@ -1930,54 +1930,7 @@ def generate_partitioned_tables(args, spark, warehouse_path):
 
     print(f"\nCompleted: {created}/{total} partitioned tables created")
 
-def main():
-    parser = argparse.ArgumentParser(description='Generate Iceberg tables using PySpark')
-    parser.add_argument('--warehouse-path', required=True, help='Warehouse path or S3 table bucket ARN')
-    parser.add_argument('--specs', required=True, help='Path to table specs YAML file')
-    parser.add_argument('--num-parallel', type=int, default=1, help='Number of parallel workers')
-    parser.add_argument(
-        '--table-type',
-        choices=['simple', 'write-patterns', 'partitioned', 'all', 'minimal'],
-        default='simple',
-                           help=(
-                               'Type of tables to generate: simple (all combos), '
-                               'write-patterns (comprehensive), partitioned, all, or minimal'
-                           )
-                       )
 
-    args = parser.parse_args()
-
-    # Handle warehouse path - create directory only for local paths
-    if is_s3_table_warehouse(args.warehouse_path):
-        warehouse_path = args.warehouse_path
-        # Delete all existing S3 tables before proceeding
-        delete_all_s3_tables(warehouse_path)
-    else:
-        warehouse_path = Path(args.warehouse_path)
-        warehouse_path.mkdir(parents=True, exist_ok=True)
-        warehouse_path = f"file://{warehouse_path}"
-
-    # Only create Spark session for sequential processing
-    spark = None
-    if args.num_parallel == 1:
-        spark = create_spark_session(warehouse_path)
-
-    try:
-        if args.table_type in ['simple', 'all', 'minimal']:
-            generate_single_tables(args, spark, warehouse_path)
-
-        if args.table_type in ['write-patterns', 'all']:
-            generate_write_pattern_tables(args, spark, warehouse_path)
-
-        if args.table_type in ['partitioned', 'all']:
-            generate_partitioned_tables(args, spark, warehouse_path)
-
-    finally:
-        if spark is not None:
-            spark.stop()
-
-if __name__ == '__main__':
-    main()
 
 def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
     """Generate data for evolution tables with schema-aware column mapping"""
