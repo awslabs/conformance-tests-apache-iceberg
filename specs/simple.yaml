@@ -1,6 +1,8 @@
 # Simple Table Specifications for Iceberg Testing
 # Unpartitioned, single-column tables for testing compression, encoding, and data types
 
+type: simple
+
 metadata:
   description: "Unpartitioned single-column Iceberg tables for compaction testing"
   rows_per_table: 1000

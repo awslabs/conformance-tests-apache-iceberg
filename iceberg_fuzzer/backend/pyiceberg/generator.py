@@ -63,14 +63,65 @@ class PyIcebergGenerator(TableGenerator):
         """Get a new catalog instance"""
         return SqlCatalog("iceberg_catalog", **self.catalog_config)
 
-    def supports_s3_tables(self) -> bool:
-        return False
+    def generate(
+        self,
+        table_configs: list[dict],
+        spec: dict,
+        num_parallel: int = 1,
+        delete_existing: bool = False,
+    ) -> tuple[int, int]:
+        """Generate tables from configs. Only supports 'simple' type."""
+        spec_type = spec['type']
 
-    def supports_partitioned_tables(self) -> bool:
-        return False
+        if spec_type != 'simple':
+            raise NotImplementedError(
+                f"PyIceberg backend only supports 'simple' tables, not '{spec_type}'"
+            )
 
-    def supports_minimal_mode(self) -> bool:
-        return True
+        total = len(table_configs)
+        if total == 0:
+            return (0, 0)
+
+        mode_str = "minimal" if len(table_configs) < 100 else "full"
+        print(f"Generating {total} single-type tables ({mode_str}) with {num_parallel} parallel workers...")
+        print("\n📊 PyIceberg Backend Support Status:")
+        print("  ✅ Supported: All primitive types (20 types)")
+        print("  ❌ Skipped: Complex types (lists, maps, structs) - not fully supported")
+        print("  ✅ Supported: All compressions and encodings")
+        print("  ✅ Supported: Both Iceberg v1 and v2")
+        print(f"  📈 Expected success rate: 100% ({total}/{total} tables)\n")
+
+        success_count = 0
+
+        if num_parallel == 1:
+            for spec_cfg in table_configs:
+                success = create_table_with_commits(self.catalog_config, spec_cfg['name'], spec_cfg)
+                if success:
+                    success_count += 1
+                    print(f"✓ Created table {spec_cfg['name']} ({success_count}/{total})")
+                else:
+                    print(f"✗ Failed to create table {spec_cfg['name']}")
+        else:
+            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
+                future_to_table = {
+                    executor.submit(create_table_with_commits, self.catalog_config, cfg['name'], cfg): cfg['name']
+                    for cfg in table_configs
+                }
+
+                for future in as_completed(future_to_table):
+                    table_name = future_to_table[future]
+                    try:
+                        success = future.result()
+                        if success:
+                            success_count += 1
+                            print(f"✓ Created table {table_name} ({success_count}/{total})")
+                        else:
+                            print(f"✗ Failed to create table {table_name}")
+                    except Exception as e:
+                        print(f"✗ Exception creating table {table_name}: {e}")
+
+        print(f"\nCompleted simple tables: {success_count}/{total} tables created successfully")
+        return (success_count, total)
 
     def delete_all_tables(self, num_parallel: int = 1):
         """Delete all tables in the warehouse"""
@@ -145,136 +196,6 @@ class PyIcebergGenerator(TableGenerator):
                 cat.close()
 
             print(f"\nCompleted: {success_count}/{len(tables_to_delete)} tables deleted successfully")
-
-    def generate_simple_tables(
-        self,
-        num_parallel: int = 1,
-        minimal: bool = False,
-        random_count: int = None,
-        delete_existing: bool = False
-    ):
-        """Generate simple single-type tables"""
-        table_specs = load_table_specs(self.specs_path, minimal=minimal)
-
-        # Apply random selection if specified
-        table_specs = self._random_select_tables(table_specs, random_count)
-
-        mode_str = "minimal (none compression, plain encoding)" if minimal else "full"
-        print(f"Generating {len(table_specs)} single-type tables ({mode_str}) with {num_parallel} parallel workers...")
-        print("\n📊 PyIceberg Backend Support Status:")
-        print("  ✅ Supported: All primitive types (20 types)")
-        print("  ❌ Skipped: Complex types (lists, maps, structs) - not fully supported")
-        print("  ✅ Supported: All compressions and encodings")
-        print("  ✅ Supported: Both Iceberg v1 and v2")
-        print(f"  📈 Expected success rate: 100% ({len(table_specs)}/{len(table_specs)} tables)\n")
-
-        success_count = 0
-        total_count = len(table_specs)
-
-        if num_parallel == 1:
-            for spec in table_specs:
-                success = create_table_with_commits(self.catalog_config, spec['name'], spec)
-                if success:
-                    success_count += 1
-                    print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
-                else:
-                    print(f"✗ Failed to create table {spec['name']}")
-        else:
-            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
-                future_to_table = {
-                    executor.submit(create_table_with_commits, self.catalog_config, spec['name'], spec): spec['name']
-                    for spec in table_specs
-                }
-
-                for future in as_completed(future_to_table):
-                    table_name = future_to_table[future]
-                    try:
-                        success = future.result()
-                        if success:
-                            success_count += 1
-                            print(f"✓ Created table {table_name} ({success_count}/{total_count})")
-                        else:
-                            print(f"✗ Failed to create table {table_name}")
-                    except Exception as e:
-                        print(f"✗ Exception creating table {table_name}: {e}")
-
-        print(f"\nCompleted simple tables: {success_count}/{total_count} tables created successfully")
-
-    def generate_single_table(self, table_name: str, delete_existing: bool = False):
-        """Generate a single table by name"""
-        # Try to find the table in simple specs
-        try:
-            simple_specs = load_table_specs(self.specs_path)
-            for spec in simple_specs:
-                if spec['name'] == table_name:
-                    print(f"Creating single table: {table_name}")
-                    catalog = self._get_catalog()
-
-                    # Check if table exists and skip if delete_existing is False
-                    if not delete_existing:
-                        try:
-                            catalog.load_table(f"simple.{table_name}")
-                            print(f"Skipping existing table: {table_name}")
-                            return True
-                        except Exception:
-                            pass  # Table doesn't exist, continue with creation
-
-                    success = create_table_with_commits(
-                        self.catalog_config,
-                        table_name,
-                        spec,
-                        num_commits=3,
-                        rows_per_commit=334
-                    )
-
-                    if success:
-                        print(f"✓ Successfully created table: {table_name}")
-                        return True
-                    else:
-                        print(f"✗ Failed to create table: {table_name}")
-                        return False
-        except Exception as e:
-            print(f"Error checking simple specs: {e}")
-
-        # Table not found - suggest alternatives
-        print(f"❌ Table '{table_name}' not found in PyIceberg specs")
-
-        suggestions = suggest_table_names(table_name)
-        if suggestions:
-            print(f"\n💡 Did you mean one of these?")
-            for i, suggestion in enumerate(suggestions, 1):
-                print(f"   {i}. {suggestion}")
-        else:
-            print(f"\n💡 PyIceberg only supports simple tables")
-
-        return False
-
-    def generate_write_pattern_tables(
-        self,
-        num_parallel: int = 1,
-        random_count: int = None,
-        delete_existing: bool = False
-    ):
-        """Write-pattern tables not supported in PyIceberg"""
-        raise NotImplementedError("Write-pattern tables only supported in PySpark backend")
-
-    def generate_partitioned_tables(
-        self,
-        num_parallel: int = 1,
-        random_count: int = None,
-        minimal: bool = False,
-        delete_existing: bool = False
-    ):
-        """Not supported in PyIceberg"""
-        raise NotImplementedError("Partitioned tables not supported in PyIceberg backend")
-
-    def generate_evolution_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
-        """Not supported in PyIceberg"""
-        raise NotImplementedError("Evolution tables not supported in PyIceberg backend")
-
-    def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
-        """Generate minimal set of simple tables"""
-        return self.generate_simple_tables(num_parallel=num_parallel, minimal=True, random_count=random_count)
 
     def cleanup(self):
         """No cleanup needed for PyIceberg"""

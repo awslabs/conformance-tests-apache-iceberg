@@ -1,6 +1,8 @@
 # Table Specifications for Iceberg Testing
 # This configuration defines unpartitioned, single-column tables for testing
 
+type: all
+
 metadata:
   description: "Unpartitioned single-column Iceberg tables for compaction testing"
   rows_per_table: 1000

@@ -27,6 +27,10 @@ import os
 import subprocess
 import sys
 
+import yaml
+
+from iceberg_fuzzer.config import CONFIG_PRODUCERS
+
 # Resolve validator script path relative to this file
 _CLI_DIR = os.path.dirname(os.path.abspath(__file__))
 _VALIDATOR_SCRIPT = os.path.join(
@@ -40,88 +44,6 @@ def _validate_backend_constraints(backend, warehouse_path):
             print(f"Error: {backend} backend does not support S3 Tables ARNs")
             sys.exit(1)
 
-def _generate_tables_for_specs(generator, args):
-    """Generate tables based on specs file type."""
-    specs_file = os.path.basename(args.specs).lower()
-
-    if 'simple' in specs_file:
-        generator.generate_simple_tables(
-            args.num_parallel,
-            minimal=args.minimal,
-            random_count=args.random,
-            delete_existing=args.delete_existing
-        )
-    elif 'write_pattern' in specs_file:
-        generator.generate_write_pattern_tables(
-            args.num_parallel,
-            random_count=args.random,
-            delete_existing=args.delete_existing
-        )
-    elif 'partitioned' in specs_file:
-        generator.generate_partitioned_tables(
-            args.num_parallel,
-            random_count=args.random,
-            minimal=args.minimal,
-            delete_existing=args.delete_existing
-        )
-    elif 'evolution' in specs_file:
-        generator.generate_evolution_tables(
-            args.num_parallel,
-            random_count=args.random,
-            delete_existing=args.delete_existing
-        )
-    elif 'table_specs.yaml' in specs_file:
-        _generate_all_table_types(generator, args)
-    else:
-        # Default to simple tables for backward compatibility
-        generator.generate_simple_tables(
-            args.num_parallel,
-            minimal=args.minimal,
-            random_count=args.random,
-            delete_existing=args.delete_existing
-        )
-
-def _generate_all_table_types(generator, args):
-    """Generate all table types when using main table_specs.yaml."""
-    print("Generating all table types (simple + write-pattern + partitioned)...")
-
-    # Generate simple tables
-    print("\n" + "="*60)
-    print("GENERATING SIMPLE TABLES")
-    print("="*60)
-    generator.generate_simple_tables(
-        args.num_parallel,
-        minimal=args.minimal,
-        random_count=args.random,
-        delete_existing=args.delete_existing
-    )
-
-    # Generate write-pattern tables
-    print("\n" + "="*60)
-    print("GENERATING WRITE-PATTERN TABLES")
-    print("="*60)
-    generator.generate_write_pattern_tables(
-        args.num_parallel,
-        random_count=args.random,
-        delete_existing=False  # Don't delete again
-    )
-
-    # Generate partitioned tables (PySpark only)
-    if args.backend == 'pyspark':
-        print("\n" + "="*60)
-        print("GENERATING PARTITIONED TABLES")
-        print("="*60)
-        generator.generate_partitioned_tables(
-            args.num_parallel,
-            random_count=args.random,
-            minimal=args.minimal,
-            delete_existing=False  # Don't delete again
-        )
-    else:
-        print(
-            f"\nSkipping partitioned tables - {args.backend} backend "
-            "does not support partitioned tables"
-        )
 
 def main():
     parser = argparse.ArgumentParser(
@@ -138,21 +60,24 @@ def main():
         epilog="""
 Examples:
   # Generate simple tables with PySpark
-  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml
+  python3 cli.py generate --backend pyspark --specs specs/simple.yaml
 
   # Generate write-pattern tables with PySpark (parallel)
-  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse \
+  python3 cli.py generate --backend pyspark \
       --specs specs/write_patterns.yaml --num-parallel 4
 
   # Generate partitioned tables with PySpark
-  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse \
+  python3 cli.py generate --backend pyspark \
       --specs specs/partitioned.yaml --num-parallel 8
 
   # Generate minimal set with any backend
-  python3 cli.py generate --backend polars --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal
+  python3 cli.py generate --backend polars --specs specs/simple.yaml --minimal
 
   # Generate random subset
-  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 50
+  python3 cli.py generate --backend pyspark --specs specs/simple.yaml --random 50
+
+  # Use a specific catalog
+  python3 cli.py generate --backend pyspark --catalog glue --specs specs/simple.yaml
         """)
 
     generate_parser.add_argument('--backend',
@@ -192,10 +117,10 @@ Examples:
         epilog="""
 Examples:
   # Validate tables with parallel workers
-  python3 cli.py validate --warehouse-path /tmp/warehouse --specs specs/simple.yaml --num-parallel 16
+  python3 cli.py validate --specs specs/simple.yaml --num-parallel 16
 
   # Full content validation (slower)
-  python3 cli.py validate --warehouse-path /tmp/warehouse --specs specs/simple.yaml --full-content-validation
+  python3 cli.py validate --specs specs/simple.yaml --full-content-validation
         """)
 
     validate_parser.add_argument('--warehouse-path',
@@ -357,7 +282,36 @@ Examples:
     # Validate backend-specific constraints
     _validate_backend_constraints(args.backend, args.warehouse_path)
 
-    # Import and instantiate the appropriate generator
+    # Load spec and dispatch on type
+    with open(args.specs, 'r') as f:
+        spec = yaml.safe_load(f)
+
+    spec_type = spec.get('type')
+    if not spec_type:
+        print(f"Error: spec file '{args.specs}' is missing required 'type' key", file=sys.stderr)
+        sys.exit(1)
+
+    if spec_type not in CONFIG_PRODUCERS:
+        print(f"Error: unknown spec type '{spec_type}'", file=sys.stderr)
+        sys.exit(1)
+
+    # Produce table configs
+    produce_configs = CONFIG_PRODUCERS[spec_type]
+    table_configs = produce_configs(spec, minimal=args.minimal)
+
+    # Filter to single table if requested
+    if args.table_name:
+        table_configs = [c for c in table_configs if c['name'] == args.table_name]
+        if not table_configs:
+            print(f"Error: table '{args.table_name}' not found in configs for type '{spec_type}'")
+            sys.exit(1)
+
+    # Apply random sampling
+    if args.random and args.random < len(table_configs):
+        import random
+        table_configs = random.sample(table_configs, args.random)
+
+    # Instantiate backend
     if args.backend == 'pyspark':
         from iceberg_fuzzer.backend.pyspark.generator import PySparkGenerator
         generator = PySparkGenerator(args.warehouse_path, args.specs)
@@ -369,11 +323,11 @@ Examples:
         generator = PolarsGenerator(args.warehouse_path, args.specs)
 
     try:
-        # Handle single table generation
-        if args.table_name:
-            generator.generate_single_table(args.table_name, delete_existing=args.delete_existing)
-        else:
-            _generate_tables_for_specs(generator, args)
+        success_count, total_count = generator.generate(
+            table_configs, spec,
+            num_parallel=args.num_parallel,
+            delete_existing=args.delete_existing,
+        )
 
         # Validate tables if requested
         if args.validate:
@@ -389,8 +343,8 @@ Examples:
             ]
             if args.minimal:
                 validator_cmd.append('--minimal')
-            # PyIceberg only supports primitives
             if args.backend == 'pyiceberg':
+                # PyIceberg only supports primitives
                 validator_cmd.append('--primitives-only')
 
             try:
@@ -408,12 +362,16 @@ Examples:
             except Exception as e:
                 print(f"\n❌ Error running validator: {e}")
 
+    except NotImplementedError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
     except Exception as e:
         print(f"Error generating tables: {e}")
         sys.exit(1)
 
     finally:
         generator.cleanup()
+
 
 if __name__ == '__main__':
     main()

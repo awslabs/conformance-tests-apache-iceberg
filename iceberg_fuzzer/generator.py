@@ -34,18 +34,17 @@ class TableGenerator(ABC):
         self.specs_path = specs_path
 
     @abstractmethod
-    def supports_s3_tables(self) -> bool:
-        """Whether this backend supports S3 Tables"""
-        pass
+    def generate(
+        self,
+        table_configs: list[dict],
+        spec: dict,
+        num_parallel: int = 1,
+        delete_existing: bool = False,
+    ) -> tuple[int, int]:
+        """Generate tables from configs.
 
-    @abstractmethod
-    def supports_partitioned_tables(self) -> bool:
-        """Whether this backend supports partitioned tables"""
-        pass
-
-    @abstractmethod
-    def supports_minimal_mode(self) -> bool:
-        """Whether this backend supports minimal table generation mode"""
+        Returns (success_count, total_count).
+        """
         pass
 
     def _random_select_tables(self, table_specs: list, random_count: int) -> list:
@@ -53,26 +52,6 @@ class TableGenerator(ABC):
         if random_count is None or random_count >= len(table_specs):
             return table_specs
         return random.sample(table_specs, random_count)
-
-    @abstractmethod
-    def generate_simple_tables(self, num_parallel: int = 1, minimal: bool = False, random_count: int = None):
-        """Generate simple single-type tables"""
-        pass
-
-    @abstractmethod
-    def generate_write_pattern_tables(self, num_parallel: int = 1, random_count: int = None):
-        """Generate write-pattern tables"""
-        pass
-
-    @abstractmethod
-    def generate_partitioned_tables(self, num_parallel: int = 1, random_count: int = None):
-        """Generate partitioned tables"""
-        pass
-
-    @abstractmethod
-    def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None):
-        """Generate minimal set of tables"""
-        pass
 
     @abstractmethod
     def cleanup(self):

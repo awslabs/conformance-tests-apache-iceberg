@@ -32,7 +32,6 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import polars as pl
-import yaml
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import (
@@ -42,7 +41,6 @@ from pyiceberg.types import (
 )
 
 from iceberg_fuzzer.generator import TableGenerator
-from iceberg_fuzzer.table_spec import load_table_specs
 from iceberg_fuzzer.common import row_id_from_index
 
 
@@ -72,14 +70,61 @@ class PolarsGenerator(TableGenerator):
         """Get a new catalog instance"""
         return SqlCatalog("iceberg_catalog", **self.catalog_config)
 
-    def supports_s3_tables(self) -> bool:
-        return False
+    def generate(
+        self,
+        table_configs: list[dict],
+        spec: dict,
+        num_parallel: int = 1,
+        delete_existing: bool = False,
+    ) -> tuple[int, int]:
+        """Generate tables from configs. Only supports 'simple' type."""
+        spec_type = spec['type']
 
-    def supports_partitioned_tables(self) -> bool:
-        return False
+        if spec_type != 'simple':
+            raise NotImplementedError(
+                f"Polars backend only supports 'simple' tables, not '{spec_type}'"
+            )
 
-    def supports_minimal_mode(self) -> bool:
-        return False
+        total = len(table_configs)
+        if total == 0:
+            return (0, 0)
+
+        print(f"Generating {total} simple tables with Polars + PyIceberg...")
+        print("\n📊 Polars Backend Support Status:")
+        print(
+            "  ✅ Supported: All primitive types (boolean, int, long, float, double, "
+            "string, binary, date, time, timestamp, decimal, uuid, fixed)"
+        )
+        print("  ✅ Supported: All list types (list<primitive>)")
+        print("  ⚠️  Skipped: Map types (Polars/PyArrow limitation)")
+        print("  ⚠️  Skipped: Struct types (PyArrow flattening issue)")
+        print(f"  📈 Expected success rate: 100% (primitives + lists only, nested types skipped)\n")
+
+        success_count = 0
+
+        if num_parallel == 1:
+            for cfg in table_configs:
+                success = self._create_simple_table(cfg)
+                if success:
+                    success_count += 1
+                    print(f"✓ Created table {cfg['name']} ({success_count}/{total})")
+                # Silently skip failures to reduce noise
+        else:
+            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
+                futures = {executor.submit(self._create_simple_table, cfg): cfg for cfg in table_configs}
+                for future in as_completed(futures):
+                    cfg = futures[future]
+                    try:
+                        success = future.result()
+                        if success:
+                            success_count += 1
+                            print(f"✓ Created table {cfg['name']} ({success_count}/{total})")
+                        # Silently skip failures to reduce noise
+                    except Exception:
+                        pass  # Silently skip exceptions
+
+        print(f"\nCompleted simple tables: {success_count}/{total} tables created successfully")
+        return (success_count, total)
 
     def _get_iceberg_type(self, iceberg_type_str: str):
         """Map Iceberg type string to PyIceberg type"""
@@ -385,163 +430,6 @@ class PolarsGenerator(TableGenerator):
         except Exception as e:
             # Silently fail - expected for unsupported types (map, struct)
             return False
-
-    def generate_simple_tables(
-        self,
-        num_parallel: int = 1,
-        minimal: bool = False,
-        random_count: int = None,
-        delete_existing: bool = False
-    ):
-        """Generate simple single-type tables"""
-        table_specs = load_table_specs(self.specs_path, minimal=minimal)
-
-        # Apply random selection if specified
-        table_specs = self._random_select_tables(table_specs, random_count)
-
-        print(f"Generating {len(table_specs)} simple tables with Polars + PyIceberg...")
-        print("\n📊 Polars Backend Support Status:")
-        print(
-            "  ✅ Supported: All primitive types (boolean, int, long, float, double, "
-            "string, binary, date, time, timestamp, decimal, uuid, fixed)"
-        )
-        print("  ✅ Supported: All list types (list<primitive>)")
-        print("  ⚠️  Skipped: Map types (Polars/PyArrow limitation)")
-        print("  ⚠️  Skipped: Struct types (PyArrow flattening issue)")
-        print(f"  📈 Expected success rate: 100% (primitives + lists only, nested types skipped)\n")
-
-        success_count = 0
-        total_count = len(table_specs)
-
-        if num_parallel == 1:
-            for spec in table_specs:
-                success = self._create_simple_table(spec)
-                if success:
-                    success_count += 1
-                    print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
-                # Silently skip failures to reduce noise
-        else:
-            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
-                futures = {executor.submit(self._create_simple_table, spec): spec for spec in table_specs}
-                for future in as_completed(futures):
-                    spec = futures[future]
-                    try:
-                        success = future.result()
-                        if success:
-                            success_count += 1
-                            print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
-                        # Silently skip failures to reduce noise
-                    except Exception as e:
-                        pass  # Silently skip exceptions
-
-        print(f"\nCompleted simple tables: {success_count}/{total_count} tables created successfully")
-
-    def generate_single_table(self, table_name: str, delete_existing: bool = False):
-        """Generate a single table by name"""
-
-        # Load table specs to find the requested table
-        with open(self.specs_path, 'r') as f:
-            specs = yaml.safe_load(f)
-
-        # Get all type definitions
-        all_types = []
-        all_types.extend(specs.get('primitive_types', []))
-        all_types.extend(specs.get('complex_types_list', []))
-
-        # Generate all possible table specs to find match
-        compression_configs = []
-        for comp_config in specs.get('compression_configs', []):
-            codec = comp_config['codec']
-            levels = comp_config.get('levels', [None])
-            for level in levels:
-                compression_configs.append({'codec': codec, 'level': level})
-
-        encoding_types = specs.get('encoding_types', ['PLAIN'])
-        iceberg_versions = []
-        for version_config in specs.get('iceberg_versions', [{'version': 2, 'namespace': 'v2'}]):
-            iceberg_versions.append(f"v{version_config['version']}")
-
-        # Find matching table spec
-        for type_def in all_types:
-            for compression in compression_configs:
-                for encoding in encoding_types:
-                    for version in iceberg_versions:
-                        comp_str = f"{compression['codec']}"
-                        if compression['level'] is not None:
-                            comp_str += f"_lvl{compression['level']}"
-
-                        generated_name = f"unpart_{type_def['name']}_{comp_str}_{encoding.lower()}_{version}"
-
-                        if generated_name == table_name:
-                            # Found match - create the table
-                            spec = {
-                                'name': table_name,
-                                'field_name': type_def['name'],
-                                'iceberg_type': type_def['iceberg_type'],
-                                'compression': compression,
-                                'encoding': encoding,
-                                'version': version
-                            }
-
-                            print(f"Creating single table: {table_name}")
-
-                            # Check if table exists and skip if delete_existing is False
-                            if not delete_existing:
-                                try:
-                                    catalog = self._get_catalog()
-                                    catalog.load_table(f"simple.{table_name}")
-                                    print(f"Skipping existing table: {table_name}")
-                                    return True
-                                except Exception:
-                                    pass  # Table doesn't exist, continue with creation
-
-                            success = self._create_simple_table(spec)
-                            if success:
-                                print(f"✓ Successfully created table: {table_name}")
-                                return True
-                            else:
-                                print(f"✗ Failed to create table: {table_name}")
-                                return False
-
-        # Table not found - suggest alternatives
-        print(f"❌ Table '{table_name}' not found in Polars specs")
-
-        suggestions = suggest_table_names(table_name)
-        if suggestions:
-            print(f"\n💡 Did you mean one of these?")
-            for i, suggestion in enumerate(suggestions, 1):
-                print(f"   {i}. {suggestion}")
-        else:
-            print(f"\n💡 Polars only supports simple tables (primitives + lists)")
-
-        return False
-
-    def generate_write_pattern_tables(
-        self,
-        num_parallel: int = 1,
-        random_count: int = None,
-        delete_existing: bool = False
-    ):
-        """Write-pattern tables not supported in Polars"""
-        raise NotImplementedError("Write-pattern tables only supported in PySpark backend")
-
-    def generate_partitioned_tables(
-        self,
-        num_parallel: int = 1,
-        random_count: int = None,
-        minimal: bool = False,
-        delete_existing: bool = False
-    ):
-        """Partitioned tables not supported in Polars"""
-        raise NotImplementedError("Partitioned tables only supported in PySpark backend")
-
-    def generate_evolution_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
-        """Evolution tables not supported in Polars"""
-        raise NotImplementedError("Evolution tables only supported in PySpark backend")
-
-    def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
-        """Generate minimal set of simple tables"""
-        return self.generate_simple_tables(num_parallel=num_parallel, minimal=True, random_count=random_count)
 
     def cleanup(self):
         """No cleanup needed for Polars"""

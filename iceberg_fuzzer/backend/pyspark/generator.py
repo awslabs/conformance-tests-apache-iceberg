@@ -39,10 +39,10 @@ from backend.pyspark.builders import (
     create_partitioned_table,
     create_table_worker,
     create_single_table,
+    create_evolution_table,
     generate_evolution_tables
 )
 from iceberg_fuzzer.generator import TableGenerator
-from iceberg_fuzzer.table_spec import load_table_specs
 
 
 class PySparkGenerator(TableGenerator):
@@ -60,14 +60,214 @@ class PySparkGenerator(TableGenerator):
             path.mkdir(parents=True, exist_ok=True)
             self.warehouse_path = f"file://{path}"
 
-    def supports_s3_tables(self) -> bool:
-        return True
+    def generate(
+        self,
+        table_configs: list[dict],
+        spec: dict,
+        num_parallel: int = 1,
+        delete_existing: bool = False,
+    ) -> tuple[int, int]:
+        """Generate tables from configs. Dispatches on spec['type']."""
+        spec_type = spec['type']
+        namespace = spec.get('metadata', {}).get('namespace', spec_type)
 
-    def supports_partitioned_tables(self) -> bool:
-        return True
+        if delete_existing:
+            print(f"Deleting existing {spec_type} tables before generation...")
+            self.delete_tables_by_namespace(namespace)
 
-    def supports_minimal_mode(self) -> bool:
-        return True
+        total = len(table_configs)
+        if total == 0:
+            return (0, 0)
+
+        self._ensure_spark()
+
+        if spec_type == 'simple':
+            return self._generate_simple(table_configs, num_parallel, delete_existing)
+        elif spec_type == 'write_pattern':
+            return self._generate_write_pattern(table_configs, num_parallel, delete_existing)
+        elif spec_type == 'partitioned':
+            return self._generate_partitioned(table_configs, num_parallel, delete_existing)
+        elif spec_type == 'evolution':
+            return self._generate_evolution(table_configs, num_parallel)
+        elif spec_type == 'all':
+            return self._generate_all(table_configs, num_parallel, delete_existing)
+        else:
+            raise NotImplementedError(f"PySpark backend does not support type '{spec_type}'")
+
+    def _generate_simple(self, table_configs, num_parallel, delete_existing):
+        total = len(table_configs)
+        success_count = 0
+
+        print(f"Generating {total} single-type tables with {num_parallel} parallel workers...")
+
+        if num_parallel > 1:
+            batch_size = 256
+            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
+                for batch_start in range(0, total, batch_size):
+                    batch = table_configs[batch_start:batch_start + batch_size]
+                    futures = {
+                        executor.submit(
+                            create_table_worker, self.spark, self.warehouse_path, spec, delete_existing
+                        ): spec
+                        for spec in batch
+                    }
+                    for future in as_completed(futures):
+                        table_name, success = future.result()
+                        if success:
+                            success_count += 1
+                            print(f"✓ Created table {table_name} ({success_count}/{total})")
+                        else:
+                            print(f"✗ Failed to create table {table_name}")
+        else:
+            for i, spec in enumerate(table_configs, 1):
+                success = create_single_type_table(
+                    self.spark, self.warehouse_path, spec['name'], spec,
+                    f"{i}/{total}", delete_existing
+                )
+                if success:
+                    success_count += 1
+                    print(f"✓ Created table {spec['name']} ({success_count}/{total})")
+                else:
+                    print(f"✗ Failed to create table {spec['name']}")
+
+        print(f"\nCompleted single tables: {success_count}/{total} tables created successfully")
+        return (success_count, total)
+
+    def _generate_write_pattern(self, table_configs, num_parallel, delete_existing):
+        total = len(table_configs)
+        success_count = 0
+
+        print(f"Generating {total} write-pattern tables with {num_parallel} parallel workers...")
+
+        if num_parallel > 1:
+            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
+                futures = {
+                    executor.submit(
+                        create_comprehensive_table, self.spark, self.warehouse_path,
+                        cfg['name'], cfg['pattern'], delete_existing=delete_existing
+                    ): cfg
+                    for cfg in table_configs
+                }
+                for future in as_completed(futures):
+                    cfg = futures[future]
+                    try:
+                        success = future.result()
+                        if success:
+                            success_count += 1
+                            print(f"✓ Created {cfg['name']} ({success_count}/{total})")
+                        else:
+                            print(f"✗ Failed to create {cfg['name']}")
+                    except Exception as e:
+                        print(f"✗ Failed to create {cfg['name']}: {e}")
+        else:
+            for i, cfg in enumerate(table_configs, 1):
+                try:
+                    success = create_comprehensive_table(
+                        self.spark, self.warehouse_path,
+                        cfg['name'], cfg['pattern'], delete_existing=delete_existing
+                    )
+                    if success:
+                        success_count += 1
+                        print(f"✓ Created {cfg['name']} ({success_count}/{total})")
+                    else:
+                        print(f"✗ Failed to create {cfg['name']}")
+                except Exception as e:
+                    print(f"✗ Failed to create {cfg['name']}: {e}")
+
+        print(f"\nCompleted write-pattern tables: {success_count}/{total} tables created successfully")
+        return (success_count, total)
+
+    def _generate_partitioned(self, table_configs, num_parallel, delete_existing):
+        total = len(table_configs)
+        success_count = 0
+
+        print(f"Generating {total} partitioned tables with {num_parallel} parallel workers...")
+
+        if num_parallel > 1:
+            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
+                futures = {
+                    executor.submit(
+                        create_partitioned_table, self.spark, self.warehouse_path,
+                        cfg['name'], cfg['pattern'], ",".join(cfg['transform']),
+                        delete_existing=delete_existing
+                    ): cfg
+                    for cfg in table_configs
+                }
+                for future in as_completed(futures):
+                    cfg = futures[future]
+                    try:
+                        success = future.result()
+                        if success:
+                            success_count += 1
+                            print(f"✓ Created {cfg['name']} ({success_count}/{total})")
+                        else:
+                            print(f"✗ Failed {cfg['name']}")
+                    except Exception as e:
+                        print(f"✗ Failed {cfg['name']}: {e}")
+        else:
+            for i, cfg in enumerate(table_configs, 1):
+                try:
+                    success = create_partitioned_table(
+                        self.spark, self.warehouse_path,
+                        cfg['name'], cfg['pattern'], ",".join(cfg['transform']),
+                        delete_existing=delete_existing
+                    )
+                    if success:
+                        success_count += 1
+                        print(f"✓ Created {cfg['name']} ({success_count}/{total})")
+                    else:
+                        print(f"✗ Failed {cfg['name']}")
+                except Exception as e:
+                    print(f"✗ Failed {cfg['name']}: {e}")
+
+        print(f"\nCompleted: {success_count}/{total} partitioned tables created")
+        return (success_count, total)
+
+    def _generate_evolution(self, table_configs, num_parallel):
+        total = len(table_configs)
+        success_count = 0
+
+        print(f"Generating {total} evolution tables...")
+
+        for i, cfg in enumerate(table_configs, 1):
+            table_name = cfg['name']
+            print(f"Creating evolution table {i}/{total}: {table_name}")
+            if create_evolution_table(self.spark, self.warehouse_path, table_name, cfg, delete_existing=True):
+                success_count += 1
+
+        print(f"\nCompleted evolution tables: {success_count}/{total} tables created successfully")
+        return (success_count, total)
+
+    def _generate_all(self, table_configs, num_parallel, delete_existing):
+        """Generate mixed configs from the 'all' spec by grouping by _spec_type."""
+        # Group configs by their source type
+        groups = {}
+        for cfg in table_configs:
+            t = cfg.get('_spec_type', 'simple')
+            groups.setdefault(t, []).append(cfg)
+
+        total_success = 0
+        total_count = 0
+
+        for spec_type, cfgs in groups.items():
+            print(f"\n{'='*60}")
+            print(f"GENERATING {spec_type.upper()} TABLES")
+            print(f"{'='*60}")
+
+            if spec_type == 'simple':
+                s, t = self._generate_simple(cfgs, num_parallel, delete_existing)
+            elif spec_type == 'write_pattern':
+                s, t = self._generate_write_pattern(cfgs, num_parallel, delete_existing)
+            elif spec_type == 'partitioned':
+                s, t = self._generate_partitioned(cfgs, num_parallel, delete_existing)
+            else:
+                print(f"Skipping unknown type: {spec_type}")
+                continue
+
+            total_success += s
+            total_count += t
+
+        return (total_success, total_count)
 
     def delete_all_tables(self, num_parallel: int = 1):
         """Delete all tables in the warehouse"""
@@ -445,409 +645,8 @@ class PySparkGenerator(TableGenerator):
         if self.spark is None:
             self.spark = create_spark_session(self.warehouse_path)
 
-    def generate_simple_tables(
-        self,
-        num_parallel: int = 1,
-        minimal: bool = False,
-        random_count: int = None,
-        delete_existing: bool = False
-    ):
-        """Generate simple single-type tables"""
-        if delete_existing:
-            print("Deleting existing simple tables before generation...")
-            self.delete_tables_by_namespace("simple")
-
-        table_specs = load_table_specs(self.specs_path, minimal=minimal)
-        mode_str = "minimal (none compression, plain encoding)" if minimal else "full"
-
-        # Apply random selection if specified
-        table_specs = self._random_select_tables(table_specs, random_count)
-
-        print(f"Generating {len(table_specs)} single-type tables ({mode_str}) with {num_parallel} parallel workers...")
-        print("\n📊 PySpark Backend Support Status:")
-        print("  ✅ Supported: All data types (primitives, lists, maps, structs)")
-        print("  ✅ Supported: All compressions and encodings")
-        print("  ✅ Supported: Both Iceberg v1 and v2")
-        print(f"  📈 Expected success rate: 100% ({len(table_specs)}/{len(table_specs)} tables)\n")
-
-        success_count = 0
-        total_count = len(table_specs)
-
-        if num_parallel > 1:
-            self._ensure_spark()
-            batch_size = 256
-            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
-                for batch_start in range(0, len(table_specs), batch_size):
-                    batch_end = min(batch_start + batch_size, len(table_specs))
-                    batch = table_specs[batch_start:batch_end]
-
-                    futures = {
-                        executor.submit(
-                            create_table_worker, self.spark, self.warehouse_path, spec, delete_existing
-                        ): spec
-                        for spec in batch
-                    }
-                    for future in as_completed(futures):
-                        table_name, success = future.result()
-                        if success:
-                            success_count += 1
-                            print(f"✓ Created table {table_name} ({success_count}/{total_count})")
-                        else:
-                            print(f"✗ Failed to create table {table_name}")
-        else:
-            self._ensure_spark()
-            for i, spec in enumerate(table_specs, 1):
-                success = create_single_type_table(
-                    self.spark, self.warehouse_path, spec['name'], spec,
-                    f"{i}/{total_count}", delete_existing
-                )
-                if success:
-                    success_count += 1
-                    print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
-                else:
-                    print(f"✗ Failed to create table {spec['name']}")
-
-        print(f"\nCompleted single tables: {success_count}/{total_count} tables created successfully")
-
-    def generate_single_table(self, table_name: str, delete_existing: bool = False):
-        """Generate a single table by name"""
-
-        # Ensure Spark session is initialized
-        if not self.spark:
-            self.spark = create_spark_session(self.warehouse_path)
-
-        if delete_existing:
-            print("Deleting existing tables before generation...")
-            self.delete_all_tables()
-
-        print(f"Generating single table: {table_name}")
-        success = create_single_table(self.spark, self.warehouse_path, table_name, delete_existing=delete_existing)
-
-        if success:
-            print(f"✓ Successfully created table: {table_name}")
-        else:
-            print(f"✗ Failed to create table: {table_name}")
-
-
-    def generate_write_pattern_tables(
-        self,
-        num_parallel: int = 1,
-        random_count: int = None,
-        delete_existing: bool = False
-    ):
-        """Generate write-pattern tables"""
-        if delete_existing:
-            print("Deleting existing write-pattern tables before generation...")
-            self.delete_tables_by_namespace("write_pattern")
-
-        all_patterns = ["insert_heavy", "update_heavy", "delete_heavy", "mixed_chaos",
-                       "batch_replace", "gradual_growth", "burst_ops", "truncate_cycles"]
-        versions = ["v1", "v2"]
-        delete_modes = ["cow", "posdelete"]  # Remove eqdelete - PySpark cannot create equality deletes
-
-        # Build table specs
-        table_specs = []
-        for pattern in all_patterns:
-            for version in versions:
-                for delete_mode in delete_modes:
-                    # Skip invalid combinations: v1 only supports cow
-                    if version == "v1" and delete_mode != "cow":
-                        continue
-
-                    table_name = f"unpart_{pattern}_zstd_plain_dictionary_{version}_{delete_mode}"
-                    table_specs.append({
-                        'name': table_name,
-                        'pattern': pattern,
-                        'version': version,
-                        'delete_mode': delete_mode
-                    })
-
-        # Apply random selection if specified
-        table_specs = self._random_select_tables(table_specs, random_count)
-
-        print(f"Generating {len(table_specs)} write-pattern tables with {num_parallel} parallel workers...")
-
-        success_count = 0
-        total_count = len(table_specs)
-
-        self._ensure_spark()
-
-        if num_parallel > 1:
-            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
-                futures = {
-                    executor.submit(create_comprehensive_table, self.spark, self.warehouse_path,
-                                  spec['name'], spec['pattern'], delete_existing=delete_existing): spec
-                    for spec in table_specs
-                }
-                for future in as_completed(futures):
-                    spec = futures[future]
-                    try:
-                        success = future.result()
-                        if success:
-                            success_count += 1
-                            print(f"✓ Created {spec['name']} ({success_count}/{total_count})")
-                        else:
-                            print(f"✗ Failed to create {spec['name']}")
-                    except Exception as e:
-                        print(f"✗ Failed to create {spec['name']}: {e}")
-        else:
-            for i, spec in enumerate(table_specs, 1):
-                try:
-                    success = create_comprehensive_table(self.spark, self.warehouse_path,
-                                                       spec['name'], spec['pattern'], delete_existing=delete_existing)
-                    if success:
-                        success_count += 1
-                        print(f"✓ Created {spec['name']} ({success_count}/{total_count})")
-                    else:
-                        print(f"✗ Failed to create {spec['name']}")
-                except Exception as e:
-                    print(f"✗ Failed to create {spec['name']}: {e}")
-
-        print(f"\nCompleted write-pattern tables: {success_count}/{total_count} tables created successfully")
-
-    def generate_partitioned_tables(
-        self,
-        num_parallel: int = 1,
-        random_count: int = None,
-        minimal: bool = False,
-        delete_existing: bool = False
-    ):
-        """Generate partitioned tables"""
-        if delete_existing:
-            print("Deleting existing partitioned tables before generation...")
-            self.delete_tables_by_namespace("partitioned")
-
-        if minimal:
-            # Minimal set: 8 key transforms with mixed_chaos + 2 delete modes
-            partition_transforms = [
-                # Essential transforms (4)
-                ["identity(category)"],
-                ["bucket[4](id)"],
-                ["month(timestamp)"],
-                ["identity(category)", "bucket[4](id)"]
-            ]
-            write_patterns = ["mixed_chaos"]
-            delete_modes = ["cow", "posdelete"]
-        else:
-            # Full set: all 37 transforms with 4 patterns
-            partition_transforms = [
-                # Original single-column transforms (10)
-                ["identity(category)"],
-                ["bucket[4](id)"],
-                ["bucket[8](id)"],
-                ["truncate[2](name)"],
-                ["truncate[5](name)"],
-                ["year(timestamp)"],
-                ["month(timestamp)"],
-                ["day(timestamp)"],
-                ["hour(timestamp)"],
-                ["bucket[10](value)"],
-
-                # Additional single-column transforms (12)
-                ["date(timestamp)"],  # Date-level partitioning
-                ["bucket[2](id)"],    # Minimal buckets
-                ["bucket[16](id)"],   # Higher bucket count
-                ["bucket[32](id)"],   # Very high bucket count
-                ["bucket[4](value)"], # Different numeric field
-                ["bucket[8](value)"], # Different field, different size
-                ["truncate[1](name)"], # Single character (high cardinality)
-                ["truncate[3](name)"], # 3-character prefixes
-                ["truncate[10](name)"], # Longer prefixes
-                ["identity(boolean_col)"], # Boolean partitioning
-                ["identity(int_col)"],     # High cardinality numeric
-                ["identity(date_col)"],    # Date-based identity
-
-                # Original multi-column transforms (5)
-                ["identity(category)", "year(timestamp)"],
-                ["identity(category)", "bucket[8](id)"],
-                ["bucket[4](id)", "day(timestamp)"],
-                ["year(timestamp)", "bucket[4](id)"],
-                ["identity(category)", "month(timestamp)", "bucket[4](id)"],
-
-                # Additional multi-column transforms (8)
-                ["hour(timestamp)", "identity(category)"],        # Temporal + categorical
-                ["day(timestamp)", "bucket[8](id)"],             # Daily + hash
-                ["truncate[2](name)", "year(timestamp)"],        # String + temporal
-                ["bucket[4](id)", "bucket[8](value)"],           # Multiple hash fields
-                ["identity(category)", "day(timestamp)", "bucket[4](id)"], # Four-way partition
-                ["date(timestamp)", "identity(category)"],       # Date + categorical
-                ["truncate[3](name)", "bucket[4](id)"],         # String + hash
-                ["month(timestamp)", "bucket[2](id)"],          # Monthly + minimal hash
-
-                # Edge cases (1)
-                ["identity(single_value_field)"]   # Single partition
-            ]
-            write_patterns = ["insert_heavy", "update_heavy", "delete_heavy", "mixed_chaos"]
-            delete_modes = ["cow", "posdelete"]
-
-        # Build table specs
-        table_specs = []
-        for transform in partition_transforms:
-            # Generate clean table name from transform spec
-            transform_parts = []
-            for t in transform:
-                if t.startswith('identity('):
-                    col = t[9:-1]
-                    transform_parts.append(f"identity_{col}")
-                elif t.startswith('bucket['):
-                    size = t.split('[')[1].split(']')[0]
-                    col = t.split('(')[1].rstrip(')')
-                    transform_parts.append(f"bucket{size}_{col}")
-                elif t.startswith('truncate['):
-                    width = t.split('[')[1].split(']')[0]
-                    col = t.split('(')[1].rstrip(')')
-                    transform_parts.append(f"truncate{width}_{col}")
-                elif t.startswith('date('):
-                    col = t[5:-1]
-                    transform_parts.append(f"date_{col}")
-                elif t.startswith('year('):
-                    col = t[5:-1]
-                    transform_parts.append(f"year_{col}")
-                elif t.startswith('month('):
-                    col = t[6:-1]
-                    transform_parts.append(f"month_{col}")
-                elif t.startswith('day('):
-                    col = t[4:-1]
-                    transform_parts.append(f"day_{col}")
-                elif t.startswith('hour('):
-                    col = t[5:-1]
-                    transform_parts.append(f"hour_{col}")
-                else:
-                    transform_parts.append(t.replace('(', '_').replace(')', '').replace('[', '').replace(']', ''))
-
-            transform_name = "_".join(transform_parts)
-
-            for pattern in write_patterns:
-                for mode in delete_modes:
-                    # Skip invalid combinations: v1 only supports cow
-                    if mode == "posdelete" and "_v1_" in transform_name:
-                        continue
-
-                    table_name = f"part_{transform_name}_{pattern}_{mode}"
-                    table_specs.append({
-                        'name': table_name,
-                        'transform': transform,
-                        'pattern': pattern,
-                        'mode': mode
-                    })
-
-        # Apply random selection if specified
-        table_specs = self._random_select_tables(table_specs, random_count)
-
-        mode_str = (
-            "minimal (16 transforms, mixed_chaos, posdelete)" if minimal
-            else "full (37 transforms, 4 patterns, 2 modes)"
-        )
-        print(
-            f"Generating {len(table_specs)} partitioned tables ({mode_str}) "
-            f"with {num_parallel} parallel workers..."
-        )
-
-        success_count = 0
-        total_count = len(table_specs)
-
-        if num_parallel > 1:
-            self._ensure_spark()
-            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
-                futures = {
-                    executor.submit(
-                        create_partitioned_table, self.spark, self.warehouse_path,
-                        spec['name'], spec['pattern'], ",".join(spec['transform']),
-                        delete_existing=delete_existing
-                    ): spec
-                    for spec in table_specs
-                }
-                for future in as_completed(futures):
-                    spec = futures[future]
-                    try:
-                        success = future.result()
-                        if success:
-                            success_count += 1
-                            print(f"✓ Created {spec['name']} ({success_count}/{total_count})")
-                        else:
-                            print(f"✗ Failed {spec['name']}")
-                    except Exception as e:
-                        print(f"✗ Failed {spec['name']}: {e}")
-        else:
-            self._ensure_spark()
-            for i, spec in enumerate(table_specs, 1):
-                try:
-                    success = create_partitioned_table(
-                        self.spark, self.warehouse_path,
-                        spec['name'], spec['pattern'], ",".join(spec['transform']),
-                        delete_existing=delete_existing
-                    )
-                    if success:
-                        success_count += 1
-                        print(f"✓ Created {spec['name']} ({success_count}/{total_count})")
-                    else:
-                        print(f"✗ Failed {spec['name']}")
-                except Exception as e:
-                    print(f"✗ Failed {spec['name']}: {e}")
-
-        print(f"\nCompleted: {success_count}/{total_count} partitioned tables created")
-
-    def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None):
-        """Generate minimal set of tables"""
-        table_specs = load_table_specs(self.specs_path, minimal=True)
-
-        # Apply random selection if specified
-        table_specs = self._random_select_tables(table_specs, random_count)
-        print(f"Generating {len(table_specs)} minimal tables with {num_parallel} parallel workers...")
-
-        success_count = 0
-        total_count = len(table_specs)
-
-        if num_parallel > 1:
-            self._ensure_spark()
-            with ThreadPoolExecutor(max_workers=num_parallel) as executor:
-                futures = {
-                    executor.submit(create_table_worker, self.spark, self.warehouse_path, spec): spec
-                    for spec in table_specs
-                }
-                for future in as_completed(futures):
-                    table_name, success = future.result()
-                    if success:
-                        success_count += 1
-                        print(f"✓ Created table {table_name} ({success_count}/{total_count})")
-                    else:
-                        print(f"✗ Failed to create table {table_name}")
-        else:
-            self._ensure_spark()
-            for i, spec in enumerate(table_specs, 1):
-                success = create_single_type_table(
-                    self.spark, self.warehouse_path, spec['name'], spec, f"{i}/{total_count}"
-                )
-                if success:
-                    success_count += 1
-                    print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
-                else:
-                    print(f"✗ Failed to create table {spec['name']}")
-
-        print(f"\nCompleted minimal tables: {success_count}/{total_count} tables created successfully")
-
     def cleanup(self):
         """Cleanup Spark session"""
         if self.spark is not None:
             self.spark.stop()
             self.spark = None
-
-    def generate_evolution_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
-        """Generate evolution tables for testing Iceberg evolution features"""
-        if delete_existing:
-            print("Deleting existing evolution tables before generation...")
-            self.delete_tables_by_namespace("evolution")
-
-
-        self._ensure_spark()
-
-        print("Generating evolution tables...")
-        generate_evolution_tables(
-            type('Args', (), {
-                'specs': self.specs_path,
-                'num_parallel': num_parallel,
-                'random': random_count
-            })(),
-            self.spark,
-            self.warehouse_path
-        )

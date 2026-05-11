@@ -1,6 +1,8 @@
 # Evolution Table Specifications for Iceberg Testing
 # Tests various Iceberg evolution features: format version, schema, partition, sort order, properties, metadata
 
+type: evolution
+
 metadata:
   description: "Evolution tables for testing Iceberg table evolution features"
   namespace: "evolution"

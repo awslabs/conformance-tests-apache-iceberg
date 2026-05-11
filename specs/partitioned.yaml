@@ -1,5 +1,7 @@
 # Partitioned Tables - Multi-column tables with partition transforms for compaction testing
 
+type: partitioned
+
 metadata:
   description: "Partitioned tables with different write patterns for compaction testing"
   total_columns: 30

@@ -1,5 +1,7 @@
 # Write Pattern Tables - Comprehensive multi-column tables for compaction testing
 
+type: write_pattern
+
 metadata:
   description: "Comprehensive multi-column tables with different write patterns for compaction testing"
   total_columns: 24

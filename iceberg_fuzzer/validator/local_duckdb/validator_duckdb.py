@@ -1586,17 +1586,20 @@ def _validate_tables(
         print(f"Error: Could not load Iceberg extension: {e}")
         return False
 
-    # Determine which table types to validate based on specs filename,
-    # matching the CLI's dispatch logic.
-    specs_file = Path(specs_path).name.lower()
+    # Determine which table types to validate based on spec type.
+    spec_type = specs.get('type')
+    if not spec_type:
+        print(f"Error: spec file '{specs_path}' is missing required 'type' key")
+        return False
+
     all_expected = []
 
     print(f"\nExpected tables from specs:")
 
-    include_simple = 'simple' in specs_file or 'table_specs' in specs_file
-    include_write_patterns = 'write_pattern' in specs_file or 'table_specs' in specs_file
-    include_partitioned = 'partitioned' in specs_file or 'table_specs' in specs_file
-    include_evolution = 'evolution' in specs_file
+    include_simple = spec_type in ('simple', 'all')
+    include_write_patterns = spec_type in ('write_pattern', 'all')
+    include_partitioned = spec_type in ('partitioned', 'all')
+    include_evolution = spec_type == 'evolution'
 
     if include_simple:
         expected_single_type = _extract_expected_single_type_tables(
