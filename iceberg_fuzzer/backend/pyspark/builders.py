@@ -44,6 +44,7 @@ from pyspark.sql.types import (
 )
 
 from iceberg_fuzzer.table_spec import load_table_specs
+from iceberg_fuzzer.common import row_id_from_index
 
 
 def create_spark_session(warehouse_path, app_name=None):
@@ -514,7 +515,7 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
     data = []
 
     for i in range(num_rows):
-        row_id = i + 1 + row_offset
+        row_id = row_id_from_index(i, row_offset)
         row_data = {}
 
         # Generate data for each field in the schema
@@ -1523,7 +1524,7 @@ def generate_partitioned_data(spark, schema_spec, num_rows=100, row_offset=0):
     categories = ['A', 'B', 'C', 'D', 'E']
 
     for i in range(num_rows):
-        row_id = row_offset + i + 1
+        row_id = row_id_from_index(i, row_offset)
         row = {
             'id': row_id,
             'category': categories[row_id % 5],
@@ -1951,7 +1952,7 @@ def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
         # Use current table schema - create data matching evolved schema
         data = []
         for i in range(num_rows):
-            row_id = row_offset + i + 1
+            row_id = row_id_from_index(i, row_offset)
             row_values = []
 
             # Only generate data for columns that exist in current schema
@@ -2002,7 +2003,7 @@ def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
 
         data = []
         for i in range(num_rows):
-            row_id = row_offset + i + 1
+            row_id = row_id_from_index(i, row_offset)
             data.append((
                 row_id,
                 f"name_{row_id}",
