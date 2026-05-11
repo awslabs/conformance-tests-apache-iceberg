@@ -90,8 +90,8 @@ The project uses an object-oriented design with a unified CLI:
 - **`backend/pyspark/generator.py`**: PySpark implementation of TableGenerator
 - **`backend/pyiceberg/generator.py`**: PyIceberg implementation of TableGenerator
 - **`backend/polars/generator.py`**: Polars implementation of TableGenerator
-- **`backend/pyspark/cli.py`**: PySpark-specific table generation functions
-- **`backend/pyiceberg/cli.py`**: PyIceberg-specific table generation functions
+- **`backend/pyspark/builders.py`**: PySpark-specific table generation functions
+- **`backend/pyiceberg/builders.py`**: PyIceberg-specific table generation functions
 - **`validator.py`**: Abstract base class defining the table validation interface
 - **`validator/local_duckdb/validator_duckdb.py`**: DuckDB-based table validation for local warehouses
 

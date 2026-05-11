@@ -30,7 +30,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from pyiceberg.catalog.sql import SqlCatalog
 
-from backend.pyiceberg.cli import (
+from backend.pyiceberg.builders import (
     load_table_specs,
     create_table_with_commits
 )

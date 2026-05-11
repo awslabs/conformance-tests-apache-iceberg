@@ -31,7 +31,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import boto3
 
-from backend.pyspark.cli import (
+from backend.pyspark.builders import (
     create_spark_session,
     is_s3_table_warehouse,
     create_single_type_table,
