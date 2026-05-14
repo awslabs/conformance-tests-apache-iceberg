@@ -59,6 +59,62 @@ python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/w
 deactivate
 ```
 
+## Workflows
+
+Workflows run multi-step operations against existing tables and validate correctness. A workflow is defined in YAML with steps that are either `replace` (external command, validated) or `append` (adds rows via a backend).
+
+```bash
+# Generate a table first
+python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal --random 1
+
+# Run a workflow against it
+TABLE=$(ls /tmp/warehouse/simple/ | head -1)
+python3 -m iceberg_fuzzer.cli workflow run \
+    --workflow specs/workflows/compaction.yaml \
+    --warehouse-path /tmp/warehouse \
+    --table-name "$TABLE" \
+    --namespace simple
+
+# Dry-run to see what would execute
+python3 -m iceberg_fuzzer.cli workflow run \
+    --workflow specs/workflows/compaction.yaml \
+    --warehouse-path /tmp/warehouse \
+    --table-name "$TABLE" \
+    --namespace simple \
+    --dry-run
+```
+
+### Workflow YAML format
+
+```yaml
+name: compact_append_compact
+steps:
+  - id: compact_1
+    operation: replace
+    command: >
+      python3 scripts/example-pyspark-compact.py
+      --warehouse ${warehouse}
+      --namespace ${namespace}
+      --table-name ${table_name}
+    timeout: 600
+
+  - id: append
+    operation: append
+    backend: pyspark
+    num_rows: 5
+
+  - id: compact_2
+    operation: replace
+    command: ...
+    timeout: 600
+```
+
+**Step operations:**
+- `replace` — runs an external command that should not change logical content (e.g., compaction). A checkpoint (row count + SHA256 content hash) is captured before and validated after.
+- `append` — adds rows to the table via the specified backend. Validates row count increased by `num_rows`.
+
+**Placeholders** available in `command`: `${warehouse}`, `${namespace}`, `${table_name}`.
+
 ## Requirements
 
 - Python 3.9+
@@ -94,6 +150,10 @@ The project uses an object-oriented design with a unified CLI:
 - **`backend/pyiceberg/builders.py`**: PyIceberg-specific table generation functions
 - **`validator.py`**: Abstract base class defining the table validation interface
 - **`validator/local_duckdb/validator_duckdb.py`**: DuckDB-based table validation for local warehouses
+- **`workflow/engine.py`**: Multi-step workflow orchestration (checkpoint → operate → validate)
+- **`backend/__init__.py`**: Abstract base classes for ValidationEngine and MutationEngine
+- **`backend/duckdb/__init__.py`**: DuckDB-based validation (row count + content hash via SHA256)
+- **`backend/pyspark/mutation.py`**: PySpark-based table mutation (append rows)
 
 ## PySpark Implementation
 

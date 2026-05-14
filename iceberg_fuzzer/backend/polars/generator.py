@@ -43,6 +43,7 @@ from pyiceberg.types import (
 
 from iceberg_fuzzer.generator import TableGenerator
 from iceberg_fuzzer.table_spec import load_table_specs
+from iceberg_fuzzer.common import row_id_from_index
 
 
 class PolarsGenerator(TableGenerator):
@@ -140,7 +141,7 @@ class PolarsGenerator(TableGenerator):
         if iceberg_type == 'boolean':
             return [(i + row_offset) % 2 == 0 for i in range(num_rows)]
         elif field_name == 'id':
-            return list(range(1 + row_offset, num_rows + 1 + row_offset))
+            return [row_id_from_index(i, row_offset) for i in range(num_rows)]
         elif iceberg_type == 'int':
             return list(range(row_offset, num_rows + row_offset))
         elif iceberg_type == 'long':

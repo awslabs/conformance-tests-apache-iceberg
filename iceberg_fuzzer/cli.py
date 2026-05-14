@@ -249,7 +249,56 @@ Examples:
                        default=1,
                        help='Number of parallel workers for deletion (default: 1)')
 
+    # Workflow subcommand
+    workflow_parser = subparsers.add_parser('workflow',
+        help='Run correctness workflows against existing tables',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run a compaction workflow
+  python3 cli.py workflow run --workflow specs/workflows/compaction.yaml \
+      --warehouse-path /tmp/warehouse --table-name my_table --namespace simple
+
+  # Dry-run to see what would execute
+  python3 cli.py workflow run --workflow specs/workflows/compaction.yaml \
+      --warehouse-path /tmp/warehouse --table-name my_table --namespace simple --dry-run
+        """)
+
+    workflow_subparsers = workflow_parser.add_subparsers(dest='workflow_action', required=True)
+    workflow_run_parser = workflow_subparsers.add_parser('run', help='Run a workflow')
+    workflow_run_parser.add_argument('--workflow',
+                       required=True,
+                       help='Path to workflow YAML file')
+    workflow_run_parser.add_argument('--warehouse-path',
+                       required=True,
+                       help='Warehouse path')
+    workflow_run_parser.add_argument('--output-dir',
+                       default='output/workflow-logs',
+                       help='Directory for operation stdout/stderr (default: output/workflow-logs/)')
+    workflow_run_parser.add_argument('--table-name',
+                       required=True,
+                       help='Table name to run the workflow against')
+    workflow_run_parser.add_argument('--namespace',
+                       required=True,
+                       help='Table namespace')
+    workflow_run_parser.add_argument('--dry-run',
+                       action='store_true',
+                       help='Print operations that would be executed without running them')
+
     args = parser.parse_args()
+
+    # Handle workflow command
+    if args.command == 'workflow':
+        from iceberg_fuzzer.workflow import run_workflow
+        result = run_workflow(
+            workflow_file=args.workflow,
+            warehouse_path=args.warehouse_path,
+            output_dir=args.output_dir,
+            table_name=args.table_name,
+            namespace=args.namespace,
+            dry_run=args.dry_run,
+        )
+        sys.exit(0 if result is None or result.passed else 1)
 
     # Handle delete command
     if args.command == 'delete':

@@ -38,6 +38,8 @@ from pyiceberg.types import (
     DecimalType, FixedType, UUIDType, ListType, NestedField
 )
 
+from iceberg_fuzzer.common import row_id_from_index
+
 
 def create_iceberg_schema(table_spec):
     """Convert table spec to PyIceberg schema"""
@@ -91,7 +93,7 @@ def generate_sample_data(table_spec, num_rows=100):
         field_type = field_spec['type']
 
         if field_name == 'id':
-            data[field_name] = pa.array(list(range(num_rows)), type=pa.int32())
+            data[field_name] = pa.array([row_id_from_index(i, 0) for i in range(num_rows)], type=pa.int32())
         elif field_type == 'boolean':
             data[field_name] = pa.array([i % 2 == 0 for i in range(num_rows)])
         elif field_type == 'int':
