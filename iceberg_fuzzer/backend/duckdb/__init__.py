@@ -31,7 +31,9 @@ def _get_content_hash(conn, table_path: str) -> int:
     """Return an order-independent content hash for a table.
 
     Computes SHA256 of each row's concatenated column values, then XORs
-    the first 60 bits across all rows for a commutative aggregate.
+    the 60 least-significant bits across all rows for a commutative aggregate.
+    We use the 60 least-significant bits (or 15 hexadecimal digits) as this avoids
+    hitting issues when casting from unsigned to signed integers.
 
     Known limitations:
     - VARCHAR casting is engine-specific. Cross-engine validation will require
