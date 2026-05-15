@@ -22,12 +22,9 @@ KONA - Iceberg Table Fuzzer
 PyIceberg table generation implementation using PyIceberg library
 """
 
-import argparse
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date, time
 from decimal import Decimal
-from pathlib import Path
 
 import pyarrow as pa
 from pyiceberg.catalog.sql import SqlCatalog
@@ -204,8 +201,6 @@ def create_table_with_commits(catalog_config, table_name, table_spec, num_commit
     except Exception as e:
         print(f"Error creating table {table_name}: {e}")
         return False
-
-from iceberg_fuzzer.table_spec import load_table_specs
 
 def create_comprehensive_schema():
     """Create comprehensive schema with multiple data types"""
