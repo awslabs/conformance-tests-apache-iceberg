@@ -84,6 +84,10 @@ class ValidationEngine(ABC):
         """
         pass
 
+    def close(self):
+        """Release resources. Called when the workflow completes."""
+        pass
+
 
 class MutationEngine(ABC):
     """Performs data mutations on Iceberg tables (append, delete, etc.).

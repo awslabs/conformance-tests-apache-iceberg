@@ -1,0 +1,69 @@
+"""PySpark backend — validation via SparkSession table reads."""
+
+import logging
+import os
+
+from pyspark.sql import functions as F
+
+from iceberg_fuzzer.backend import ValidationEngine, Checkpoint, AssertionResult
+from iceberg_fuzzer.backend.pyspark.canonical import PySparkCanonicalCast
+from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
+
+
+class PySparkValidation(ValidationEngine):
+    """PySpark-based validation engine using Spark SQL for table access.
+
+    Computes content hashes using canonical type formatting for cross-engine agreement.
+    """
+
+    def __init__(self, warehouse_path: str):
+        self._warehouse_path = warehouse_path
+        self._spark = None
+
+    def _get_spark(self):
+        if self._spark is None:
+            logging.getLogger("py4j").setLevel(logging.ERROR)
+            os.environ.setdefault("SPARK_LOG_LEVEL", "ERROR")
+            self._spark = create_spark_session(self._warehouse_path)
+            self._spark.sparkContext.setLogLevel("ERROR")
+        return self._spark
+
+    def _resolve_table_ref(self, namespace: str, table_name: str) -> str:
+        is_s3 = self._warehouse_path.startswith('arn:aws:s3tables:')
+        catalog = "s3tables" if is_s3 else "local"
+        return f"{catalog}.{namespace}.{table_name}"
+
+    def _compute_hash(self, table_ref: str) -> int:
+        spark = self._get_spark()
+        df = spark.table(table_ref)
+
+        canonical = PySparkCanonicalCast()
+        canonical_cols = [
+            canonical.cast(field.name, field.dataType)
+            for field in df.schema
+        ]
+        concat_expr = F.concat_ws("|", *canonical_cols)
+        hash_col = F.sha2(concat_expr, 256)
+        # 15 hex chars = 60 bits, fits in signed long
+        truncated = F.conv(F.substring(hash_col, 1, 15), 16, 10).cast("long")
+        result = df.select(F.bit_xor(truncated).alias("h")).collect()[0]["h"]
+        return result or 0
+
+    def capture_checkpoint(self, warehouse: str, namespace: str, table_name: str) -> Checkpoint:
+        table_ref = self._resolve_table_ref(namespace, table_name)
+        spark = self._get_spark()
+        row_count = spark.table(table_ref).count()
+        content_hash = self._compute_hash(table_ref)
+        return Checkpoint(row_count=row_count, content_hash=content_hash)
+
+    def validate(self, checkpoint: Checkpoint, warehouse: str, namespace: str, table_name: str) -> list[AssertionResult]:
+        current = self.capture_checkpoint(warehouse, namespace, table_name)
+        return [
+            AssertionResult.row_count(checkpoint.row_count, current.row_count),
+            AssertionResult.content_hash(checkpoint.content_hash, current.content_hash),
+        ]
+
+    def close(self):
+        if self._spark is not None:
+            self._spark.stop()
+            self._spark = None
