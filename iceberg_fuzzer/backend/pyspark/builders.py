@@ -22,7 +22,6 @@ KONA - Iceberg Table Fuzzer
 PySpark Iceberg table generation implementation
 """
 
-import argparse
 import heapq
 import os
 import random
@@ -31,8 +30,6 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 from decimal import Decimal
-from pathlib import Path
-
 import boto3
 import yaml
 from pyspark.sql import SparkSession
