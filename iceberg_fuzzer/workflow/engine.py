@@ -2,6 +2,7 @@
 Workflow engine for iceberg-fuzzer.
 
 Runs multi-step workflows against existing Iceberg tables.
+Validates with all available query engines and asserts cross-engine agreement on content hashes.
 
 Step operations:
   - replace: Runs an external command that should not change logical content.
@@ -18,9 +19,10 @@ from string import Template
 
 import yaml
 
-from iceberg_fuzzer.backend import AssertionResult
+from iceberg_fuzzer.backend import AssertionResult, Checkpoint, ValidationEngine
 from iceberg_fuzzer.backend.duckdb import DuckDBValidation
 from iceberg_fuzzer.backend.pyspark.mutation import PySparkMutation
+from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation
 
 StepId = str
 
@@ -49,6 +51,21 @@ class TableResult:
             for assertions in self.step_assertions.values()
             for a in assertions
         )
+
+
+def _cross_engine_assertions(post_hashes: dict[str, int]) -> list[AssertionResult]:
+    """Assert that all engines agree on the content hash."""
+    if len(post_hashes) < 2:
+        return []
+
+    values = list(post_hashes.values())
+    all_agree = all(v == values[0] for v in values)
+    return [AssertionResult(
+        name="cross_engine.content_hash",
+        passed=all_agree,
+        expected=f"all engines agree",
+        actual=f"{post_hashes}" if not all_agree else f"agreed ({values[0]})",
+    )]
 
 
 def _get_or_init_mutation_engine(name: str, warehouse_path: str, mutation_engines: dict):
@@ -96,8 +113,8 @@ def load_workflow(path: str) -> Workflow:
 
 
 
-def _handle_replace(step, engine, warehouse_path, namespace, name, placeholders, output_dir, workflow_name, dry_run=False) -> OperationHandlerReturnType:
-    """Handle a 'replace' step: checkpoint, run command, validate."""
+def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders, output_dir, workflow_name, dry_run=False) -> OperationHandlerReturnType:
+    """Handle a 'replace' step: checkpoint with all engines, run command, validate all."""
     step_id = step['id']
     resolved = Template(step['command']).safe_substitute(placeholders)
 
@@ -105,7 +122,9 @@ def _handle_replace(step, engine, warehouse_path, namespace, name, placeholders,
         print(f"    {step_id} [replace]: {resolved.strip()}")
         return [], None
 
-    checkpoint = engine.capture_checkpoint(warehouse_path, namespace, name)
+    checkpoints: dict[str, Checkpoint] = {}
+    for engine_name, engine in engines:
+        checkpoints[engine_name] = engine.capture_checkpoint(warehouse_path, namespace, name)
 
     out_dir = Path(output_dir) / workflow_name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -130,12 +149,27 @@ def _handle_replace(step, engine, warehouse_path, namespace, name, placeholders,
     if returncode != 0:
         return [], f"Step '{step_id}' exited with code {returncode}"
 
-    assertions = engine.validate(checkpoint, warehouse_path, namespace, name)
+    assertions: list[AssertionResult] = []
+    post_hashes: dict[str, int] = {}
+
+    for engine_name, engine in engines:
+        engine_assertions = engine.validate(checkpoints[engine_name], warehouse_path, namespace, name)
+        for a in engine_assertions:
+            assertions.append(AssertionResult(
+                name=f"{engine_name}.{a.name}",
+                passed=a.passed,
+                expected=a.expected,
+                actual=a.actual,
+            ))
+            if a.name == 'content_hash':
+                post_hashes[engine_name] = a.actual
+
+    assertions.extend(_cross_engine_assertions(post_hashes))
     return assertions, None
 
 
-def _handle_append(step, engine, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationHandlerReturnType:
-    """Handle an 'append' step: append rows, validate row count."""
+def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationHandlerReturnType:
+    """Handle an 'append' step: append rows, validate row count with all engines."""
     step_id = step['id']
     num_rows = step['num_rows']
 
@@ -145,12 +179,25 @@ def _handle_append(step, engine, warehouse_path, namespace, name, mutation_engin
 
     backend = _get_or_init_mutation_engine(step['backend'], warehouse_path, mutation_engines)
 
-    pre_count = engine.capture_checkpoint(warehouse_path, namespace, name).row_count
+    # Use first engine for pre-count (all should agree)
+    _, first_engine = engines[0]
+    pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
     backend.append_rows(namespace, name, num_rows)
-    post_count = engine.capture_checkpoint(warehouse_path, namespace, name).row_count
 
-    assertions = [AssertionResult.row_count(pre_count + num_rows, post_count)]
+    assertions: list[AssertionResult] = []
+    post_hashes: dict[str, int] = {}
 
+    for engine_name, engine in engines:
+        post = engine.capture_checkpoint(warehouse_path, namespace, name)
+        assertions.append(AssertionResult(
+            name=f"{engine_name}.row_count",
+            passed=(pre_count + num_rows) == post.row_count,
+            expected=pre_count + num_rows,
+            actual=post.row_count,
+        ))
+        post_hashes[engine_name] = post.content_hash
+
+    assertions.extend(_cross_engine_assertions(post_hashes))
     return assertions, None
 
 
@@ -160,7 +207,7 @@ def _process_table(
     namespace: str,
     table_name: str,
     output_dir: str,
-    engine,
+    engines: list[tuple[str, ValidationEngine]],
     dry_run: bool = False,
 ) -> TableResult:
     """Process a single table through all workflow steps."""
@@ -191,11 +238,11 @@ def _process_table(
             try:
                 if operation == 'replace':
                     assertions, error = _handle_replace(
-                        step, engine, warehouse_path, namespace, table_name, placeholders, output_dir, workflow_name, dry_run
+                        step, engines, warehouse_path, namespace, table_name, placeholders, output_dir, workflow_name, dry_run
                     )
                 elif operation == 'append':
                     assertions, error = _handle_append(
-                        step, engine, warehouse_path, namespace, table_name, mutation_engines, dry_run
+                        step, engines, warehouse_path, namespace, table_name, mutation_engines, dry_run
                     )
                 else:
                     error = f"Unknown operation '{operation}' at step '{step_id}'"
@@ -247,6 +294,9 @@ def run_workflow(
 ) -> TableResult | None:
     """Run a workflow against a single table.
 
+    Validates each step with all available engines (DuckDB, PySpark) and
+    asserts cross-engine content hash agreement.
+
     Returns a TableResult, or None if dry_run is True.
     """
     workflow_def = load_workflow(workflow_file)
@@ -257,9 +307,18 @@ def run_workflow(
 
     if dry_run:
         print(f"  {namespace}.{table_name}:")
+        engines = []
+    else:
+        engines = [
+            ("duckdb", DuckDBValidation()),
+            ("pyspark", PySparkValidation(warehouse_path)),
+        ]
 
-    engine = DuckDBValidation() if not dry_run else None
-    result = _process_table(workflow_def, warehouse_path, namespace, table_name, output_dir, engine, dry_run)
+    try:
+        result = _process_table(workflow_def, warehouse_path, namespace, table_name, output_dir, engines, dry_run)
+    finally:
+        for _, engine in engines:
+            engine.close()
 
     if not dry_run:
         _print_table_result(result)
