@@ -2,11 +2,7 @@
 Workflow engine for iceberg-fuzzer.
 
 Runs multi-step workflows against existing Iceberg tables.
-
-Step operations:
-  - replace: Runs an external command that should not change logical content.
-    Captures a checkpoint before, validates row count + content hash after.
-  - append: Adds rows to the table via a backend. Validates row count increased by num_rows.
+See load_workflow() for supported operations.
 """
 
 import os
@@ -51,14 +47,20 @@ class TableResult:
         )
 
 
-def _get_or_init_mutation_engine(name: str, warehouse_path: str, mutation_engines: dict):
-    """Return a cached mutation engine, creating it on first use."""
-    if name not in mutation_engines:
+def _init_mutation_engines(warehouse_path: str, backends: set[str], seed: int | None = None) -> dict:
+    """Create mutation engine instances for the requested backends."""
+    engines = {}
+    for name in backends:
         if name == 'pyspark':
-            mutation_engines[name] = PySparkMutation(warehouse_path)
+            engines[name] = PySparkMutation(warehouse_path, seed=seed)
         else:
             raise ValueError(f"Unknown backend: {name}")
-    return mutation_engines[name]
+    return engines
+
+
+def _get_mutation_engine(step: dict, mutation_engines: dict):
+    """Return the mutation engine for a step's declared backend."""
+    return mutation_engines[step['backend']]
 
 
 @dataclass
@@ -91,6 +93,11 @@ def load_workflow(path: str) -> Workflow:
                 raise ValueError(f"Step '{step['id']}' (append) missing required 'backend' field")
             if 'num_rows' not in step:
                 raise ValueError(f"Step '{step['id']}' (append) missing required 'num_rows' field")
+        if op == 'delete':
+            if 'backend' not in step:
+                raise ValueError(f"Step '{step['id']}' (delete) missing required 'backend' field")
+            if 'num_rows' not in step:
+                raise ValueError(f"Step '{step['id']}' (delete) missing required 'num_rows' field")
 
     return Workflow(name=workflow_def['name'], steps=workflow_def['steps'])
 
@@ -143,7 +150,7 @@ def _handle_append(step, engine, warehouse_path, namespace, name, mutation_engin
         print(f"    {step_id} [append]: {num_rows} rows via {step['backend']}")
         return [], None
 
-    backend = _get_or_init_mutation_engine(step['backend'], warehouse_path, mutation_engines)
+    backend = _get_mutation_engine(step, mutation_engines)
 
     pre_count = engine.capture_checkpoint(warehouse_path, namespace, name).row_count
     backend.append_rows(namespace, name, num_rows)
@@ -151,6 +158,25 @@ def _handle_append(step, engine, warehouse_path, namespace, name, mutation_engin
 
     assertions = [AssertionResult.row_count(pre_count + num_rows, post_count)]
 
+    return assertions, None
+
+
+def _handle_delete(step, engine, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationHandlerReturnType:
+    """Handle a 'delete' step: delete random rows, validate row count."""
+    step_id = step['id']
+    num_rows = step['num_rows']
+
+    if dry_run:
+        print(f"    {step_id} [delete]: {num_rows} rows via {step['backend']}")
+        return [], None
+
+    backend = _get_mutation_engine(step, mutation_engines)
+
+    pre_count = engine.capture_checkpoint(warehouse_path, namespace, name).row_count
+    backend.delete_rows(namespace, name, num_rows)
+    post_count = engine.capture_checkpoint(warehouse_path, namespace, name).row_count
+
+    assertions = [AssertionResult.row_count(pre_count - num_rows, post_count)]
     return assertions, None
 
 
@@ -162,6 +188,7 @@ def _process_table(
     output_dir: str,
     engine,
     dry_run: bool = False,
+    seed: int | None = None,
 ) -> TableResult:
     """Process a single table through all workflow steps."""
     workflow_name = workflow_def.name
@@ -179,7 +206,8 @@ def _process_table(
         'warehouse': warehouse_path,
     }
 
-    mutation_engines = {}
+    backends_needed = {step['backend'] for step in workflow_def.steps if 'backend' in step}
+    mutation_engines = _init_mutation_engines(warehouse_path, backends_needed, seed=seed) if not dry_run else {}
 
     try:
         for step in workflow_def.steps:
@@ -195,6 +223,10 @@ def _process_table(
                     )
                 elif operation == 'append':
                     assertions, error = _handle_append(
+                        step, engine, warehouse_path, namespace, table_name, mutation_engines, dry_run
+                    )
+                elif operation == 'delete':
+                    assertions, error = _handle_delete(
                         step, engine, warehouse_path, namespace, table_name, mutation_engines, dry_run
                     )
                 else:
@@ -244,6 +276,7 @@ def run_workflow(
     namespace: str,
     dry_run: bool = False,
     output_dir: str = 'output/workflow-logs',
+    seed: int | None = None,
 ) -> TableResult | None:
     """Run a workflow against a single table.
 
@@ -259,7 +292,7 @@ def run_workflow(
         print(f"  {namespace}.{table_name}:")
 
     engine = DuckDBValidation() if not dry_run else None
-    result = _process_table(workflow_def, warehouse_path, namespace, table_name, output_dir, engine, dry_run)
+    result = _process_table(workflow_def, warehouse_path, namespace, table_name, output_dir, engine, dry_run, seed=seed)
 
     if not dry_run:
         _print_table_result(result)

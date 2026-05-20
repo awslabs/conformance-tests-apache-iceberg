@@ -14,7 +14,8 @@ from iceberg_fuzzer.common import row_id_from_index
 class PySparkMutation(MutationEngine):
     """PySpark-based mutation engine using SparkSession and DataFrameWriterV2."""
 
-    def __init__(self, warehouse_path: str):
+    def __init__(self, warehouse_path: str, seed: int | None = None):
+        super().__init__(seed)
         self._warehouse_path = warehouse_path
         self._spark = None
 
@@ -26,11 +27,13 @@ class PySparkMutation(MutationEngine):
             self._spark.sparkContext.setLogLevel("ERROR")
         return self._spark
 
+    def _qualified_name(self, namespace: str, table_name: str) -> str:
+        catalog = "s3tables" if self._warehouse_path.startswith('arn:aws:s3tables:') else "local"
+        return f"{catalog}.{namespace}.{table_name}"
+
     def append_rows(self, namespace: str, table_name: str, num_rows: int):
         spark = self._get_spark()
-        is_s3 = self._warehouse_path.startswith('arn:aws:s3tables:')
-        catalog = "s3tables" if is_s3 else "local"
-        qualified = f"{catalog}.{namespace}.{table_name}"
+        qualified = self._qualified_name(namespace, table_name)
 
         schema = spark.table(qualified).schema
         starting_offset = spark.sql(f"SELECT COALESCE(MAX(id), 0) FROM {qualified}").collect()[0][0]
@@ -47,6 +50,22 @@ class PySparkMutation(MutationEngine):
         df = spark.createDataFrame(rows, schema)
         df.writeTo(qualified).append()
         print(f"    Appended {num_rows} rows to {qualified}")
+
+    def delete_rows(self, namespace: str, table_name: str, num_rows: int):
+        spark = self._get_spark()
+        qualified = self._qualified_name(namespace, table_name)
+
+        all_ids = [row.id for row in spark.sql(f"SELECT id FROM {qualified}").collect()]
+
+        if num_rows > len(all_ids):
+            raise ValueError(
+                f"Cannot delete {num_rows} rows from {qualified}: only {len(all_ids)} rows exist"
+            )
+
+        ids_to_delete = self._rng.sample(all_ids, num_rows)
+        id_list = ", ".join(str(i) for i in ids_to_delete)
+        spark.sql(f"DELETE FROM {qualified} WHERE id IN ({id_list})")
+        print(f"    Deleted {num_rows} rows from {qualified}")
 
     def close(self):
         if self._spark is not None:
