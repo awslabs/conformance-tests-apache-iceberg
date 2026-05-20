@@ -30,9 +30,22 @@ import pyarrow as pa
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import (
-    BooleanType, IntegerType, LongType, FloatType, DoubleType, StringType,
-    BinaryType, DateType, TimeType, TimestampType, TimestamptzType,
-    DecimalType, FixedType, UUIDType, ListType, NestedField
+    BooleanType,
+    IntegerType,
+    LongType,
+    FloatType,
+    DoubleType,
+    StringType,
+    BinaryType,
+    DateType,
+    TimeType,
+    TimestampType,
+    TimestamptzType,
+    DecimalType,
+    FixedType,
+    UUIDType,
+    ListType,
+    NestedField,
 )
 
 from iceberg_fuzzer.common import row_id_from_index
@@ -43,107 +56,132 @@ def create_iceberg_schema(table_spec):
     fields = []
     field_id = 1
 
-    for field_spec in table_spec['schema']:
-        field_name = field_spec['name']
-        field_type_str = field_spec['type']
+    for field_spec in table_spec["schema"]:
+        field_name = field_spec["name"]
+        field_type_str = field_spec["type"]
 
         # Map type strings to PyIceberg types
         type_map = {
-            'boolean': BooleanType(),
-            'int': IntegerType(),
-            'long': LongType(),
-            'float': FloatType(),
-            'double': DoubleType(),
-            'string': StringType(),
-            'binary': BinaryType(),
-            'date': DateType(),
-            'time': TimeType(),
-            'timestamp': TimestampType(),
-            'timestamptz': TimestamptzType(),
-            'uuid': UUIDType()
+            "boolean": BooleanType(),
+            "int": IntegerType(),
+            "long": LongType(),
+            "float": FloatType(),
+            "double": DoubleType(),
+            "string": StringType(),
+            "binary": BinaryType(),
+            "date": DateType(),
+            "time": TimeType(),
+            "timestamp": TimestampType(),
+            "timestamptz": TimestamptzType(),
+            "uuid": UUIDType(),
         }
 
         if field_type_str in type_map:
             field_type = type_map[field_type_str]
-        elif field_type_str.startswith('decimal('):
-            parts = field_type_str[8:-1].split(',')
+        elif field_type_str.startswith("decimal("):
+            parts = field_type_str[8:-1].split(",")
             precision = int(parts[0])
             scale = int(parts[1]) if len(parts) > 1 else 0
             field_type = DecimalType(precision, scale)
-        elif field_type_str.startswith('fixed('):
+        elif field_type_str.startswith("fixed("):
             length = int(field_type_str[6:-1])
             field_type = FixedType(length)
         else:
             field_type = StringType()
 
-        fields.append(NestedField(field_id=field_id, name=field_name, field_type=field_type, required=False))
+        fields.append(
+            NestedField(
+                field_id=field_id,
+                name=field_name,
+                field_type=field_type,
+                required=False,
+            )
+        )
         field_id += 1
 
     return Schema(*fields)
+
 
 def generate_sample_data(table_spec, num_rows=100):
     """Generate sample data for a table"""
     data = {}
 
-    for field_spec in table_spec['schema']:
-        field_name = field_spec['name']
-        field_type = field_spec['type']
+    for field_spec in table_spec["schema"]:
+        field_name = field_spec["name"]
+        field_type = field_spec["type"]
 
-        if field_name == 'id':
-            data[field_name] = pa.array([row_id_from_index(i, 0) for i in range(num_rows)], type=pa.int32())
-        elif field_type == 'boolean':
+        if field_name == "id":
+            data[field_name] = pa.array(
+                [row_id_from_index(i, 0) for i in range(num_rows)], type=pa.int32()
+            )
+        elif field_type == "boolean":
             data[field_name] = pa.array([i % 2 == 0 for i in range(num_rows)])
-        elif field_type == 'int':
+        elif field_type == "int":
             data[field_name] = pa.array(list(range(num_rows)), type=pa.int32())
-        elif field_type == 'long':
-            data[field_name] = pa.array([i * 1000 for i in range(num_rows)], type=pa.int64())
-        elif field_type == 'float':
-            data[field_name] = pa.array([float(i) + 0.5 for i in range(num_rows)], type=pa.float32())
-        elif field_type == 'double':
-            data[field_name] = pa.array([float(i) * 1.5 for i in range(num_rows)], type=pa.float64())
-        elif field_type == 'string':
+        elif field_type == "long":
+            data[field_name] = pa.array(
+                [i * 1000 for i in range(num_rows)], type=pa.int64()
+            )
+        elif field_type == "float":
+            data[field_name] = pa.array(
+                [float(i) + 0.5 for i in range(num_rows)], type=pa.float32()
+            )
+        elif field_type == "double":
+            data[field_name] = pa.array(
+                [float(i) * 1.5 for i in range(num_rows)], type=pa.float64()
+            )
+        elif field_type == "string":
             data[field_name] = pa.array([f"value_{i}" for i in range(num_rows)])
-        elif field_type == 'date':
+        elif field_type == "date":
             base_date = date(2023, 1, 1)
             data[field_name] = pa.array(
                 [base_date.replace(day=min(28, (i % 28) + 1)) for i in range(num_rows)],
-                type=pa.date32()
+                type=pa.date32(),
             )
-        elif field_type == 'time':
+        elif field_type == "time":
             data[field_name] = pa.array(
                 [time(hour=(i % 24), minute=(i % 60)) for i in range(num_rows)],
-                type=pa.time64('us')
+                type=pa.time64("us"),
             )
-        elif field_type == 'timestamp':
+        elif field_type == "timestamp":
             base_ts = datetime(2023, 1, 1)
             data[field_name] = pa.array(
                 [base_ts.replace(hour=(i % 24)) for i in range(num_rows)],
-                type=pa.timestamp('us')
+                type=pa.timestamp("us"),
             )
-        elif field_type == 'timestamptz':
+        elif field_type == "timestamptz":
             base_ts = datetime(2023, 1, 1)
             data[field_name] = pa.array(
                 [base_ts.replace(hour=(i % 24)) for i in range(num_rows)],
-                type=pa.timestamp('us', tz='UTC')
+                type=pa.timestamp("us", tz="UTC"),
             )
-        elif field_type.startswith('decimal('):
-            parts = field_type[8:-1].split(',')
+        elif field_type.startswith("decimal("):
+            parts = field_type[8:-1].split(",")
             precision = int(parts[0])
             scale = int(parts[1]) if len(parts) > 1 else 0
             data[field_name] = pa.array(
-                [Decimal(f"{i}.{i%100:02d}") for i in range(num_rows)],
-                type=pa.decimal128(precision, scale)
+                [Decimal(f"{i}.{i % 100:02d}") for i in range(num_rows)],
+                type=pa.decimal128(precision, scale),
             )
-        elif field_type == 'uuid':
+        elif field_type == "uuid":
             # Generate deterministic UUIDs based on row index
-            data[field_name] = pa.array([uuid.UUID(int=i).bytes for i in range(num_rows)], type=pa.binary(16))
-        elif field_type.startswith('fixed('):
+            data[field_name] = pa.array(
+                [uuid.UUID(int=i).bytes for i in range(num_rows)], type=pa.binary(16)
+            )
+        elif field_type.startswith("fixed("):
             length = int(field_type[6:-1])
             data[field_name] = pa.array(
-                [f"fixed_{i}".ljust(length, '0')[:length].encode() for i in range(num_rows)],
-                type=pa.binary(length)
+                [
+                    f"fixed_{i}".ljust(length, "0")[:length].encode()
+                    for i in range(num_rows)
+                ],
+                type=pa.binary(length),
             )
-        elif field_type.startswith('list<') or field_type.startswith('map<') or field_type.startswith('struct<'):
+        elif (
+            field_type.startswith("list<")
+            or field_type.startswith("map<")
+            or field_type.startswith("struct<")
+        ):
             # Complex types not fully supported in PyIceberg - use string placeholder
             data[field_name] = pa.array([f"value_{i}" for i in range(num_rows)])
         else:
@@ -151,19 +189,22 @@ def generate_sample_data(table_spec, num_rows=100):
 
     return pa.Table.from_arrays(list(data.values()), names=list(data.keys()))
 
-def create_table_with_commits(catalog_config, table_name, table_spec, num_commits=10, rows_per_commit=100):
+
+def create_table_with_commits(
+    catalog_config, table_name, table_spec, num_commits=10, rows_per_commit=100
+):
     """Create table and add multiple commits with separate catalog instance"""
     try:
         # Create separate catalog instance for each worker to avoid concurrency issues
         # Add timeout to handle SQLite locking with parallel workers
-        uri = catalog_config['uri']
-        if 'sqlite:///' in uri and '?' not in uri:
-            uri += '?timeout=30'
+        uri = catalog_config["uri"]
+        if "sqlite:///" in uri and "?" not in uri:
+            uri += "?timeout=30"
 
         catalog = SqlCatalog(
             f"iceberg_catalog_{table_name}",
             uri=uri,
-            warehouse=catalog_config['warehouse']
+            warehouse=catalog_config["warehouse"],
         )
 
         namespace = ("simple",)
@@ -185,11 +226,22 @@ def create_table_with_commits(catalog_config, table_name, table_spec, num_commit
             identifier=table_identifier,
             schema=iceberg_schema,
             properties={
-                "format-version": table_spec.get('iceberg_version', 'v2').replace('v', ''),
-                "write.parquet.compression-codec": table_spec.get('compression', {}).get('codec', 'gzip'),
-                **({} if table_spec.get('compression', {}).get('level') is None
-                   else {"write.parquet.compression-level": str(table_spec['compression']['level'])})
-            }
+                "format-version": table_spec.get("iceberg_version", "v2").replace(
+                    "v", ""
+                ),
+                "write.parquet.compression-codec": table_spec.get(
+                    "compression", {}
+                ).get("codec", "gzip"),
+                **(
+                    {}
+                    if table_spec.get("compression", {}).get("level") is None
+                    else {
+                        "write.parquet.compression-level": str(
+                            table_spec["compression"]["level"]
+                        )
+                    }
+                ),
+            },
         )
 
         for _ in range(num_commits):
@@ -202,9 +254,12 @@ def create_table_with_commits(catalog_config, table_name, table_spec, num_commit
         print(f"Error creating table {table_name}: {e}")
         return False
 
+
 def create_comprehensive_schema():
     """Create comprehensive schema with multiple data types"""
-    fields = [NestedField(field_id=1, name="id", field_type=IntegerType(), required=False)]
+    fields = [
+        NestedField(field_id=1, name="id", field_type=IntegerType(), required=False)
+    ]
     field_id = 2
 
     # 20 primitive types
@@ -228,25 +283,55 @@ def create_comprehensive_schema():
         ("string_long_col", StringType()),
         ("binary_small_col", BinaryType()),
         ("binary_medium_col", BinaryType()),
-        ("binary_long_col", BinaryType())
+        ("binary_long_col", BinaryType()),
     ]
 
     for name, type_def in primitive_types:
-        fields.append(NestedField(field_id=field_id, name=name, field_type=type_def, required=False))
+        fields.append(
+            NestedField(
+                field_id=field_id, name=name, field_type=type_def, required=False
+            )
+        )
         field_id += 1
 
     # 3 list types (simplified)
     list_types = [
-        ("list_boolean_col", ListType(element_id=field_id+1000, element_type=BooleanType(), element_required=False)),
-        ("list_int_col", ListType(element_id=field_id+1001, element_type=IntegerType(), element_required=False)),
-        ("list_string_col", ListType(element_id=field_id+1002, element_type=StringType(), element_required=False))
+        (
+            "list_boolean_col",
+            ListType(
+                element_id=field_id + 1000,
+                element_type=BooleanType(),
+                element_required=False,
+            ),
+        ),
+        (
+            "list_int_col",
+            ListType(
+                element_id=field_id + 1001,
+                element_type=IntegerType(),
+                element_required=False,
+            ),
+        ),
+        (
+            "list_string_col",
+            ListType(
+                element_id=field_id + 1002,
+                element_type=StringType(),
+                element_required=False,
+            ),
+        ),
     ]
 
     for name, type_def in list_types:
-        fields.append(NestedField(field_id=field_id, name=name, field_type=type_def, required=False))
+        fields.append(
+            NestedField(
+                field_id=field_id, name=name, field_type=type_def, required=False
+            )
+        )
         field_id += 1
 
     return Schema(*fields)
+
 
 def generate_comprehensive_row_data(row_id, num_rows=1):
     """Generate deterministic comprehensive row data based on ID"""
@@ -258,63 +343,94 @@ def generate_comprehensive_row_data(row_id, num_rows=1):
     # Primitive columns
     data["boolean_col"] = pa.array([(row_id + i) % 2 == 0 for i in range(num_rows)])
     data["int_col"] = pa.array([row_id + i for i in range(num_rows)], type=pa.int32())
-    data["long_col"] = pa.array([(row_id + i) * 1000 for i in range(num_rows)], type=pa.int64())
-    data["float_col"] = pa.array([float(row_id + i) + 0.5 for i in range(num_rows)], type=pa.float32())
-    data["double_col"] = pa.array([float(row_id + i) * 1.5 for i in range(num_rows)], type=pa.float64())
+    data["long_col"] = pa.array(
+        [(row_id + i) * 1000 for i in range(num_rows)], type=pa.int64()
+    )
+    data["float_col"] = pa.array(
+        [float(row_id + i) + 0.5 for i in range(num_rows)], type=pa.float32()
+    )
+    data["double_col"] = pa.array(
+        [float(row_id + i) * 1.5 for i in range(num_rows)], type=pa.float64()
+    )
     data["string_col"] = pa.array([f"value_{row_id + i}" for i in range(num_rows)])
-    data["binary_col"] = pa.array([f"binary_{row_id + i}".encode() for i in range(num_rows)])
+    data["binary_col"] = pa.array(
+        [f"binary_{row_id + i}".encode() for i in range(num_rows)]
+    )
 
     # Date/time columns
     base_date = date(2023, 1, 1)
     data["date_col"] = pa.array(
-        [base_date.replace(day=min(28, ((row_id + i) % 28) + 1)) for i in range(num_rows)],
-        type=pa.date32()
+        [
+            base_date.replace(day=min(28, ((row_id + i) % 28) + 1))
+            for i in range(num_rows)
+        ],
+        type=pa.date32(),
     )
     data["time_col"] = pa.array(
-        [time(hour=((row_id + i) % 24), minute=((row_id + i) % 60)) for i in range(num_rows)],
-        type=pa.time64('us')
+        [
+            time(hour=((row_id + i) % 24), minute=((row_id + i) % 60))
+            for i in range(num_rows)
+        ],
+        type=pa.time64("us"),
     )
 
     base_ts = datetime(2023, 1, 1)
     data["timestamp_col"] = pa.array(
         [base_ts.replace(hour=((row_id + i) % 24)) for i in range(num_rows)],
-        type=pa.timestamp('us')
+        type=pa.timestamp("us"),
     )
     data["timestamptz_col"] = pa.array(
         [base_ts.replace(hour=((row_id + i) % 24)) for i in range(num_rows)],
-        type=pa.timestamp('us', tz='UTC')
+        type=pa.timestamp("us", tz="UTC"),
     )
 
     # Special types
     data["decimal_col"] = pa.array(
         [Decimal(f"{row_id + i}.{(row_id + i) % 100:02d}") for i in range(num_rows)],
-        type=pa.decimal128(10, 2)
+        type=pa.decimal128(10, 2),
     )
-    data["uuid_col"] = pa.array([uuid.UUID(int=(row_id + i)).bytes for i in range(num_rows)], type=pa.binary(16))
+    data["uuid_col"] = pa.array(
+        [uuid.UUID(int=(row_id + i)).bytes for i in range(num_rows)], type=pa.binary(16)
+    )
     data["fixed_col"] = pa.array(
-        [f"fixed_{row_id + i}".ljust(16, '0')[:16].encode() for i in range(num_rows)],
-        type=pa.binary(16)
+        [f"fixed_{row_id + i}".ljust(16, "0")[:16].encode() for i in range(num_rows)],
+        type=pa.binary(16),
     )
 
     # String variants
     data["string_small_col"] = pa.array([f"s{row_id + i}" for i in range(num_rows)])
-    data["string_medium_col"] = pa.array([f"medium_value_{row_id + i}" for i in range(num_rows)])
-    data["string_long_col"] = pa.array([f"long_value_{row_id + i}_" + "x" * 50 for i in range(num_rows)])
+    data["string_medium_col"] = pa.array(
+        [f"medium_value_{row_id + i}" for i in range(num_rows)]
+    )
+    data["string_long_col"] = pa.array(
+        [f"long_value_{row_id + i}_" + "x" * 50 for i in range(num_rows)]
+    )
 
     # Binary variants
-    data["binary_small_col"] = pa.array([f"b{row_id + i}".encode() for i in range(num_rows)])
-    data["binary_medium_col"] = pa.array([f"medium_binary_{row_id + i}".encode() for i in range(num_rows)])
-    data["binary_long_col"] = pa.array([f"long_binary_{row_id + i}".encode() + b"x" * 50 for i in range(num_rows)])
+    data["binary_small_col"] = pa.array(
+        [f"b{row_id + i}".encode() for i in range(num_rows)]
+    )
+    data["binary_medium_col"] = pa.array(
+        [f"medium_binary_{row_id + i}".encode() for i in range(num_rows)]
+    )
+    data["binary_long_col"] = pa.array(
+        [f"long_binary_{row_id + i}".encode() + b"x" * 50 for i in range(num_rows)]
+    )
 
     # List columns - fix element types to match schema
-    data["list_boolean_col"] = pa.array([[True, False, (row_id + i) % 2 == 0] for i in range(num_rows)])
+    data["list_boolean_col"] = pa.array(
+        [[True, False, (row_id + i) % 2 == 0] for i in range(num_rows)]
+    )
     data["list_int_col"] = pa.array(
         [[row_id + i, row_id + i + 1, row_id + i + 2] for i in range(num_rows)],
-        type=pa.list_(pa.int32())
+        type=pa.list_(pa.int32()),
     )
-    data["list_string_col"] = pa.array([[f"item_{row_id + i}_{j}" for j in range(3)] for i in range(num_rows)])
+    data["list_string_col"] = pa.array(
+        [[f"item_{row_id + i}_{j}" for j in range(3)] for i in range(num_rows)]
+    )
 
     return pa.Table.from_arrays(list(data.values()), names=list(data.keys()))
+
 
 def execute_write_pattern(table, pattern_name):
     """Execute specific write pattern"""
@@ -370,16 +486,17 @@ def execute_write_pattern(table, pattern_name):
         data = generate_comprehensive_row_data(1, 1000)
         table.overwrite(data)
 
+
 def create_comprehensive_table(catalog_config, pattern_name, version, delete_mode):
     """Create a comprehensive table with specific pattern"""
-    uri = catalog_config['uri']
-    if 'sqlite:///' in uri and '?' not in uri:
-        uri += '?timeout=30'
+    uri = catalog_config["uri"]
+    if "sqlite:///" in uri and "?" not in uri:
+        uri += "?timeout=30"
 
     catalog = SqlCatalog(
         f"comprehensive_catalog_{pattern_name}",
         uri=uri,
-        warehouse=catalog_config['warehouse']
+        warehouse=catalog_config["warehouse"],
     )
 
     table_name = f"unpart_{pattern_name}_zstd_plain_dictionary_{version}_{delete_mode}"
@@ -401,14 +518,14 @@ def create_comprehensive_table(catalog_config, pattern_name, version, delete_mod
         identifier=table_identifier,
         schema=schema,
         properties={
-            "format-version": version.replace('v', ''),
+            "format-version": version.replace("v", ""),
             "write.parquet.compression-codec": "zstd",
-            "write.delete.mode": "copy-on-write" if delete_mode == "cow" else "merge-on-read"
-        }
+            "write.delete.mode": "copy-on-write"
+            if delete_mode == "cow"
+            else "merge-on-read",
+        },
     )
 
     execute_write_pattern(table, pattern_name)
     catalog.close()
     return table_name
-
-

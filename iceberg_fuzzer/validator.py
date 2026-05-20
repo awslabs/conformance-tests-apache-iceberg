@@ -25,6 +25,7 @@ Abstract base class for table validators
 from abc import ABC, abstractmethod
 from typing import Dict
 
+
 class TableValidator(ABC):
     """Abstract base class for table validators"""
 
@@ -43,7 +44,9 @@ class TableValidator(ABC):
         pass
 
     @abstractmethod
-    def validate_tables(self, num_parallel: int = 1, full_content_validation: bool = False) -> Dict:
+    def validate_tables(
+        self, num_parallel: int = 1, full_content_validation: bool = False
+    ) -> Dict:
         """
         Validate all tables in the warehouse
 
