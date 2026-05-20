@@ -18,31 +18,31 @@ def generate_value(field_name: str, spark_type_str: str, row_id: int):
         spark_type_str: Spark type as a string (e.g., 'int', 'string', 'bigint').
         row_id: The row's unique ID, used to derive the value.
     """
-    if field_name == 'id':
+    if field_name == "id":
         return row_id
 
     # Normalize Spark type strings
     t = spark_type_str.lower()
 
-    if t in ('boolean', 'bool'):
+    if t in ("boolean", "bool"):
         return (row_id % 2) == 0
-    elif t in ('int', 'integer'):
+    elif t in ("int", "integer"):
         return row_id
-    elif t in ('long', 'bigint'):
+    elif t in ("long", "bigint"):
         return row_id * 1000
-    elif t == 'float':
+    elif t == "float":
         return float(row_id) + 0.5
-    elif t == 'double':
+    elif t == "double":
         return float(row_id) * 1.5
-    elif t == 'string':
+    elif t == "string":
         return f"value_{row_id}"
-    elif t == 'binary':
+    elif t == "binary":
         return f"value_{row_id}".encode()
-    elif t == 'date':
+    elif t == "date":
         return date(2023, 1, 1).replace(day=min(28, (row_id % 28) + 1))
-    elif t in ('timestamp', 'timestamp_ntz'):
+    elif t in ("timestamp", "timestamp_ntz"):
         return datetime(2023, 1, 1, hour=(row_id % 24))
-    elif t.startswith('decimal'):
+    elif t.startswith("decimal"):
         return Decimal(f"{row_id}.{row_id % 100:02d}")
     else:
         return None
