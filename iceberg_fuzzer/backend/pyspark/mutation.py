@@ -28,7 +28,8 @@ class PySparkMutation(MutationEngine):
         return self._spark
 
     def _qualified_name(self, namespace: str, table_name: str) -> str:
-        catalog = "s3tables" if self._warehouse_path.startswith('arn:aws:s3tables:') else "local"
+        is_s3 = self._warehouse_path.startswith('arn:aws:s3tables:')
+        catalog = "s3tables" if is_s3 else "local"
         return f"{catalog}.{namespace}.{table_name}"
 
     def append_rows(self, namespace: str, table_name: str, num_rows: int):

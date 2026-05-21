@@ -195,19 +195,14 @@ def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engi
 
     for engine_name, engine in engines:
         post = engine.capture_checkpoint(warehouse_path, namespace, name)
-        assertions.append(AssertionResult(
-            name=f"{engine_name}.row_count",
-            passed=(pre_count + num_rows) == post.row_count,
-            expected=pre_count + num_rows,
-            actual=post.row_count,
-        ))
+        assertions.append(AssertionResult.row_count(pre_count + num_rows, post.row_count, prefix=engine_name))
         post_hashes[engine_name] = post.content_hash
 
     assertions.extend(_cross_engine_assertions(post_hashes))
     return assertions, None
 
 
-def _handle_delete(step, engine, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationHandlerReturnType:
+def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationHandlerReturnType:
     """Handle a 'delete' step: delete random rows, validate row count."""
     step_id = step['id']
     num_rows = step['num_rows']
@@ -218,11 +213,19 @@ def _handle_delete(step, engine, warehouse_path, namespace, name, mutation_engin
 
     backend = _get_mutation_engine(step, mutation_engines)
 
-    pre_count = engine.capture_checkpoint(warehouse_path, namespace, name).row_count
+    _, first_engine = engines[0]
+    pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
     backend.delete_rows(namespace, name, num_rows)
-    post_count = engine.capture_checkpoint(warehouse_path, namespace, name).row_count
 
-    assertions = [AssertionResult.row_count(pre_count - num_rows, post_count)]
+    assertions: list[AssertionResult] = []
+    post_hashes: dict[str, int] = {}
+
+    for engine_name, engine in engines:
+        post = engine.capture_checkpoint(warehouse_path, namespace, name)
+        assertions.append(AssertionResult.row_count(pre_count - num_rows, post.row_count, prefix=engine_name))
+        post_hashes[engine_name] = post.content_hash
+
+    assertions.extend(_cross_engine_assertions(post_hashes))
     return assertions, None
 
 
@@ -273,7 +276,7 @@ def _process_table(
                     )
                 elif operation == 'delete':
                     assertions, error = _handle_delete(
-                        step, engine, warehouse_path, namespace, table_name, mutation_engines, dry_run
+                        step, engines, warehouse_path, namespace, table_name, mutation_engines, dry_run
                     )
                 else:
                     error = f"Unknown operation '{operation}' at step '{step_id}'"

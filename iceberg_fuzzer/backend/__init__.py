@@ -39,9 +39,10 @@ class AssertionResult:
     actual: Any = None
 
     @classmethod
-    def row_count(cls, expected, actual):
+    def row_count(cls, expected, actual, prefix: str | None = None):
         """Assert row count matches."""
-        return cls(name='row_count', passed=expected == actual, expected=expected, actual=actual)
+        name = f"{prefix}.row_count" if prefix else "row_count"
+        return cls(name=name, passed=expected == actual, expected=expected, actual=actual)
 
     @classmethod
     def content_hash(cls, expected, actual):
