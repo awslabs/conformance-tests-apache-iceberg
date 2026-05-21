@@ -1,4 +1,4 @@
-name: compact_append_compact
+name: compact_append_delete_compact
 
 steps:
   - id: compact_1
@@ -14,6 +14,11 @@ steps:
     operation: append
     backend: pyspark
     num_rows: 5
+
+  - id: delete
+    operation: delete
+    backend: pyspark
+    num_rows: 2
 
   - id: compact_2
     operation: replace

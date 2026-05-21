@@ -284,6 +284,10 @@ Examples:
     workflow_run_parser.add_argument('--dry-run',
                        action='store_true',
                        help='Print operations that would be executed without running them')
+    workflow_run_parser.add_argument('--seed',
+                       type=int,
+                       default=None,
+                       help='Random seed for non-deterministic operations (e.g., delete row selection)')
 
     args = parser.parse_args()
 
@@ -297,6 +301,7 @@ Examples:
             table_name=args.table_name,
             namespace=args.namespace,
             dry_run=args.dry_run,
+            seed=args.seed,
         )
         sys.exit(0 if result is None or result.passed else 1)
 

@@ -5,6 +5,7 @@ Each backend (duckdb, pyspark, polars, athena) lives in its own subpackage
 and implements one or more of: generation, validation, mutation.
 """
 
+import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -38,9 +39,10 @@ class AssertionResult:
     actual: Any = None
 
     @classmethod
-    def row_count(cls, expected, actual):
+    def row_count(cls, expected, actual, prefix: str | None = None):
         """Assert row count matches."""
-        return cls(name='row_count', passed=expected == actual, expected=expected, actual=actual)
+        name = f"{prefix}.row_count" if prefix else "row_count"
+        return cls(name=name, passed=expected == actual, expected=expected, actual=actual)
 
     @classmethod
     def content_hash(cls, expected, actual):
@@ -96,6 +98,9 @@ class MutationEngine(ABC):
     to modify table data as part of a workflow.
     """
 
+    def __init__(self, seed: int | None = None):
+        self._rng = random.Random(seed)
+
     @abstractmethod
     def append_rows(self, namespace: str, table_name: str, num_rows: int):
         """Append rows to an existing table.
@@ -104,6 +109,19 @@ class MutationEngine(ABC):
             namespace: The table's namespace.
             table_name: The table name.
             num_rows: Number of rows to append.
+        """
+        pass
+
+    @abstractmethod
+    def delete_rows(self, namespace: str, table_name: str, num_rows: int):
+        """Delete rows from an existing table.
+
+        Selects num_rows rows at random (using the instance's RNG) and removes them.
+
+        Args:
+            namespace: The table's namespace.
+            table_name: The table name.
+            num_rows: Number of rows to delete.
         """
         pass
 
