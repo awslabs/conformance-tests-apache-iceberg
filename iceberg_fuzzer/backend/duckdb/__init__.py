@@ -5,6 +5,7 @@ import os
 import duckdb
 
 from iceberg_fuzzer.backend import ValidationEngine, Checkpoint, AssertionResult
+from iceberg_fuzzer.backend.duckdb.canonical import DuckDBCanonicalCast
 
 _iceberg_installed = False
 
@@ -30,27 +31,18 @@ def _get_row_count(conn, table_path: str) -> int:
 def _get_content_hash(conn, table_path: str) -> int:
     """Return an order-independent content hash for a table.
 
-    Computes SHA256 of each row's concatenated column values, then XORs
-    the 60 least-significant bits across all rows for a commutative aggregate.
-    We use the 60 least-significant bits (or 15 hexadecimal digits) as this avoids
-    hitting issues when casting from unsigned to signed integers.
+    Uses canonical type formatting so that all query engines produce the same hash for the same data.
 
-    Known limitations:
-    - VARCHAR casting is engine-specific. Cross-engine validation will require
-      a canonical format per type (e.g., fixed timestamp format, controlled
-      float precision). For now, this is only used within a single engine
-      (DuckDB before and after), so consistency is guaranteed.
-    - The '|' separator can collide if column values contain '|'. Acceptable
-      for compaction testing where values are generated deterministically.
-    - 60-bit XOR space has birthday-problem collisions around ~2^30 rows.
-      Sufficient for test tables (typically <1M rows). The row count assertion
-      guards against row duplication/loss; the hash guards against value corruption.
+    Algorithm: SHA256 of pipe-delimited canonical strings per row,
+    first 15 hex chars (60 bits) cast to BIGINT, XOR across all rows.
+    60 bits ensures the value fits in a signed BIGINT.
     """
     schema_query = f"DESCRIBE SELECT * FROM iceberg_scan('{table_path}')"
-    columns = [row[0] for row in conn.execute(schema_query).fetchall()]
+    columns = [(row[0], row[1]) for row in conn.execute(schema_query).fetchall()]
 
+    canonical = DuckDBCanonicalCast()
     concat_expr = " || '|' || ".join(
-        f"COALESCE(CAST(\"{col}\" AS VARCHAR), '')" for col in columns
+        canonical.cast(name, dtype) for name, dtype in columns
     )
     query = (
         f"SELECT bit_xor(CAST('0x' || substr(sha256({concat_expr}), 1, 15) AS BIGINT)) "
