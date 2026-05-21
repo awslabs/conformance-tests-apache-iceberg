@@ -56,7 +56,7 @@ jobs:
         echo "PyIceberg tables: $COUNT"
         [ $COUNT -eq 34 ] || exit 1
     - name: Upload PyIceberg artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: pyiceberg-tables
@@ -83,7 +83,7 @@ jobs:
         echo "Polars tables: $COUNT"
         [ $COUNT -eq 34 ] || exit 1
     - name: Upload Polars artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: polars-tables
@@ -115,7 +115,7 @@ jobs:
         echo "PySpark simple: $SIMPLE_COUNT"
         [ $SIMPLE_COUNT -eq 34 ] || exit 1
     - name: Upload PySpark simple artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: pyspark-simple-tables
@@ -147,7 +147,7 @@ jobs:
         echo "PySpark partitioned: $PARTITIONED_COUNT"
         [ $PARTITIONED_COUNT -eq 8 ] || exit 1
     - name: Upload PySpark partitioned artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: pyspark-partitioned-tables
@@ -179,7 +179,7 @@ jobs:
         echo "PySpark write-patterns: $WRITEPATTERNS_COUNT"
         [ $WRITEPATTERNS_COUNT -eq 3 ] || exit 1
     - name: Upload PySpark write-pattern artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: pyspark-writepattern-tables
@@ -211,7 +211,7 @@ jobs:
         echo "PySpark evolution: $EVOLUTION_COUNT"
         [ $EVOLUTION_COUNT -eq 3 ] || exit 1
     - name: Upload PySpark evolution artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       with:
         name: pyspark-evolution-tables
