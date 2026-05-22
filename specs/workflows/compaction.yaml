@@ -3,28 +3,32 @@ name: compact_append_delete_compact
 steps:
   - id: compact_1
     operation: replace
-    command: >
-      python3 scripts/example-pyspark-compact.py
-      --warehouse ${warehouse}
-      --namespace ${namespace}
-      --table-name ${table_name}
-    timeout: 600
+    config:
+      command: >
+        python3 scripts/example-pyspark-compact.py
+        --warehouse ${warehouse}
+        --namespace ${namespace}
+        --table-name ${table_name}
+      timeout: 600
 
   - id: append
     operation: append
-    backend: pyspark
-    num_rows: 5
+    config:
+      backend: pyspark
+      num_rows: 5
 
   - id: delete
     operation: delete
-    backend: pyspark
-    num_rows: 2
+    config:
+      backend: pyspark
+      num_rows: 2
 
   - id: compact_2
     operation: replace
-    command: >
-      python3 scripts/example-pyspark-compact.py
-      --warehouse ${warehouse}
-      --namespace ${namespace}
-      --table-name ${table_name}
-    timeout: 600
+    config:
+      command: >
+        python3 scripts/example-pyspark-compact.py
+        --warehouse ${warehouse}
+        --namespace ${namespace}
+        --table-name ${table_name}
+      timeout: 600

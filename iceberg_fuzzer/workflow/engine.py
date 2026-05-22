@@ -2,7 +2,6 @@
 Workflow engine for iceberg-fuzzer.
 
 Runs multi-step workflows against existing Iceberg tables.
-See load_workflow() for supported operations.
 """
 
 import os
@@ -12,12 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
 
-import yaml
-
 from iceberg_fuzzer.backend import AssertionResult, Checkpoint, ValidationEngine
 from iceberg_fuzzer.backend.duckdb import DuckDBValidation
 from iceberg_fuzzer.backend.pyspark.mutation import PySparkMutation
 from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation
+from iceberg_fuzzer.workflow.loader import Workflow, load_workflow
 
 StepId = str
 
@@ -32,6 +30,7 @@ class TableResult:
     halted execution. A table passes if all assertions pass and
     no unrecoverable error occurred.
     """
+
     table_name: str
     namespace: str
     step_assertions: dict[StepId, list[AssertionResult]] = field(default_factory=dict)
@@ -42,17 +41,17 @@ class TableResult:
         if self.error:
             return False
         return all(
-            a.passed
-            for assertions in self.step_assertions.values()
-            for a in assertions
+            a.passed for assertions in self.step_assertions.values() for a in assertions
         )
 
 
-def _init_mutation_engines(warehouse_path: str, backends: set[str], seed: int | None = None) -> dict:
+def _init_mutation_engines(
+    warehouse_path: str, backends: set[str], seed: int | None = None
+) -> dict:
     """Create mutation engine instances for the requested backends."""
     engines = {}
     for name in backends:
-        if name == 'pyspark':
+        if name == "pyspark":
             engines[name] = PySparkMutation(warehouse_path, seed=seed)
         else:
             raise ValueError(f"Unknown backend: {name}")
@@ -61,7 +60,7 @@ def _init_mutation_engines(warehouse_path: str, backends: set[str], seed: int | 
 
 def _get_mutation_engine(step: dict, mutation_engines: dict):
     """Return the mutation engine for a step's declared backend."""
-    return mutation_engines[step['backend']]
+    return mutation_engines[step['config']['backend']]
 
 
 def _cross_engine_assertions(post_hashes: dict[str, int]) -> list[AssertionResult]:
@@ -74,55 +73,16 @@ def _cross_engine_assertions(post_hashes: dict[str, int]) -> list[AssertionResul
     return [AssertionResult(
         name="cross_engine.content_hash",
         passed=all_agree,
-        expected=f"all engines agree",
+        expected="all engines agree",
         actual=f"{post_hashes}" if not all_agree else f"agreed ({values[0]})",
     )]
-
-
-@dataclass
-class Workflow:
-    """A parsed and validated workflow definition."""
-    name: str
-    steps: list[dict]
-
-
-def load_workflow(path: str) -> Workflow:
-    """Load and validate a workflow definition from a YAML file."""
-    with open(path, 'r') as f:
-        workflow_def = yaml.safe_load(f)
-
-    if 'name' not in workflow_def:
-        raise ValueError(f"Workflow YAML missing required 'name' field: {path}")
-    if 'steps' not in workflow_def or not workflow_def['steps']:
-        raise ValueError(f"Workflow YAML missing or empty 'steps' field: {path}")
-
-    for i, step in enumerate(workflow_def['steps']):
-        if 'id' not in step:
-            raise ValueError(f"Step {i} missing required 'id' field")
-        if 'operation' not in step:
-            raise ValueError(f"Step '{step.get('id', i)}' missing required 'operation' field")
-        op = step['operation']
-        if op == 'replace' and 'command' not in step:
-            raise ValueError(f"Step '{step['id']}' (replace) missing required 'command' field")
-        if op == 'append':
-            if 'backend' not in step:
-                raise ValueError(f"Step '{step['id']}' (append) missing required 'backend' field")
-            if 'num_rows' not in step:
-                raise ValueError(f"Step '{step['id']}' (append) missing required 'num_rows' field")
-        if op == 'delete':
-            if 'backend' not in step:
-                raise ValueError(f"Step '{step['id']}' (delete) missing required 'backend' field")
-            if 'num_rows' not in step:
-                raise ValueError(f"Step '{step['id']}' (delete) missing required 'num_rows' field")
-
-    return Workflow(name=workflow_def['name'], steps=workflow_def['steps'])
-
 
 
 def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders, output_dir, workflow_name, dry_run=False) -> OperationHandlerReturnType:
     """Handle a 'replace' step: checkpoint with all engines, run command, validate all."""
     step_id = step['id']
-    resolved = Template(step['command']).safe_substitute(placeholders)
+    step_config = step['config']
+    resolved = Template(step_config['command']).safe_substitute(placeholders)
 
     if dry_run:
         print(f"    {step_id} [replace]: {resolved.strip()}")
@@ -145,11 +105,11 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
                 shell=False,
                 stdout=out_f,
                 stderr=err_f,
-                timeout=step.get('timeout', 300),
+                timeout=step_config.get('timeout', 300),
             )
             returncode = result.returncode
         except subprocess.TimeoutExpired:
-            err_f.write(f"\nOperation timed out after {step.get('timeout', 300)}s\n")
+            err_f.write(f"\nOperation timed out after {step_config.get('timeout', 300)}s\n")
             returncode = -1
 
     if returncode != 0:
@@ -177,10 +137,11 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
 def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationHandlerReturnType:
     """Handle an 'append' step: append rows, validate row count with all engines."""
     step_id = step['id']
-    num_rows = step['num_rows']
+    step_config = step['config']
+    num_rows = step_config['num_rows']
 
     if dry_run:
-        print(f"    {step_id} [append]: {num_rows} rows via {step['backend']}")
+        print(f"    {step_id} [append]: {num_rows} rows via {step_config['backend']}")
         return [], None
 
     backend = _get_mutation_engine(step, mutation_engines)
@@ -205,10 +166,11 @@ def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engi
 def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationHandlerReturnType:
     """Handle a 'delete' step: delete random rows, validate row count."""
     step_id = step['id']
-    num_rows = step['num_rows']
+    step_config = step['config']
+    num_rows = step_config['num_rows']
 
     if dry_run:
-        print(f"    {step_id} [delete]: {num_rows} rows via {step['backend']}")
+        print(f"    {step_id} [delete]: {num_rows} rows via {step_config['backend']}")
         return [], None
 
     backend = _get_mutation_engine(step, mutation_engines)
@@ -255,7 +217,7 @@ def _process_table(
         'warehouse': warehouse_path,
     }
 
-    backends_needed = {step['backend'] for step in workflow_def.steps if 'backend' in step}
+    backends_needed = {step['config']['backend'] for step in workflow_def.steps if 'backend' in step.get('config', {})}
     mutation_engines = _init_mutation_engines(warehouse_path, backends_needed, seed=seed) if not dry_run else {}
 
     try:
