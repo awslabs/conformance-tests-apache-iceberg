@@ -120,6 +120,7 @@ def create_spark_session(warehouse_path, app_name=None):
             .config("spark.sql.catalog.s3tables.rest.signing-name", "s3tables") \
             .config("spark.sql.catalog.s3tables.rest.signing-region", region) \
             .config("spark.sql.catalog.s3tables.io-impl", "org.apache.iceberg.aws.s3.S3FileIO") \
+            .config("spark.sql.catalog.s3tables.client.region", region) \
             .config("spark.sql.catalog.s3tables.rest-metrics-reporting-enabled", "false") \
             .config(
                 "spark.hadoop.fs.s3a.aws.credentials.provider",

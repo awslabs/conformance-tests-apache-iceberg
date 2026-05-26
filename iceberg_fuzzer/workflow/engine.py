@@ -5,7 +5,6 @@ Runs multi-step workflows against existing Iceberg tables.
 See load_workflow() for supported operations.
 """
 
-import os
 import shlex
 import subprocess
 from dataclasses import dataclass, field
@@ -241,13 +240,8 @@ def _process_table(
 ) -> TableResult:
     """Process a single table through all workflow steps."""
     workflow_name = workflow_def.name
-    table_path = os.path.join(warehouse_path, namespace, table_name)
 
     result = TableResult(table_name=table_name, namespace=namespace)
-
-    if not dry_run and not Path(table_path).exists():
-        result.error = f"Table not found at {table_path}"
-        return result
 
     placeholders = {
         'table_name': table_name,
@@ -345,7 +339,7 @@ def run_workflow(
         engines = []
     else:
         engines = [
-            ("duckdb", DuckDBValidation()),
+            ("duckdb", DuckDBValidation(warehouse_path)),
             ("pyspark", PySparkValidation(warehouse_path)),
         ]
 

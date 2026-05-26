@@ -91,6 +91,11 @@ class ValidationEngine(ABC):
         pass
 
 
+def is_s3_tables_warehouse(warehouse_path: str) -> bool:
+    """Return True if warehouse_path is an S3 Tables ARN."""
+    return warehouse_path.startswith("arn:aws:s3tables:")
+
+
 class MutationEngine(ABC):
     """Performs data mutations on Iceberg tables (append, delete, etc.).
 
