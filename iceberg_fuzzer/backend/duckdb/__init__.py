@@ -4,12 +4,8 @@ import os
 
 import duckdb
 
-from iceberg_fuzzer.backend import ValidationEngine, Checkpoint, AssertionResult
+from iceberg_fuzzer.backend import ValidationEngine, Checkpoint, AssertionResult, is_s3_tables_warehouse
 from iceberg_fuzzer.backend.duckdb.canonical import DuckDBCanonicalCast
-
-
-def _is_s3_tables_warehouse(warehouse_path: str) -> bool:
-    return warehouse_path.startswith("arn:aws:s3tables:")
 
 
 def _extract_region(warehouse_path: str) -> str:
@@ -60,15 +56,24 @@ def _get_content_hash(conn, source: str) -> int:
     return conn.execute(query).fetchone()[0] or 0
 
 
+def _escape_identifier(name: str) -> str:
+    """Double-quote a SQL identifier, escaping any embedded double quotes."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 class DuckDBValidation(ValidationEngine):
     """DuckDB-based validation engine for local and S3 Tables warehouses."""
 
     def __init__(self, warehouse_path: str):
         self._warehouse_path = warehouse_path
-        self._is_s3 = _is_s3_tables_warehouse(warehouse_path)
+        self._is_s3 = is_s3_tables_warehouse(warehouse_path)
         self._aws_region = _extract_region(warehouse_path) if self._is_s3 else None
+        self._conn = None
 
-    def _connect(self):
+    def _get_conn(self):
+        if self._conn is not None:
+            return self._conn
+
         _ensure_iceberg_extension()
         conn = duckdb.connect()
         conn.execute("LOAD iceberg;")
@@ -88,12 +93,13 @@ class DuckDBValidation(ValidationEngine):
                 );
             """)
 
+        self._conn = conn
         return conn
 
     def _table_source(self, warehouse: str, namespace: str, table_name: str) -> str:
         """Return the SQL FROM source for a table."""
         if self._is_s3:
-            return f"s3tables.{namespace}.{table_name}"
+            return f"s3tables.{_escape_identifier(namespace)}.{_escape_identifier(table_name)}"
         # Escape single quotes for SQL string interpolation in iceberg_scan()
         path = os.path.join(warehouse, namespace, table_name).replace("'", "''")
         return f"iceberg_scan('{path}')"
@@ -102,18 +108,23 @@ class DuckDBValidation(ValidationEngine):
         self, warehouse: str, namespace: str, table_name: str
     ) -> Checkpoint:
         source = self._table_source(warehouse, namespace, table_name)
-        with self._connect() as conn:
-            return Checkpoint(
-                row_count=_get_row_count(conn, source),
-                content_hash=_get_content_hash(conn, source),
-            )
+        conn = self._get_conn()
+        return Checkpoint(
+            row_count=_get_row_count(conn, source),
+            content_hash=_get_content_hash(conn, source),
+        )
 
     def validate(
         self, checkpoint: Checkpoint, warehouse: str, namespace: str, table_name: str
     ) -> list[AssertionResult]:
         source = self._table_source(warehouse, namespace, table_name)
-        with self._connect() as conn:
-            return [
-                AssertionResult.row_count(checkpoint.row_count, _get_row_count(conn, source)),
-                AssertionResult.content_hash(checkpoint.content_hash, _get_content_hash(conn, source)),
-            ]
+        conn = self._get_conn()
+        return [
+            AssertionResult.row_count(checkpoint.row_count, _get_row_count(conn, source)),
+            AssertionResult.content_hash(checkpoint.content_hash, _get_content_hash(conn, source)),
+        ]
+
+    def close(self):
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
