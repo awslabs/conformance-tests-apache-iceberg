@@ -61,7 +61,9 @@ deactivate
 
 ## Workflows
 
-Workflows run multi-step operations against existing tables and validate correctness. A workflow is defined in YAML with steps that are either `replace` (external command, validated) or `append` (adds rows via a backend).
+Workflows run multi-step operations against existing tables and validate correctness.
+A workflow is defined in YAML with steps that perform operations like `replace`, `append`, `delete`, and `rollback`.
+See `specs/workflows/` for example workflow definitions and `iceberg_fuzzer/workflow/loader.py` for the authoritative list of supported operations and their required config fields.
 
 ```bash
 # Generate a table first

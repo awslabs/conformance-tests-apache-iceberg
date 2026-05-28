@@ -39,15 +39,20 @@ class AssertionResult:
     actual: Any = None
 
     @classmethod
-    def row_count(cls, expected, actual, prefix: str | None = None):
-        """Assert row count matches."""
-        name = f"{prefix}.row_count" if prefix else "row_count"
-        return cls(name=name, passed=expected == actual, expected=expected, actual=actual)
+    def equal(cls, name: str, expected, actual, prefix: str | None = None):
+        """Assert two values are equal."""
+        full_name = f"{prefix}.{name}" if prefix else name
+        return cls(name=full_name, passed=expected == actual, expected=expected, actual=actual)
 
     @classmethod
-    def content_hash(cls, expected, actual):
+    def row_count(cls, expected, actual, prefix: str | None = None):
+        """Assert row count matches."""
+        return cls.equal("row_count", expected, actual, prefix=prefix)
+
+    @classmethod
+    def content_hash(cls, expected, actual, prefix: str | None = None):
         """Assert content hash matches."""
-        return cls(name='content_hash', passed=expected == actual, expected=expected, actual=actual)
+        return cls.equal("content_hash", expected, actual, prefix=prefix)
 
 
 class ValidationEngine(ABC):
@@ -107,18 +112,21 @@ class MutationEngine(ABC):
         self._rng = random.Random(seed)
 
     @abstractmethod
-    def append_rows(self, namespace: str, table_name: str, num_rows: int):
+    def append_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
         """Append rows to an existing table.
 
         Args:
             namespace: The table's namespace.
             table_name: The table name.
             num_rows: Number of rows to append.
+
+        Returns:
+            The snapshot ID after the append completes.
         """
         pass
 
     @abstractmethod
-    def delete_rows(self, namespace: str, table_name: str, num_rows: int):
+    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
         """Delete rows from an existing table.
 
         Selects num_rows rows at random (using the instance's RNG) and removes them.
@@ -127,6 +135,18 @@ class MutationEngine(ABC):
             namespace: The table's namespace.
             table_name: The table name.
             num_rows: Number of rows to delete.
+
+        Returns:
+            The snapshot ID after the delete completes.
+        """
+        pass
+
+    @abstractmethod
+    def rollback_to_snapshot(self, namespace: str, table_name: str, snapshot_id: int) -> int:
+        """Roll back the table to a specific snapshot.
+
+        Returns:
+            The current snapshot ID after the rollback completes.
         """
         pass
 

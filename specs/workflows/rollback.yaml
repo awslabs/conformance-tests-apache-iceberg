@@ -1,0 +1,20 @@
+name: append_delete_rollback
+
+steps:
+  - id: append_data
+    operation: append
+    config:
+      backend: pyspark
+      num_rows: 5
+
+  - id: delete_some
+    operation: delete
+    config:
+      backend: pyspark
+      num_rows: 2
+
+  - id: rollback_to_append
+    operation: rollback
+    config:
+      backend: pyspark
+      to_step: append_data

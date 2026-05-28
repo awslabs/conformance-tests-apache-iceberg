@@ -222,6 +222,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: cli-test
+    strategy:
+      matrix:
+        workflow-file:
+          - specs/workflows/compaction.yaml
+          - specs/workflows/rollback.yaml
     steps:
     - uses: actions/checkout@v6
     - name: Install uv
@@ -237,12 +242,12 @@ jobs:
       run: uv sync
     - name: Generate a table
       run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-workflow --specs specs/simple.yaml --minimal --random 1
-    - name: Run workflow (compaction)
+    - name: Run workflow
       run: |
         TABLE_NAME=$(ls ./test-warehouse-workflow/simple/ | head -1)
-        echo "Testing workflow against table: $TABLE_NAME"
+        echo "Testing workflow ${{ matrix.workflow-file }} against table: $TABLE_NAME"
         uv run python -m iceberg_fuzzer.cli workflow run \
-          --workflow specs/workflows/compaction.yaml \
+          --workflow ${{ matrix.workflow-file }} \
           --warehouse-path $PWD/test-warehouse-workflow \
           --table-name "$TABLE_NAME" \
           --namespace simple

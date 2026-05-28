@@ -135,7 +135,107 @@ def test_valid_full_workflow(tmp_path):
     assert len(wf.steps) == 3
 
 
+def test_rollback_missing_to_step(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "steps": [
+            {"id": "a", "operation": "append", "config": {"backend": "pyspark", "num_rows": 5}},
+            {"id": "b", "operation": "rollback", "config": {"backend": "pyspark"}},
+        ],
+    }))
+    with pytest.raises(ValueError, match="missing required config field 'to_step'"):
+        load_workflow(str(path))
+
+
+def test_rollback_missing_backend(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "steps": [
+            {"id": "a", "operation": "append", "config": {"backend": "pyspark", "num_rows": 5}},
+            {"id": "b", "operation": "rollback", "config": {"to_step": "a"}},
+        ],
+    }))
+    with pytest.raises(ValueError, match="missing required config field 'backend'"):
+        load_workflow(str(path))
+
+
+def test_rollback_references_replace_step(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "steps": [
+            {"id": "compact", "operation": "replace", "config": {"command": "echo hi"}},
+            {"id": "rb", "operation": "rollback", "config": {"backend": "pyspark", "to_step": "compact"}},
+        ],
+    }))
+    with pytest.raises(ValueError, match="not a prior append/delete step"):
+        load_workflow(str(path))
+
+
+def test_rollback_references_future_step(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "steps": [
+            {"id": "rb", "operation": "rollback", "config": {"backend": "pyspark", "to_step": "app"}},
+            {"id": "app", "operation": "append", "config": {"backend": "pyspark", "num_rows": 5}},
+        ],
+    }))
+    with pytest.raises(ValueError, match="not a prior append/delete step"):
+        load_workflow(str(path))
+
+
+def test_rollback_references_nonexistent_step(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "steps": [
+            {"id": "app", "operation": "append", "config": {"backend": "pyspark", "num_rows": 5}},
+            {"id": "rb", "operation": "rollback", "config": {"backend": "pyspark", "to_step": "ghost"}},
+        ],
+    }))
+    with pytest.raises(ValueError, match="not a prior append/delete step"):
+        load_workflow(str(path))
+
+
+def test_valid_rollback_workflow(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "rollback_test",
+        "steps": [
+            {"id": "app", "operation": "append", "config": {"backend": "pyspark", "num_rows": 5}},
+            {"id": "del", "operation": "delete", "config": {"backend": "pyspark", "num_rows": 2}},
+            {"id": "rb", "operation": "rollback", "config": {"backend": "pyspark", "to_step": "app"}},
+        ],
+    }))
+    wf = load_workflow(str(path))
+    assert wf.name == "rollback_test"
+    assert len(wf.steps) == 3
+
+
+def test_rollback_can_target_delete_step(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "steps": [
+            {"id": "app", "operation": "append", "config": {"backend": "pyspark", "num_rows": 5}},
+            {"id": "del", "operation": "delete", "config": {"backend": "pyspark", "num_rows": 2}},
+            {"id": "rb", "operation": "rollback", "config": {"backend": "pyspark", "to_step": "del"}},
+        ],
+    }))
+    wf = load_workflow(str(path))
+    assert len(wf.steps) == 3
+
+
 def test_compaction_spec_file():
     wf = load_workflow("specs/workflows/compaction.yaml")
     assert wf.name == "compact_append_delete_compact"
     assert len(wf.steps) == 4
+
+
+def test_rollback_spec_file():
+    wf = load_workflow("specs/workflows/rollback.yaml")
+    assert wf.name == "append_delete_rollback"
+    assert len(wf.steps) == 3
