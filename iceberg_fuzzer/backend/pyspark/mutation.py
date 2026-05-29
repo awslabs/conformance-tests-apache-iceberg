@@ -27,12 +27,22 @@ class PySparkMutation(MutationEngine):
             self._spark.sparkContext.setLogLevel("ERROR")
         return self._spark
 
-    def _qualified_name(self, namespace: str, table_name: str) -> str:
+    def _catalog_name(self) -> str:
         is_s3 = self._warehouse_path.startswith('arn:aws:s3tables:')
-        catalog = "s3tables" if is_s3 else "local"
-        return f"{catalog}.{namespace}.{table_name}"
+        return "s3tables" if is_s3 else "local"
 
-    def append_rows(self, namespace: str, table_name: str, num_rows: int):
+    def _qualified_name(self, namespace: str, table_name: str) -> str:
+        return f"{self._catalog_name()}.{namespace}.{table_name}"
+
+    def _get_current_snapshot_id(self, qualified: str) -> int:
+        spark = self._get_spark()
+        row = spark.sql(
+            f"SELECT snapshot_id FROM {qualified}.refs "
+            f"WHERE name = 'main' AND type = 'BRANCH'"
+        ).collect()[0]
+        return row.snapshot_id
+
+    def append_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
         spark = self._get_spark()
         qualified = self._qualified_name(namespace, table_name)
 
@@ -51,8 +61,9 @@ class PySparkMutation(MutationEngine):
         df = spark.createDataFrame(rows, schema)
         df.writeTo(qualified).append()
         print(f"    Appended {num_rows} rows to {qualified}")
+        return self._get_current_snapshot_id(qualified)
 
-    def delete_rows(self, namespace: str, table_name: str, num_rows: int):
+    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
         spark = self._get_spark()
         qualified = self._qualified_name(namespace, table_name)
 
@@ -67,6 +78,18 @@ class PySparkMutation(MutationEngine):
         id_list = ", ".join(str(i) for i in ids_to_delete)
         spark.sql(f"DELETE FROM {qualified} WHERE id IN ({id_list})")
         print(f"    Deleted {num_rows} rows from {qualified}")
+        return self._get_current_snapshot_id(qualified)
+
+    def rollback_to_snapshot(self, namespace: str, table_name: str, snapshot_id: int) -> int:
+        spark = self._get_spark()
+        catalog = self._catalog_name()
+        qualified = self._qualified_name(namespace, table_name)
+        spark.sql(
+            f"CALL {catalog}.system.rollback_to_snapshot("
+            f"table => '{namespace}.{table_name}', snapshot_id => {snapshot_id})"
+        )
+        print(f"    Rolled back {qualified} to snapshot {snapshot_id}")
+        return self._get_current_snapshot_id(qualified)
 
     def close(self):
         if self._spark is not None:

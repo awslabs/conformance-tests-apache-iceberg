@@ -17,8 +17,28 @@ from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation
 from iceberg_fuzzer.workflow.loader import Workflow, load_workflow
 
 StepId = str
+EngineName = str
+SnapshotId = int
 
-OperationHandlerReturnType = tuple[list[AssertionResult], str | None]
+
+@dataclass
+class OperationResult:
+    """Result of a single operation handler."""
+    assertions: list[AssertionResult]
+    error: str | None = None
+    snapshot_id: SnapshotId | None = None
+
+    @classmethod
+    def success(cls, assertions: list[AssertionResult], snapshot_id: SnapshotId | None = None):
+        return cls(assertions=assertions, snapshot_id=snapshot_id)
+
+    @classmethod
+    def failed(cls, error: str):
+        return cls(assertions=[], error=error)
+
+    @classmethod
+    def dry_run(cls):
+        return cls(assertions=[])
 
 
 @dataclass
@@ -77,7 +97,7 @@ def _cross_engine_assertions(post_hashes: dict[str, int]) -> list[AssertionResul
     )]
 
 
-def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders, output_dir, workflow_name, dry_run=False) -> OperationHandlerReturnType:
+def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders, output_dir, workflow_name, dry_run=False) -> OperationResult:
     """Handle a 'replace' step: checkpoint with all engines, run command, validate all."""
     step_id = step['id']
     step_config = step['config']
@@ -85,7 +105,7 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
 
     if dry_run:
         print(f"    {step_id} [replace]: {resolved.strip()}")
-        return [], None
+        return OperationResult.dry_run()
 
     checkpoints: dict[str, Checkpoint] = {}
     for engine_name, engine in engines:
@@ -112,7 +132,7 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
             returncode = -1
 
     if returncode != 0:
-        return [], f"Step '{step_id}' exited with code {returncode}"
+        return OperationResult.failed(f"Step '{step_id}' exited with code {returncode}")
 
     assertions: list[AssertionResult] = []
     post_hashes: dict[str, int] = {}
@@ -130,10 +150,10 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
                 post_hashes[engine_name] = a.actual
 
     assertions.extend(_cross_engine_assertions(post_hashes))
-    return assertions, None
+    return OperationResult.success(assertions)
 
 
-def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationHandlerReturnType:
+def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationResult:
     """Handle an 'append' step: append rows, validate row count with all engines."""
     step_id = step['id']
     step_config = step['config']
@@ -141,14 +161,14 @@ def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engi
 
     if dry_run:
         print(f"    {step_id} [append]: {num_rows} rows via {step_config['backend']}")
-        return [], None
+        return OperationResult.dry_run()
 
     backend = _get_mutation_engine(step, mutation_engines)
 
     # Use first engine for pre-count (all should agree)
     _, first_engine = engines[0]
     pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
-    backend.append_rows(namespace, name, num_rows)
+    snapshot_id = backend.append_rows(namespace, name, num_rows)
 
     assertions: list[AssertionResult] = []
     post_hashes: dict[str, int] = {}
@@ -159,10 +179,10 @@ def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engi
         post_hashes[engine_name] = post.content_hash
 
     assertions.extend(_cross_engine_assertions(post_hashes))
-    return assertions, None
+    return OperationResult.success(assertions, snapshot_id=snapshot_id)
 
 
-def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationHandlerReturnType:
+def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationResult:
     """Handle a 'delete' step: delete random rows, validate row count."""
     step_id = step['id']
     step_config = step['config']
@@ -170,13 +190,13 @@ def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engi
 
     if dry_run:
         print(f"    {step_id} [delete]: {num_rows} rows via {step_config['backend']}")
-        return [], None
+        return OperationResult.dry_run()
 
     backend = _get_mutation_engine(step, mutation_engines)
 
     _, first_engine = engines[0]
     pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
-    backend.delete_rows(namespace, name, num_rows)
+    snapshot_id = backend.delete_rows(namespace, name, num_rows)
 
     assertions: list[AssertionResult] = []
     post_hashes: dict[str, int] = {}
@@ -187,7 +207,47 @@ def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engi
         post_hashes[engine_name] = post.content_hash
 
     assertions.extend(_cross_engine_assertions(post_hashes))
-    return assertions, None
+    return OperationResult.success(assertions, snapshot_id=snapshot_id)
+
+
+def _handle_rollback(step, engines, warehouse_path, namespace, name, mutation_engines,
+                     snapshot_id_by_step, accumulated_checkpoints, dry_run=False) -> OperationResult:
+    """Handle a 'rollback' step: roll back to a prior step's snapshot, then validate."""
+    step_id = step['id']
+    step_config = step['config']
+    to_step = step_config['to_step']
+
+    if dry_run:
+        print(f"    {step_id} [rollback]: to step '{to_step}' via {step_config['backend']}")
+        return OperationResult.dry_run()
+
+    if to_step not in snapshot_id_by_step:
+        return OperationResult.failed(f"Step '{step_id}': no snapshot_id recorded for step '{to_step}'")
+
+    if to_step not in accumulated_checkpoints:
+        return OperationResult.failed(f"Step '{step_id}': no checkpoint stored for step '{to_step}'")
+
+    target_snapshot_id = snapshot_id_by_step[to_step]
+    target_checkpoints = accumulated_checkpoints[to_step]
+
+    backend = _get_mutation_engine(step, mutation_engines)
+    actual_snapshot_id = backend.rollback_to_snapshot(namespace, name, target_snapshot_id)
+
+    assertions: list[AssertionResult] = [
+        AssertionResult.equal("snapshot_id", target_snapshot_id, actual_snapshot_id),
+    ]
+    post_hashes: dict[str, int] = {}
+
+    for engine_name, engine in engines:
+        post = engine.capture_checkpoint(warehouse_path, namespace, name)
+        target = target_checkpoints[engine_name]
+
+        assertions.append(AssertionResult.row_count(target.row_count, post.row_count, prefix=engine_name))
+        assertions.append(AssertionResult.content_hash(target.content_hash, post.content_hash, prefix=engine_name))
+        post_hashes[engine_name] = post.content_hash
+
+    assertions.extend(_cross_engine_assertions(post_hashes))
+    return OperationResult.success(assertions)
 
 
 def _process_table(
@@ -214,36 +274,58 @@ def _process_table(
     backends_needed = {step['config']['backend'] for step in workflow_def.steps if 'backend' in step.get('config', {})}
     mutation_engines = _init_mutation_engines(warehouse_path, backends_needed, seed=seed) if not dry_run else {}
 
+    rollback_targets: set[str] = {
+        step['config']['to_step'] for step in workflow_def.steps
+        if step['operation'] == 'rollback'
+    }
+
+    snapshot_id_by_step: dict[StepId, SnapshotId] = {}
+    accumulated_checkpoints: dict[StepId, dict[EngineName, Checkpoint]] = {}
+
     try:
         for step in workflow_def.steps:
             step_id = step['id']
             operation = step['operation']
-            assertions: list[AssertionResult] = []
-            error: str | None = None
 
             try:
                 if operation == 'replace':
-                    assertions, error = _handle_replace(
+                    op_result = _handle_replace(
                         step, engines, warehouse_path, namespace, table_name, placeholders, output_dir, workflow_name, dry_run
                     )
                 elif operation == 'append':
-                    assertions, error = _handle_append(
+                    op_result = _handle_append(
                         step, engines, warehouse_path, namespace, table_name, mutation_engines, dry_run
                     )
                 elif operation == 'delete':
-                    assertions, error = _handle_delete(
+                    op_result = _handle_delete(
                         step, engines, warehouse_path, namespace, table_name, mutation_engines, dry_run
                     )
+                elif operation == 'rollback':
+                    op_result = _handle_rollback(
+                        step, engines, warehouse_path, namespace, table_name,
+                        mutation_engines, snapshot_id_by_step, accumulated_checkpoints, dry_run
+                    )
                 else:
-                    error = f"Unknown operation '{operation}' at step '{step_id}'"
+                    op_result = OperationResult.failed(f"Unknown operation '{operation}' at step '{step_id}'")
             except Exception as e:
-                error = f"Step '{step_id}' failed: {e}"
+                op_result = OperationResult.failed(f"Step '{step_id}' failed: {e}")
 
-            result.step_assertions[step_id] = assertions
+            result.step_assertions[step_id] = op_result.assertions
 
-            if error:
-                result.error = error
+            if op_result.error:
+                result.error = op_result.error
                 return result
+
+            if op_result.snapshot_id is not None:
+                snapshot_id_by_step[step_id] = op_result.snapshot_id
+
+            if step_id in rollback_targets and not dry_run:
+                checkpoints_by_engine: dict[EngineName, Checkpoint] = {}
+                for engine_name, engine in engines:
+                    checkpoints_by_engine[engine_name] = engine.capture_checkpoint(
+                        warehouse_path, namespace, table_name
+                    )
+                accumulated_checkpoints[step_id] = checkpoints_by_engine
     finally:
         for me in mutation_engines.values():
             me.close()

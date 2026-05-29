@@ -9,6 +9,7 @@ _OPERATION_REQUIRED_CONFIG_FIELDS = {
     'replace': ['command'],
     'append': ['backend', 'num_rows'],
     'delete': ['backend', 'num_rows'],
+    'rollback': ['backend', 'to_step'],
 }
 
 
@@ -47,6 +48,18 @@ def load_workflow(path: str) -> Workflow:
             if field_name not in config:
                 raise ValueError(
                     f"Step '{step['id']}' ({op}) missing required config field '{field_name}'"
+                )
+
+        if op == 'rollback':
+            to_step = config['to_step']
+            prior_mutation_ids = {
+                s['id'] for s in workflow_def['steps'][:i]
+                if s['operation'] in ('append', 'delete')
+            }
+            if to_step not in prior_mutation_ids:
+                raise ValueError(
+                    f"Step '{step['id']}' (rollback) references '{to_step}' "
+                    f"which is not a prior append/delete step"
                 )
 
     return Workflow(name=workflow_def['name'], steps=workflow_def['steps'])
