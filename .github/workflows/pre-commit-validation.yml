@@ -14,6 +14,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  PYTHON_VERSION: 3.12
+
 jobs:
   cli-test:
     runs-on: ubuntu-latest
@@ -252,6 +255,20 @@ jobs:
           --table-name "$TABLE_NAME" \
           --namespace simple
 
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v6
+    - name: Install uv
+      uses: astral-sh/setup-uv@f06b870e0a91d23284a3013acc55e6f88ab4b904 # v7
+    - name: Set up Python
+      run: uv python install ${{ env.PYTHON_VERSION }}
+    - name: Install dependencies
+      run: uv sync --extra dev
+    - name: Run PyTest
+      run: uv run pytest
+
   validation-complete:
     name: "Validation Workflow Complete"
     runs-on: ubuntu-latest
@@ -265,6 +282,7 @@ jobs:
       - pyspark-writepatterns
       - pyspark-evolution
       - workflow
+      - pytest
     steps:
       - name: Verify jobs succeeded
         run: echo '${{ toJSON(needs) }}' | jq -e 'to_entries | all(.value.result == "success")'
