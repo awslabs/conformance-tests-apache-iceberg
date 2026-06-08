@@ -6,6 +6,7 @@ import os
 from pyspark.sql import functions as F
 
 from iceberg_fuzzer.backend import ValidationEngine, Checkpoint, AssertionResult
+from iceberg_fuzzer.backend.point_query import ColumnFilter, format_sql_literal
 from iceberg_fuzzer.backend.pyspark.canonical import PySparkCanonicalCast
 from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
 
@@ -62,6 +63,15 @@ class PySparkValidation(ValidationEngine):
             AssertionResult.row_count(checkpoint.row_count, current.row_count),
             AssertionResult.content_hash(checkpoint.content_hash, current.content_hash),
         ]
+
+    def filtered_count(self, warehouse, namespace, table_name, filt: ColumnFilter) -> int:
+        table_ref = self._resolve_table_ref(namespace, table_name)
+        spark = self._get_spark()
+        if filt.is_null:
+            where = f'`{filt.column}` IS NULL'
+        else:
+            where = f'`{filt.column}` = {format_sql_literal(filt.value)}'
+        return spark.sql(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}").collect()[0][0]
 
     def close(self):
         if self._spark is not None:

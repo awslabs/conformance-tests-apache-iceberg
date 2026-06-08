@@ -54,6 +54,11 @@ class AssertionResult:
         """Assert content hash matches."""
         return cls.equal("content_hash", expected, actual, prefix=prefix)
 
+    @classmethod
+    def skipped(cls, name: str, reason: str):
+        """Record that a check was skipped (passes but notes why)."""
+        return cls(name=name, passed=True, expected="skipped", actual=reason)
+
 
 class ValidationEngine(ABC):
     """Captures table state and validates it is preserved after an operation.
@@ -90,6 +95,10 @@ class ValidationEngine(ABC):
             A list of AssertionResults (one per check, e.g., row_count, content_hash).
         """
         pass
+
+    def filtered_count(self, warehouse: str, namespace: str, table_name: str, filt) -> int:
+        """Count rows matching a column filter. Used by point query validation."""
+        raise NotImplementedError
 
     def close(self):
         """Release resources. Called when the workflow completes."""

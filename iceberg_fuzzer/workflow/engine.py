@@ -4,6 +4,7 @@ Workflow engine for iceberg-fuzzer.
 Runs multi-step workflows against existing Iceberg tables.
 """
 
+import random
 import shlex
 import subprocess
 from dataclasses import dataclass, field
@@ -12,6 +13,7 @@ from string import Template
 
 from iceberg_fuzzer.backend import AssertionResult, Checkpoint, ValidationEngine
 from iceberg_fuzzer.backend.duckdb import DuckDBValidation
+from iceberg_fuzzer.backend.point_query import validate_point_queries
 from iceberg_fuzzer.backend.pyspark.mutation import PySparkMutation
 from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation
 from iceberg_fuzzer.workflow.loader import Workflow, load_workflow
@@ -250,6 +252,46 @@ def _handle_rollback(step, engines, warehouse_path, namespace, name, mutation_en
     return OperationResult.success(assertions)
 
 
+def _get_value_column_type(engines, warehouse_path, namespace, table_name) -> str | None:
+    """Get the type of the 'value' column via the first engine's DESCRIBE."""
+    if not engines:
+        return None
+    engine_name, engine = engines[0]
+    if engine_name == "duckdb":
+        conn = engine._get_conn()
+        source = engine._table_source(warehouse_path, namespace, table_name)
+        columns = conn.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()
+        for col_name, col_type, *_ in columns:
+            if col_name == "value":
+                return col_type
+    elif engine_name == "pyspark":
+        spark = engine._get_spark()
+        table_ref = engine._resolve_table_ref(namespace, table_name)
+        schema = spark.table(table_ref).schema
+        for f in schema:
+            if f.name == "value":
+                return f.dataType.simpleString()
+    return None
+
+
+def _get_initial_alive_ids(engines, warehouse_path, namespace, table_name) -> set[int]:
+    """Query the initial set of alive row IDs from the table."""
+    if not engines:
+        return set()
+    engine_name, engine = engines[0]
+    if engine_name == "duckdb":
+        conn = engine._get_conn()
+        source = engine._table_source(warehouse_path, namespace, table_name)
+        rows = conn.execute(f"SELECT id FROM {source}").fetchall()
+        return {row[0] for row in rows}
+    elif engine_name == "pyspark":
+        spark = engine._get_spark()
+        table_ref = engine._resolve_table_ref(namespace, table_name)
+        rows = spark.sql(f"SELECT id FROM {table_ref}").collect()
+        return {row[0] for row in rows}
+    return set()
+
+
 def _process_table(
     workflow_def: Workflow,
     warehouse_path: str,
@@ -259,6 +301,7 @@ def _process_table(
     engines: list[tuple[str, ValidationEngine]],
     dry_run: bool = False,
     seed: int | None = None,
+    point_queries: bool = True,
 ) -> TableResult:
     """Process a single table through all workflow steps."""
     workflow_name = workflow_def.name
@@ -281,6 +324,18 @@ def _process_table(
 
     snapshot_id_by_step: dict[StepId, SnapshotId] = {}
     accumulated_checkpoints: dict[StepId, dict[EngineName, Checkpoint]] = {}
+
+    # Point query state: track alive IDs and value column type
+    alive_ids: set[int] = set()
+    alive_ids_by_step: dict[StepId, set[int]] = {}
+    value_type: str | None = None
+    delete_rng = random.Random(seed)
+
+    if point_queries and not dry_run and engines:
+        alive_ids = _get_initial_alive_ids(engines, warehouse_path, namespace, table_name)
+        value_type = _get_value_column_type(engines, warehouse_path, namespace, table_name)
+        if value_type is None:
+            print(f"  ⚠ Point queries skipped: no 'value' column found in {namespace}.{table_name}")
 
     try:
         for step in workflow_def.steps:
@@ -310,6 +365,32 @@ def _process_table(
             except Exception as e:
                 op_result = OperationResult.failed(f"Step '{step_id}' failed: {e}")
 
+            # Update alive_ids based on the operation
+            if point_queries and not dry_run and not op_result.error:
+                step_config = step.get('config', {})
+                if operation == 'append':
+                    num_rows = step_config['num_rows']
+                    max_id = max(alive_ids) if alive_ids else 0
+                    new_ids = set(range(max_id + 1, max_id + 1 + num_rows))
+                    alive_ids = alive_ids | new_ids
+                elif operation == 'delete':
+                    num_rows = step_config['num_rows']
+                    sorted_ids = sorted(alive_ids)
+                    deleted_ids = set(delete_rng.sample(sorted_ids, num_rows))
+                    alive_ids = alive_ids - deleted_ids
+                elif operation == 'rollback':
+                    to_step = step_config['to_step']
+                    if to_step in alive_ids_by_step:
+                        alive_ids = alive_ids_by_step[to_step].copy()
+
+            # Run point query validation after each step
+            if point_queries and not dry_run and not op_result.error and value_type and alive_ids:
+                pq_assertions = validate_point_queries(
+                    engines, warehouse_path, namespace, table_name,
+                    alive_ids, value_type, seed=seed,
+                )
+                op_result.assertions.extend(pq_assertions)
+
             result.step_assertions[step_id] = op_result.assertions
 
             if op_result.error:
@@ -326,6 +407,8 @@ def _process_table(
                         warehouse_path, namespace, table_name
                     )
                 accumulated_checkpoints[step_id] = checkpoints_by_engine
+                if point_queries:
+                    alive_ids_by_step[step_id] = alive_ids.copy()
     finally:
         for me in mutation_engines.values():
             me.close()
@@ -364,6 +447,7 @@ def run_workflow(
     dry_run: bool = False,
     output_dir: str = 'output/workflow-logs',
     seed: int | None = None,
+    point_queries: bool = True,
 ) -> TableResult | None:
     """Run a workflow against a single table.
 
@@ -388,7 +472,7 @@ def run_workflow(
         ]
 
     try:
-        result = _process_table(workflow_def, warehouse_path, namespace, table_name, output_dir, engines, dry_run, seed=seed)
+        result = _process_table(workflow_def, warehouse_path, namespace, table_name, output_dir, engines, dry_run, seed=seed, point_queries=point_queries)
     finally:
         for _, engine in engines:
             engine.close()
