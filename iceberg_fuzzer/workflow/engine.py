@@ -252,26 +252,31 @@ def _handle_rollback(step, engines, warehouse_path, namespace, name, mutation_en
     return OperationResult.success(assertions)
 
 
-def _get_value_column_type(engines, warehouse_path, namespace, table_name) -> str | None:
-    """Get the type of the 'value' column via the first engine's DESCRIBE."""
+def _get_queryable_columns(engines, warehouse_path, namespace, table_name) -> list[tuple[str, str]]:
+    """Get all non-id columns and their types from the table schema.
+
+    Returns a list of (column_name, type_str) tuples, excluding the 'id' column.
+    Point query support for each type is determined later by _supports_point_query().
+    """
     if not engines:
-        return None
+        return []
     engine_name, engine = engines[0]
+    columns: list[tuple[str, str]] = []
     if engine_name == "duckdb":
         conn = engine._get_conn()
         source = engine._table_source(warehouse_path, namespace, table_name)
-        columns = conn.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()
-        for col_name, col_type, *_ in columns:
-            if col_name == "value":
-                return col_type
+        rows = conn.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()
+        for col_name, col_type, *_ in rows:
+            if col_name != "id":
+                columns.append((col_name, col_type))
     elif engine_name == "pyspark":
         spark = engine._get_spark()
         table_ref = engine._resolve_table_ref(namespace, table_name)
         schema = spark.table(table_ref).schema
         for f in schema:
-            if f.name == "value":
-                return f.dataType.simpleString()
-    return None
+            if f.name != "id":
+                columns.append((f.name, f.dataType.simpleString()))
+    return columns
 
 
 def _get_initial_alive_ids(engines, warehouse_path, namespace, table_name) -> set[int]:
@@ -325,17 +330,17 @@ def _process_table(
     snapshot_id_by_step: dict[StepId, SnapshotId] = {}
     accumulated_checkpoints: dict[StepId, dict[EngineName, Checkpoint]] = {}
 
-    # Point query state: track alive IDs and value column type
+    # Point query state: track alive IDs and queryable columns
     alive_ids: set[int] = set()
     alive_ids_by_step: dict[StepId, set[int]] = {}
-    value_type: str | None = None
+    queryable_columns: list[tuple[str, str]] = []
     delete_rng = random.Random(seed)
 
     if point_queries and not dry_run and engines:
         alive_ids = _get_initial_alive_ids(engines, warehouse_path, namespace, table_name)
-        value_type = _get_value_column_type(engines, warehouse_path, namespace, table_name)
-        if value_type is None:
-            print(f"  ⚠ Point queries skipped: no 'value' column found in {namespace}.{table_name}")
+        queryable_columns = _get_queryable_columns(engines, warehouse_path, namespace, table_name)
+        if not queryable_columns:
+            print(f"  ⚠ Point queries skipped: no queryable columns found in {namespace}.{table_name}")
 
     try:
         for step in workflow_def.steps:
@@ -384,10 +389,10 @@ def _process_table(
                         alive_ids = alive_ids_by_step[to_step].copy()
 
             # Run point query validation after each step
-            if point_queries and not dry_run and not op_result.error and value_type and alive_ids:
+            if point_queries and not dry_run and not op_result.error and queryable_columns and alive_ids:
                 pq_assertions = validate_point_queries(
                     engines, warehouse_path, namespace, table_name,
-                    alive_ids, value_type, seed=seed,
+                    alive_ids, queryable_columns, seed=seed,
                 )
                 op_result.assertions.extend(pq_assertions)
 

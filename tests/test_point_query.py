@@ -7,7 +7,7 @@ import pytest
 from iceberg_fuzzer.backend.point_query import (
     ColumnFilter,
     _generate_probe_values,
-    _sample_filters,
+    _sample_filters_for_column,
     _supports_point_query,
     format_sql_literal,
     validate_point_queries,
@@ -141,19 +141,46 @@ class TestGenerateProbeValues:
         assert _generate_probe_values([None, None], "int") == []
 
 
-class TestSampleFilters:
+class TestSampleFiltersForColumn:
     def test_basic_int(self):
         alive_ids = {1, 2, 3, 4, 5}
-        filters = _sample_filters(alive_ids, "int", sample_size=10, seed=42)
+        filters = _sample_filters_for_column(
+            "value", alive_ids, "int", sample_size=10, seed=42
+        )
         assert len(filters) > 0
-        # Should have a null check
         null_filters = [(f, c) for f, c in filters if f.is_null]
         assert len(null_filters) == 1
         assert null_filters[0][1] == 0  # generate_value never returns None for int
 
+    def test_no_duplicates(self):
+        alive_ids = set(range(1, 100))
+        filters = _sample_filters_for_column(
+            "value", alive_ids, "int", sample_size=10, seed=42
+        )
+        reprs = [repr(f) for f, _ in filters]
+        assert len(reprs) == len(set(reprs))
+
+    def test_exact_sample_size(self):
+        alive_ids = set(range(1, 1000))
+        filters = _sample_filters_for_column(
+            "value", alive_ids, "int", sample_size=10, seed=42
+        )
+        assert len(filters) == 10
+
+    def test_fewer_than_sample_size_when_insufficient_values(self):
+        alive_ids = {1, 2}
+        filters = _sample_filters_for_column(
+            "value", alive_ids, "boolean", sample_size=10, seed=42
+        )
+        assert len(filters) < 10
+        reprs = [repr(f) for f, _ in filters]
+        assert len(reprs) == len(set(reprs))
+
     def test_min_max_always_included(self):
         alive_ids = set(range(1, 100))
-        filters = _sample_filters(alive_ids, "int", sample_size=10, seed=42)
+        filters = _sample_filters_for_column(
+            "value", alive_ids, "int", sample_size=10, seed=42
+        )
         filter_values = [f.value for f, _ in filters if not f.is_null]
         # generate_value("value", "int", rid) returns rid for int type
         assert 1 in filter_values  # min
@@ -161,41 +188,59 @@ class TestSampleFilters:
 
     def test_probes_have_zero_expected(self):
         alive_ids = {1, 2, 3, 4, 5}
-        filters = _sample_filters(alive_ids, "int", sample_size=10, seed=42)
+        filters = _sample_filters_for_column(
+            "value", alive_ids, "int", sample_size=10, seed=42
+        )
         probe_filters = [(f, c) for f, c in filters if c == 0 and not f.is_null]
         assert len(probe_filters) >= 1
 
     def test_unsupported_type_returns_empty(self):
         alive_ids = {1, 2, 3}
-        filters = _sample_filters(alive_ids, "binary", sample_size=10)
+        filters = _sample_filters_for_column(
+            "value", alive_ids, "binary", sample_size=10
+        )
         assert filters == []
 
     def test_empty_ids_returns_empty(self):
-        filters = _sample_filters(set(), "int", sample_size=10)
+        filters = _sample_filters_for_column("value", set(), "int", sample_size=10)
         assert filters == []
 
     def test_sample_size_respected(self):
         alive_ids = set(range(1, 1000))
-        filters = _sample_filters(alive_ids, "int", sample_size=5, seed=42)
-        assert len(filters) <= 5
+        filters = _sample_filters_for_column(
+            "value", alive_ids, "int", sample_size=5, seed=42
+        )
+        assert len(filters) == 5
 
     def test_deterministic_with_seed(self):
         alive_ids = set(range(1, 100))
-        filters_a = _sample_filters(alive_ids, "int", sample_size=10, seed=42)
-        filters_b = _sample_filters(alive_ids, "int", sample_size=10, seed=42)
+        filters_a = _sample_filters_for_column(
+            "value", alive_ids, "int", sample_size=10, seed=42
+        )
+        filters_b = _sample_filters_for_column(
+            "value", alive_ids, "int", sample_size=10, seed=42
+        )
         assert [(repr(f), c) for f, c in filters_a] == [
             (repr(f), c) for f, c in filters_b
         ]
 
     def test_boolean_type(self):
         alive_ids = {1, 2, 3, 4}
-        filters = _sample_filters(alive_ids, "boolean", sample_size=10, seed=42)
+        filters = _sample_filters_for_column(
+            "value", alive_ids, "boolean", sample_size=10, seed=42
+        )
         assert len(filters) > 0
         eq_filters = [(f, c) for f, c in filters if not f.is_null]
         values = [f.value for f, _ in eq_filters]
-        # boolean generate_value: (row_id % 2) == 0
-        # IDs 1,2,3,4 -> False, True, False, True
         assert True in values or False in values
+
+    def test_uses_column_name(self):
+        alive_ids = {1, 2, 3}
+        filters = _sample_filters_for_column(
+            "int_col", alive_ids, "int", sample_size=5, seed=42
+        )
+        for filt, _ in filters:
+            assert filt.column == "int_col"
 
 
 class TestValidatePointQueries:
@@ -209,27 +254,27 @@ class TestValidatePointQueries:
 
     def test_all_pass(self):
         alive_ids = {1, 2, 3}
-        # For int type, generate_value returns row_id, so values are {1, 2, 3}
-        # Build count map for all possible queries
+        columns = [("value", "int")]
         count_map = {
             "value IS NULL": 0,
             "value = 1": 1,
             "value = 2": 1,
             "value = 3": 1,
-            "value = 0": 0,  # probe below min
-            "value = 4": 0,  # probe above max
+            "value = 0": 0,
+            "value = 4": 0,
         }
         engines = [
             self._make_engine("duckdb", count_map),
             self._make_engine("pyspark", count_map),
         ]
         results = validate_point_queries(
-            engines, "/tmp/wh", "ns", "tbl", alive_ids, "int", seed=42
+            engines, "/tmp/wh", "ns", "tbl", alive_ids, columns, seed=42
         )
         assert all(r.passed for r in results)
 
     def test_mismatch_detected(self):
         alive_ids = {1, 2, 3}
+        columns = [("value", "int")]
         correct_map = {
             "value IS NULL": 0,
             "value = 1": 1,
@@ -239,14 +284,14 @@ class TestValidatePointQueries:
             "value = 4": 0,
         }
         wrong_map = dict(correct_map)
-        wrong_map["value = 2"] = 99  # wrong count
+        wrong_map["value = 2"] = 99
 
         engines = [
             self._make_engine("duckdb", correct_map),
             self._make_engine("pyspark", wrong_map),
         ]
         results = validate_point_queries(
-            engines, "/tmp/wh", "ns", "tbl", alive_ids, "int", seed=42
+            engines, "/tmp/wh", "ns", "tbl", alive_ids, columns, seed=42
         )
         failed = [r for r in results if not r.passed]
         assert len(failed) >= 1
@@ -254,11 +299,56 @@ class TestValidatePointQueries:
 
     def test_unsupported_type_returns_skipped(self):
         alive_ids = {1, 2, 3}
+        columns = [("binary_col", "binary")]
         engines = [self._make_engine("duckdb", {})]
         results = validate_point_queries(
-            engines, "/tmp/wh", "ns", "tbl", alive_ids, "binary", seed=42
+            engines, "/tmp/wh", "ns", "tbl", alive_ids, columns, seed=42
         )
         assert len(results) == 1
         assert results[0].passed is True
-        assert results[0].name == "point_query"
+        assert "binary_col" in results[0].name
         assert "unsupported type" in results[0].actual
+
+    def test_mixed_columns(self):
+        alive_ids = {1, 2, 3}
+        columns = [("int_col", "int"), ("binary_col", "binary")]
+        count_map = {
+            "int_col IS NULL": 0,
+            "int_col = 1": 1,
+            "int_col = 2": 1,
+            "int_col = 3": 1,
+            "int_col = 0": 0,
+            "int_col = 4": 0,
+        }
+        engines = [self._make_engine("duckdb", count_map)]
+        results = validate_point_queries(
+            engines, "/tmp/wh", "ns", "tbl", alive_ids, columns, seed=42
+        )
+        skipped = [r for r in results if "skipped" in str(r.expected)]
+        queried = [r for r in results if "skipped" not in str(r.expected)]
+        assert len(skipped) == 1
+        assert "binary_col" in skipped[0].name
+        assert len(queried) > 0
+        assert all(r.passed for r in queried)
+
+    def test_budget_distributed_across_columns(self):
+        alive_ids = set(range(1, 100))
+        columns = [("col_a", "int"), ("col_b", "int")]
+        count_map = {}
+        for col in ["col_a", "col_b"]:
+            count_map[f"{col} IS NULL"] = 0
+            for i in range(1, 100):
+                count_map[f"{col} = {i}"] = 1
+            count_map[f"{col} = 0"] = 0
+            count_map[f"{col} = 100"] = 0
+        engines = [self._make_engine("duckdb", count_map)]
+        results = validate_point_queries(
+            engines, "/tmp/wh", "ns", "tbl", alive_ids, columns, sample_size=10, seed=42
+        )
+        # 10 total queries across 2 columns = 5 each, 1 engine
+        queried = [r for r in results if "skipped" not in str(r.expected)]
+        assert len(queried) == 10
+        col_a_queries = [r for r in queried if "col_a" in r.name]
+        col_b_queries = [r for r in queried if "col_b" in r.name]
+        assert len(col_a_queries) == 5
+        assert len(col_b_queries) == 5
