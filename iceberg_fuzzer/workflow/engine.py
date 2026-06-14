@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
 
-from iceberg_fuzzer.backend import AssertionResult, Checkpoint, ValidationEngine
+from iceberg_fuzzer.backend import AssertionResult, Checkpoint, SnapshotId, ValidationEngine
 from iceberg_fuzzer.backend.duckdb import DuckDBValidation
 from iceberg_fuzzer.backend.pyspark.mutation import PySparkMutation
 from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation
@@ -18,7 +18,6 @@ from iceberg_fuzzer.workflow.loader import Workflow, load_workflow
 
 StepId = str
 EngineName = str
-SnapshotId = int
 
 
 @dataclass
@@ -168,7 +167,7 @@ def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engi
     # Use first engine for pre-count (all should agree)
     _, first_engine = engines[0]
     pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
-    snapshot_id = backend.append_rows(namespace, name, num_rows)
+    snapshot_id, _file_counts = backend.append_rows(namespace, name, num_rows)
 
     assertions: list[AssertionResult] = []
     post_hashes: dict[str, int] = {}
@@ -196,7 +195,7 @@ def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engi
 
     _, first_engine = engines[0]
     pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
-    snapshot_id = backend.delete_rows(namespace, name, num_rows)
+    snapshot_id, _file_counts = backend.delete_rows(namespace, name, num_rows)
 
     assertions: list[AssertionResult] = []
     post_hashes: dict[str, int] = {}

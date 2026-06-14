@@ -8,7 +8,7 @@ and implements one or more of: generation, validation, mutation.
 import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypedDict
 
 
 @dataclass
@@ -101,6 +101,22 @@ def is_s3_tables_warehouse(warehouse_path: str) -> bool:
     return warehouse_path.startswith("arn:aws:s3tables:")
 
 
+SnapshotId = int
+
+
+class FileCounts(TypedDict):
+    """Snapshot-level file statistics returned by mutation operations."""
+
+    added_data_files: int
+    deleted_data_files: int
+    added_delete_files: int
+    deleted_delete_files: int
+
+
+MutationResult = tuple[SnapshotId, FileCounts]
+"""Return type for mutation operations: (snapshot_id, file_counts)."""
+
+
 class MutationEngine(ABC):
     """Performs data mutations on Iceberg tables (append, delete, etc.).
 
@@ -112,33 +128,13 @@ class MutationEngine(ABC):
         self._rng = random.Random(seed)
 
     @abstractmethod
-    def append_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
-        """Append rows to an existing table.
-
-        Args:
-            namespace: The table's namespace.
-            table_name: The table name.
-            num_rows: Number of rows to append.
-
-        Returns:
-            The snapshot ID after the append completes.
-        """
+    def append_rows(self, namespace: str, table_name: str, num_rows: int) -> MutationResult:
+        """Append num_rows to an existing table."""
         pass
 
     @abstractmethod
-    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
-        """Delete rows from an existing table.
-
-        Selects num_rows rows at random (using the instance's RNG) and removes them.
-
-        Args:
-            namespace: The table's namespace.
-            table_name: The table name.
-            num_rows: Number of rows to delete.
-
-        Returns:
-            The snapshot ID after the delete completes.
-        """
+    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> MutationResult:
+        """Delete num_rows random rows (selected via the instance's RNG)."""
         pass
 
     @abstractmethod

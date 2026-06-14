@@ -5,7 +5,14 @@ import os
 
 from pyspark.sql import Row
 
-from iceberg_fuzzer.backend import MutationEngine
+from pyiceberg.table.snapshots import (
+    ADDED_DATA_FILES,
+    ADDED_DELETE_FILES,
+    DELETED_DATA_FILES,
+    REMOVED_DELETE_FILES,
+)
+
+from iceberg_fuzzer.backend import FileCounts, MutationEngine, MutationResult
 from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
 from iceberg_fuzzer.backend.pyspark.data import generate_value
 from iceberg_fuzzer.common import row_id_from_index
@@ -42,7 +49,21 @@ class PySparkMutation(MutationEngine):
         ).collect()[0]
         return row.snapshot_id
 
-    def append_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
+    def _get_snapshot_file_counts(self, qualified: str, snapshot_id: int) -> FileCounts:
+        spark = self._get_spark()
+        row = spark.sql(
+            f"SELECT summary FROM {qualified}.snapshots "
+            f"WHERE snapshot_id = {snapshot_id}"
+        ).collect()[0]
+        summary = row.summary
+        return FileCounts(
+            added_data_files=int(summary.get(ADDED_DATA_FILES, 0)),
+            deleted_data_files=int(summary.get(DELETED_DATA_FILES, 0)),
+            added_delete_files=int(summary.get(ADDED_DELETE_FILES, 0)),
+            deleted_delete_files=int(summary.get(REMOVED_DELETE_FILES, 0)),
+        )
+
+    def append_rows(self, namespace: str, table_name: str, num_rows: int) -> MutationResult:
         spark = self._get_spark()
         qualified = self._qualified_name(namespace, table_name)
 
@@ -60,14 +81,14 @@ class PySparkMutation(MutationEngine):
 
         df = spark.createDataFrame(rows, schema)
         df.writeTo(qualified).append()
-        print(f"    Appended {num_rows} rows to {qualified}")
-        return self._get_current_snapshot_id(qualified)
+        snapshot_id = self._get_current_snapshot_id(qualified)
+        return snapshot_id, self._get_snapshot_file_counts(qualified, snapshot_id)
 
-    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
+    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> MutationResult:
         spark = self._get_spark()
         qualified = self._qualified_name(namespace, table_name)
 
-        all_ids = [row.id for row in spark.sql(f"SELECT id FROM {qualified}").collect()]
+        all_ids = sorted(row.id for row in spark.sql(f"SELECT id FROM {qualified}").collect())
 
         if num_rows > len(all_ids):
             raise ValueError(
@@ -77,8 +98,8 @@ class PySparkMutation(MutationEngine):
         ids_to_delete = self._rng.sample(all_ids, num_rows)
         id_list = ", ".join(str(i) for i in ids_to_delete)
         spark.sql(f"DELETE FROM {qualified} WHERE id IN ({id_list})")
-        print(f"    Deleted {num_rows} rows from {qualified}")
-        return self._get_current_snapshot_id(qualified)
+        snapshot_id = self._get_current_snapshot_id(qualified)
+        return snapshot_id, self._get_snapshot_file_counts(qualified, snapshot_id)
 
     def rollback_to_snapshot(self, namespace: str, table_name: str, snapshot_id: int) -> int:
         spark = self._get_spark()
@@ -88,7 +109,6 @@ class PySparkMutation(MutationEngine):
             f"CALL {catalog}.system.rollback_to_snapshot("
             f"table => '{namespace}.{table_name}', snapshot_id => {snapshot_id})"
         )
-        print(f"    Rolled back {qualified} to snapshot {snapshot_id}")
         return self._get_current_snapshot_id(qualified)
 
     def close(self):
