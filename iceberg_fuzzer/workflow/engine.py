@@ -4,7 +4,6 @@ Workflow engine for iceberg-fuzzer.
 Runs multi-step workflows against existing Iceberg tables.
 """
 
-import random
 import shlex
 import subprocess
 from dataclasses import dataclass, field
@@ -29,10 +28,11 @@ class OperationResult:
     assertions: list[AssertionResult]
     error: str | None = None
     snapshot_id: SnapshotId | None = None
+    deleted_ids: set[int] | None = None
 
     @classmethod
-    def success(cls, assertions: list[AssertionResult], snapshot_id: SnapshotId | None = None):
-        return cls(assertions=assertions, snapshot_id=snapshot_id)
+    def success(cls, assertions: list[AssertionResult], snapshot_id: SnapshotId | None = None, deleted_ids: set[int] | None = None):
+        return cls(assertions=assertions, snapshot_id=snapshot_id, deleted_ids=deleted_ids)
 
     @classmethod
     def failed(cls, error: str):
@@ -198,7 +198,7 @@ def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engi
 
     _, first_engine = engines[0]
     pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
-    snapshot_id = backend.delete_rows(namespace, name, num_rows)
+    delete_result = backend.delete_rows(namespace, name, num_rows)
 
     assertions: list[AssertionResult] = []
     post_hashes: dict[str, int] = {}
@@ -209,7 +209,7 @@ def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engi
         post_hashes[engine_name] = post.content_hash
 
     assertions.extend(_cross_engine_assertions(post_hashes))
-    return OperationResult.success(assertions, snapshot_id=snapshot_id)
+    return OperationResult.success(assertions, snapshot_id=delete_result.snapshot_id, deleted_ids=delete_result.deleted_ids)
 
 
 def _handle_rollback(step, engines, warehouse_path, namespace, name, mutation_engines,
@@ -252,51 +252,6 @@ def _handle_rollback(step, engines, warehouse_path, namespace, name, mutation_en
     return OperationResult.success(assertions)
 
 
-def _get_queryable_columns(engines, warehouse_path, namespace, table_name) -> list[tuple[str, str]]:
-    """Get all non-id columns and their types from the table schema.
-
-    Returns a list of (column_name, type_str) tuples, excluding the 'id' column.
-    Point query support for each type is determined later by _supports_point_query().
-    """
-    if not engines:
-        return []
-    engine_name, engine = engines[0]
-    columns: list[tuple[str, str]] = []
-    if engine_name == "duckdb":
-        conn = engine._get_conn()
-        source = engine._table_source(warehouse_path, namespace, table_name)
-        rows = conn.execute(f"DESCRIBE SELECT * FROM {source}").fetchall()
-        for col_name, col_type, *_ in rows:
-            if col_name != "id":
-                columns.append((col_name, col_type))
-    elif engine_name == "pyspark":
-        spark = engine._get_spark()
-        table_ref = engine._resolve_table_ref(namespace, table_name)
-        schema = spark.table(table_ref).schema
-        for f in schema:
-            if f.name != "id":
-                columns.append((f.name, f.dataType.simpleString()))
-    return columns
-
-
-def _get_initial_alive_ids(engines, warehouse_path, namespace, table_name) -> set[int]:
-    """Query the initial set of alive row IDs from the table."""
-    if not engines:
-        return set()
-    engine_name, engine = engines[0]
-    if engine_name == "duckdb":
-        conn = engine._get_conn()
-        source = engine._table_source(warehouse_path, namespace, table_name)
-        rows = conn.execute(f"SELECT id FROM {source}").fetchall()
-        return {row[0] for row in rows}
-    elif engine_name == "pyspark":
-        spark = engine._get_spark()
-        table_ref = engine._resolve_table_ref(namespace, table_name)
-        rows = spark.sql(f"SELECT id FROM {table_ref}").collect()
-        return {row[0] for row in rows}
-    return set()
-
-
 def _process_table(
     workflow_def: Workflow,
     warehouse_path: str,
@@ -334,13 +289,13 @@ def _process_table(
     alive_ids: set[int] = set()
     alive_ids_by_step: dict[StepId, set[int]] = {}
     queryable_columns: list[tuple[str, str]] = []
-    delete_rng = random.Random(seed)
 
     if point_queries and not dry_run and engines:
-        alive_ids = _get_initial_alive_ids(engines, warehouse_path, namespace, table_name)
-        queryable_columns = _get_queryable_columns(engines, warehouse_path, namespace, table_name)
+        _, first_engine = engines[0]
+        alive_ids = first_engine.get_row_ids(warehouse_path, namespace, table_name)
+        queryable_columns = first_engine.get_columns(warehouse_path, namespace, table_name)
         if not queryable_columns:
-            print(f"  ⚠ Point queries skipped: no queryable columns found in {namespace}.{table_name}")
+            print(f"  Warning: Point queries skipped: no queryable columns found in {namespace}.{table_name}")
 
     try:
         for step in workflow_def.steps:
@@ -379,10 +334,8 @@ def _process_table(
                     new_ids = set(range(max_id + 1, max_id + 1 + num_rows))
                     alive_ids = alive_ids | new_ids
                 elif operation == 'delete':
-                    num_rows = step_config['num_rows']
-                    sorted_ids = sorted(alive_ids)
-                    deleted_ids = set(delete_rng.sample(sorted_ids, num_rows))
-                    alive_ids = alive_ids - deleted_ids
+                    if op_result.deleted_ids is not None:
+                        alive_ids = alive_ids - op_result.deleted_ids
                 elif operation == 'rollback':
                     to_step = step_config['to_step']
                     if to_step in alive_ids_by_step:

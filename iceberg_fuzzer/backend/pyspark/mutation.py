@@ -5,7 +5,7 @@ import os
 
 from pyspark.sql import Row
 
-from iceberg_fuzzer.backend import MutationEngine
+from iceberg_fuzzer.backend import DeleteResult, MutationEngine
 from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
 from iceberg_fuzzer.backend.pyspark.data import generate_value
 from iceberg_fuzzer.common import row_id_from_index
@@ -63,11 +63,11 @@ class PySparkMutation(MutationEngine):
         print(f"    Appended {num_rows} rows to {qualified}")
         return self._get_current_snapshot_id(qualified)
 
-    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
+    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> DeleteResult:
         spark = self._get_spark()
         qualified = self._qualified_name(namespace, table_name)
 
-        all_ids = [row.id for row in spark.sql(f"SELECT id FROM {qualified}").collect()]
+        all_ids = sorted(row.id for row in spark.sql(f"SELECT id FROM {qualified}").collect())
 
         if num_rows > len(all_ids):
             raise ValueError(
@@ -78,7 +78,8 @@ class PySparkMutation(MutationEngine):
         id_list = ", ".join(str(i) for i in ids_to_delete)
         spark.sql(f"DELETE FROM {qualified} WHERE id IN ({id_list})")
         print(f"    Deleted {num_rows} rows from {qualified}")
-        return self._get_current_snapshot_id(qualified)
+        snapshot_id = self._get_current_snapshot_id(qualified)
+        return DeleteResult(snapshot_id=snapshot_id, deleted_ids=set(ids_to_delete))
 
     def rollback_to_snapshot(self, namespace: str, table_name: str, snapshot_id: int) -> int:
         spark = self._get_spark()

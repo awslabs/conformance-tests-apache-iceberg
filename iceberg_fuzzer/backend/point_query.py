@@ -14,30 +14,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from iceberg_fuzzer.backend import AssertionResult, ValidationEngine
+from iceberg_fuzzer.backend import AssertionResult, ColumnFilter, ValidationEngine
 from iceberg_fuzzer.backend.pyspark.data import generate_value
-
-
-class ColumnFilter:
-    """Engine-agnostic column predicate for point queries."""
-
-    def __init__(self, column: str, value: Any, is_null: bool = False):
-        self.column = column
-        self.value = value
-        self.is_null = is_null
-
-    @staticmethod
-    def eq(column: str, value: Any) -> "ColumnFilter":
-        return ColumnFilter(column, value)
-
-    @staticmethod
-    def null(column: str) -> "ColumnFilter":
-        return ColumnFilter(column, None, is_null=True)
-
-    def __repr__(self):
-        if self.is_null:
-            return f"{self.column} IS NULL"
-        return f"{self.column} = {self.value!r}"
 
 
 def format_sql_literal(value: Any) -> str:

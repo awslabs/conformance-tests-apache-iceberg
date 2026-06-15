@@ -7,8 +7,30 @@ and implements one or more of: generation, validation, mutation.
 
 import random
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+
+class ColumnFilter:
+    """Engine-agnostic column predicate for point queries."""
+
+    def __init__(self, column: str, value: Any, is_null: bool = False):
+        self.column = column
+        self.value = value
+        self.is_null = is_null
+
+    @staticmethod
+    def eq(column: str, value: Any) -> "ColumnFilter":
+        return ColumnFilter(column, value)
+
+    @staticmethod
+    def null(column: str) -> "ColumnFilter":
+        return ColumnFilter(column, None, is_null=True)
+
+    def __repr__(self):
+        if self.is_null:
+            return f"{self.column} IS NULL"
+        return f"{self.column} = {self.value!r}"
 
 
 @dataclass
@@ -96,9 +118,20 @@ class ValidationEngine(ABC):
         """
         pass
 
-    def filtered_count(self, warehouse: str, namespace: str, table_name: str, filt) -> int:
-        """Count rows matching a column filter. Used by point query validation."""
-        raise NotImplementedError
+    @abstractmethod
+    def filtered_count(self, warehouse: str, namespace: str, table_name: str, column_filter: ColumnFilter) -> int:
+        """Count rows matching a column filter."""
+        pass
+
+    @abstractmethod
+    def get_columns(self, warehouse: str, namespace: str, table_name: str) -> list[tuple[str, str]]:
+        """Return all non-id columns as (name, type_str) tuples."""
+        pass
+
+    @abstractmethod
+    def get_row_ids(self, warehouse: str, namespace: str, table_name: str) -> set[int]:
+        """Return the set of all row IDs currently in the table."""
+        pass
 
     def close(self):
         """Release resources. Called when the workflow completes."""
@@ -108,6 +141,14 @@ class ValidationEngine(ABC):
 def is_s3_tables_warehouse(warehouse_path: str) -> bool:
     """Return True if warehouse_path is an S3 Tables ARN."""
     return warehouse_path.startswith("arn:aws:s3tables:")
+
+
+@dataclass
+class DeleteResult:
+    """Result of a delete operation, including which rows were removed."""
+
+    snapshot_id: int
+    deleted_ids: set[int] = field(default_factory=set)
 
 
 class MutationEngine(ABC):
@@ -122,40 +163,22 @@ class MutationEngine(ABC):
 
     @abstractmethod
     def append_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
-        """Append rows to an existing table.
+        """Append num_rows to an existing table.
 
-        Args:
-            namespace: The table's namespace.
-            table_name: The table name.
-            num_rows: Number of rows to append.
-
-        Returns:
-            The snapshot ID after the append completes.
+        Returns the snapshot ID after the append completes.
         """
         pass
 
     @abstractmethod
-    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
-        """Delete rows from an existing table.
-
-        Selects num_rows rows at random (using the instance's RNG) and removes them.
-
-        Args:
-            namespace: The table's namespace.
-            table_name: The table name.
-            num_rows: Number of rows to delete.
-
-        Returns:
-            The snapshot ID after the delete completes.
-        """
+    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> DeleteResult:
+        """Delete num_rows random rows (selected via the instance's RNG)."""
         pass
 
     @abstractmethod
     def rollback_to_snapshot(self, namespace: str, table_name: str, snapshot_id: int) -> int:
         """Roll back the table to a specific snapshot.
 
-        Returns:
-            The current snapshot ID after the rollback completes.
+        Returns the current snapshot ID after the rollback completes.
         """
         pass
 

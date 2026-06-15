@@ -1,5 +1,7 @@
 """Unit tests for point query validation."""
 
+from datetime import date, datetime
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
@@ -61,6 +63,15 @@ class TestFormatSqlLiteral:
 
     def test_string_with_quotes(self):
         assert format_sql_literal("it's") == "'it''s'"
+
+    def test_date(self):
+        assert format_sql_literal(date(2023, 1, 15)) == "'2023-01-15'"
+
+    def test_datetime(self):
+        assert format_sql_literal(datetime(2023, 1, 15, 10, 30)) == "'2023-01-15 10:30:00'"
+
+    def test_decimal(self):
+        assert format_sql_literal(Decimal("3.14")) == "3.14"
 
 
 class TestSupportsPointQuery:
@@ -352,3 +363,10 @@ class TestValidatePointQueries:
         col_b_queries = [r for r in queried if "col_b" in r.name]
         assert len(col_a_queries) == 5
         assert len(col_b_queries) == 5
+
+    def test_empty_alive_ids_returns_no_results(self):
+        engines = [self._make_engine("duckdb", {})]
+        results = validate_point_queries(
+            engines, "/tmp/wh", "ns", "tbl", set(), [("value", "int")], seed=42
+        )
+        assert results == []

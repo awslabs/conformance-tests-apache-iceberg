@@ -5,8 +5,8 @@ import os
 
 from pyspark.sql import functions as F
 
-from iceberg_fuzzer.backend import ValidationEngine, Checkpoint, AssertionResult
-from iceberg_fuzzer.backend.point_query import ColumnFilter, format_sql_literal
+from iceberg_fuzzer.backend import ColumnFilter, ValidationEngine, Checkpoint, AssertionResult
+from iceberg_fuzzer.backend.point_query import format_sql_literal
 from iceberg_fuzzer.backend.pyspark.canonical import PySparkCanonicalCast
 from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
 
@@ -64,14 +64,26 @@ class PySparkValidation(ValidationEngine):
             AssertionResult.content_hash(checkpoint.content_hash, current.content_hash),
         ]
 
-    def filtered_count(self, warehouse, namespace, table_name, filt: ColumnFilter) -> int:
+    def filtered_count(self, warehouse, namespace, table_name, column_filter: ColumnFilter) -> int:
         table_ref = self._resolve_table_ref(namespace, table_name)
         spark = self._get_spark()
-        if filt.is_null:
-            where = f'`{filt.column}` IS NULL'
+        if column_filter.is_null:
+            where = f'`{column_filter.column}` IS NULL'
         else:
-            where = f'`{filt.column}` = {format_sql_literal(filt.value)}'
+            where = f'`{column_filter.column}` = {format_sql_literal(column_filter.value)}'
         return spark.sql(f"SELECT COUNT(*) FROM {table_ref} WHERE {where}").collect()[0][0]
+
+    def get_columns(self, warehouse, namespace, table_name) -> list[tuple[str, str]]:
+        spark = self._get_spark()
+        table_ref = self._resolve_table_ref(namespace, table_name)
+        schema = spark.table(table_ref).schema
+        return [(f.name, f.dataType.simpleString()) for f in schema if f.name != "id"]
+
+    def get_row_ids(self, warehouse, namespace, table_name) -> set[int]:
+        spark = self._get_spark()
+        table_ref = self._resolve_table_ref(namespace, table_name)
+        rows = spark.sql(f"SELECT id FROM {table_ref}").collect()
+        return {row[0] for row in rows}
 
     def close(self):
         if self._spark is not None:
