@@ -342,7 +342,7 @@ def _process_table(
                         alive_ids = alive_ids_by_step[to_step].copy()
 
             # Run point query validation after each step
-            if point_queries and not dry_run and not op_result.error and queryable_columns and alive_ids:
+            if point_queries and not dry_run and not op_result.error and queryable_columns:
                 pq_assertions = validate_point_queries(
                     engines, warehouse_path, namespace, table_name,
                     alive_ids, queryable_columns, seed=seed,

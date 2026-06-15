@@ -364,9 +364,11 @@ class TestValidatePointQueries:
         assert len(col_a_queries) == 5
         assert len(col_b_queries) == 5
 
-    def test_empty_alive_ids_returns_no_results(self):
-        engines = [self._make_engine("duckdb", {})]
+    def test_empty_alive_ids_checks_null_returns_zero(self):
+        engines = [self._make_engine("duckdb", {"value IS NULL": 0})]
         results = validate_point_queries(
             engines, "/tmp/wh", "ns", "tbl", set(), [("value", "int")], seed=42
         )
-        assert results == []
+        assert len(results) == 1
+        assert results[0].passed
+        assert results[0].expected == 0

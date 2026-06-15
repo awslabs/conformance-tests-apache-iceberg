@@ -45,6 +45,7 @@ _SUPPORTED_TYPES = frozenset(
         "float",
         "double",
         "string",
+        "varchar",
         "date",
         "timestamp",
         "timestamp_ntz",
@@ -110,12 +111,26 @@ def _generate_probe_values(
                 mid = mid + (max_val - min_val) * 1e-9
             if mid not in existing_set and min_val < mid < max_val:
                 probes.append((mid, "within_bounds"))
-    elif t == "string":
+    elif t in ("string", "varchar"):
         probes.append(("", "below_min"))
         probes.append((max_val + "z", "above_max"))
     elif t.startswith("decimal"):
         probes.append((min_val - Decimal("1"), "below_min"))
         probes.append((max_val + Decimal("1"), "above_max"))
+    elif t in ("date",):
+        from datetime import timedelta
+        probes.append((min_val - timedelta(days=1), "below_min"))
+        probes.append((max_val + timedelta(days=1), "above_max"))
+    elif t in ("timestamp", "timestamp_ntz"):
+        from datetime import timedelta
+        probes.append((min_val - timedelta(seconds=1), "below_min"))
+        probes.append((max_val + timedelta(seconds=1), "above_max"))
+    elif t in ("boolean", "bool"):
+        # For boolean, probe the opposite value if only one exists
+        if True not in existing_set:
+            probes.append((True, "missing_true"))
+        if False not in existing_set:
+            probes.append((False, "missing_false"))
 
     return [(v, desc) for v, desc in probes if v not in existing_set]
 
@@ -239,21 +254,27 @@ def validate_point_queries(
     if not queryable:
         return assertions
 
-    # Distribute budget across queryable columns
-    per_column = max(1, sample_size // len(queryable))
-    remainder = sample_size - per_column * len(queryable)
-
     all_filters: list[tuple[ColumnFilter, int]] = []
-    for i, (col_name, col_type) in enumerate(queryable):
-        col_budget = per_column + (1 if i < remainder else 0)
-        col_filters = _sample_filters_for_column(
-            col_name,
-            alive_ids,
-            col_type,
-            sample_size=col_budget,
-            seed=seed,
-        )
-        all_filters.extend(col_filters)
+
+    if not alive_ids:
+        # Empty table: verify that IS NULL returns 0 for each column
+        for col_name, _ in queryable:
+            all_filters.append((ColumnFilter.null(col_name), 0))
+    else:
+        # Distribute budget across queryable columns
+        per_column = max(1, sample_size // len(queryable))
+        remainder = sample_size - per_column * len(queryable)
+
+        for i, (col_name, col_type) in enumerate(queryable):
+            col_budget = per_column + (1 if i < remainder else 0)
+            col_filters = _sample_filters_for_column(
+                col_name,
+                alive_ids,
+                col_type,
+                sample_size=col_budget,
+                seed=seed,
+            )
+            all_filters.extend(col_filters)
 
     for filt, expected_count in all_filters:
         for engine_name, engine in engines:

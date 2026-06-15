@@ -34,7 +34,7 @@ def generate_value(field_name: str, spark_type_str: str, row_id: int):
         return float(row_id) + 0.5
     elif t == "double":
         return float(row_id) * 1.5
-    elif t == "string":
+    elif t in ("string", "varchar"):
         return f"value_{row_id}"
     elif t == "binary":
         return f"value_{row_id}".encode()
