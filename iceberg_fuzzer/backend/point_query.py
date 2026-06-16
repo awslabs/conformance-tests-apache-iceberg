@@ -27,8 +27,10 @@ def format_sql_literal(value: Any) -> str:
     if isinstance(value, str):
         escaped = value.replace("'", "''")
         return f"'{escaped}'"
-    if isinstance(value, (date, datetime)):
-        return f"'{value}'"
+    if isinstance(value, datetime):
+        return f"TIMESTAMP '{value}'"
+    if isinstance(value, date):
+        return f"DATE '{value}'"
     if isinstance(value, Decimal):
         return str(value)
     return str(value)

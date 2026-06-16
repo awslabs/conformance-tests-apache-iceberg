@@ -325,7 +325,11 @@ def _process_table(
             except Exception as e:
                 op_result = OperationResult.failed(f"Step '{step_id}' failed: {e}")
 
-            # Update alive_ids based on the operation
+            # Update alive_ids based on the operation.
+            # Note: 'replace' (compaction) intentionally does NOT update alive_ids.
+            # A correct compaction preserves the logical row set, so keeping our
+            # prediction unchanged lets point queries detect rows incorrectly
+            # dropped or duplicated by a buggy compactor.
             if point_queries and not dry_run and not op_result.error:
                 step_config = step.get('config', {})
                 if operation == 'append':

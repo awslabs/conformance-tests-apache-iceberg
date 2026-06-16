@@ -11,13 +11,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+@dataclass
 class ColumnFilter:
     """Engine-agnostic column predicate for point queries."""
 
-    def __init__(self, column: str, value: Any, is_null: bool = False):
-        self.column = column
-        self.value = value
-        self.is_null = is_null
+    column: str
+    value: Any = None
+    is_null: bool = False
 
     @staticmethod
     def eq(column: str, value: Any) -> "ColumnFilter":

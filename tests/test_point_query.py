@@ -65,10 +65,10 @@ class TestFormatSqlLiteral:
         assert format_sql_literal("it's") == "'it''s'"
 
     def test_date(self):
-        assert format_sql_literal(date(2023, 1, 15)) == "'2023-01-15'"
+        assert format_sql_literal(date(2023, 1, 15)) == "DATE '2023-01-15'"
 
     def test_datetime(self):
-        assert format_sql_literal(datetime(2023, 1, 15, 10, 30)) == "'2023-01-15 10:30:00'"
+        assert format_sql_literal(datetime(2023, 1, 15, 10, 30)) == "TIMESTAMP '2023-01-15 10:30:00'"
 
     def test_decimal(self):
         assert format_sql_literal(Decimal("3.14")) == "3.14"
