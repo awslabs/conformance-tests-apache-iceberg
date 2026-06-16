@@ -54,8 +54,12 @@ _SUPPORTED_TYPES = frozenset(
     }
 )
 
+_KNOWN_UNSUPPORTED_EXACT = frozenset(
+    {"binary", "uuid", "time", "timestamptz"}
+)
+
 _KNOWN_UNSUPPORTED_PREFIXES = (
-    "binary", "list", "map", "struct", "uuid", "fixed", "array",
+    "fixed", "list", "map", "struct", "array", "timestamp with",
 )
 
 
@@ -70,8 +74,10 @@ def _supports_point_query(type_str: str) -> bool:
 
 
 def _is_known_unsupported(type_str: str) -> bool:
-    """True for complex types we intentionally skip (no equality semantics)."""
+    """True for types we intentionally skip (no equality semantics or no literal format)."""
     t = type_str.lower().strip()
+    if t in _KNOWN_UNSUPPORTED_EXACT:
+        return True
     return any(t.startswith(prefix) for prefix in _KNOWN_UNSUPPORTED_PREFIXES)
 
 
@@ -275,9 +281,9 @@ def validate_point_queries(
         for col_name, _ in queryable:
             all_filters.append((ColumnFilter.null(col_name), 0))
     else:
-        # Distribute budget across queryable columns
+        # Distribute budget across queryable columns, capping total at sample_size
         per_column = max(1, sample_size // len(queryable))
-        remainder = sample_size - per_column * len(queryable)
+        remainder = max(0, sample_size - per_column * len(queryable))
 
         for i, (col_name, col_type) in enumerate(queryable):
             col_budget = per_column + (1 if i < remainder else 0)
@@ -289,6 +295,8 @@ def validate_point_queries(
                 seed=seed,
             )
             all_filters.extend(col_filters)
+
+        all_filters = all_filters[:sample_size]
 
     for filt, expected_count in all_filters:
         for engine_name, engine in engines:
