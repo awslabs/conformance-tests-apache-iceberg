@@ -14,6 +14,7 @@ from iceberg_fuzzer.backend.point_query import (
     format_sql_literal,
     validate_point_queries,
 )
+from iceberg_fuzzer.backend.pyspark.data import generate_value
 
 
 class TestColumnFilter:
@@ -381,3 +382,49 @@ class TestValidatePointQueries:
         assert len(results) == 1
         assert results[0].passed
         assert results[0].expected == 0
+
+    def test_budget_capped_when_columns_exceed_sample_size(self):
+        """When there are more queryable columns than sample_size, total filters are capped."""
+        alive_ids = set(range(1, 50))
+        columns = [(f"col_{i}", "int") for i in range(20)]
+        count_map = {}
+        for i in range(20):
+            col = f"col_{i}"
+            count_map[f"{col} IS NULL"] = 0
+            for rid in range(1, 50):
+                count_map[f"{col} = {rid}"] = 1
+            count_map[f"{col} = 0"] = 0
+            count_map[f"{col} = 50"] = 0
+        engines = [self._make_engine("duckdb", count_map)]
+        results = validate_point_queries(
+            engines, "/tmp/wh", "ns", "tbl", alive_ids, columns, sample_size=10, seed=42
+        )
+        # Should not exceed sample_size even though there are 20 columns
+        queried = [r for r in results if "skipped" not in str(r.expected)]
+        assert len(queried) <= 10
+
+
+class TestGenerateValueAssumptions:
+    """Document the assumptions point query validation makes about generate_value.
+
+    Point queries predict expected row values using generate_value(column_name, type_str, row_id).
+    This only produces correct predictions for tables built with the standard append_rows path
+    (which uses the same function). Tables built via generate_spark_data (write_patterns,
+    partitioned) use name-based special cases that generate_value doesn't replicate.
+    """
+
+    def test_simple_table_column_named_value(self):
+        """The 'value' column in simple tables uses type-based generation."""
+        assert generate_value("value", "int", 42) == 42
+        assert generate_value("value", "string", 5) == "value_5"
+        assert generate_value("value", "boolean", 4) is True
+        assert generate_value("value", "boolean", 3) is False
+
+    def test_generate_value_is_type_based_not_name_based(self):
+        """generate_value produces the same result regardless of column name for a given type."""
+        assert generate_value("col_a", "int", 10) == generate_value("col_b", "int", 10)
+        assert generate_value("x", "string", 7) == generate_value("y", "string", 7)
+
+    def test_varchar_treated_as_string(self):
+        """DuckDB's VARCHAR type produces the same values as Spark's 'string'."""
+        assert generate_value("col", "varchar", 5) == generate_value("col", "string", 5)
