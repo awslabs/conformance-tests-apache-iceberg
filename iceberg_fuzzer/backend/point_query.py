@@ -54,19 +54,25 @@ _SUPPORTED_TYPES = frozenset(
     }
 )
 
+_KNOWN_UNSUPPORTED_PREFIXES = (
+    "binary", "list", "map", "struct", "uuid", "fixed", "array",
+)
+
 
 def _supports_point_query(type_str: str) -> bool:
-    """True for primitive types with reliable equality semantics across engines.
-
-    # TODO: Revisit complex types (list, map, struct, binary, uuid, fixed)
-    # once engine-specific literal formatting is implemented.
-    """
+    """True for primitive types with reliable equality semantics across engines."""
     t = type_str.lower().strip()
     if t in _SUPPORTED_TYPES:
         return True
     if t.startswith("decimal"):
         return True
     return False
+
+
+def _is_known_unsupported(type_str: str) -> bool:
+    """True for complex types we intentionally skip (no equality semantics)."""
+    t = type_str.lower().strip()
+    return any(t.startswith(prefix) for prefix in _KNOWN_UNSUPPORTED_PREFIXES)
 
 
 def _generate_probe_values(
@@ -247,11 +253,17 @@ def validate_point_queries(
     assertions: list[AssertionResult] = []
 
     for col_name, col_type in skipped:
-        assertions.append(
-            AssertionResult.skipped(
-                f"point_query.{col_name}", f"unsupported type: {col_type}"
+        if _is_known_unsupported(col_type):
+            assertions.append(
+                AssertionResult.skipped(
+                    f"point_query.{col_name}", f"unsupported complex type: {col_type}"
+                )
             )
-        )
+        else:
+            raise ValueError(
+                f"Unrecognized column type '{col_type}' for column '{col_name}'. "
+                f"Add it to _SUPPORTED_TYPES or _KNOWN_UNSUPPORTED_PREFIXES."
+            )
 
     if not queryable:
         return assertions

@@ -318,7 +318,16 @@ class TestValidatePointQueries:
         assert len(results) == 1
         assert results[0].passed is True
         assert "binary_col" in results[0].name
-        assert "unsupported type" in results[0].actual
+        assert "unsupported complex type" in results[0].actual
+
+    def test_unknown_type_raises_error(self):
+        alive_ids = {1, 2, 3}
+        columns = [("weird_col", "hyperloglog")]
+        engines = [self._make_engine("duckdb", {})]
+        with pytest.raises(ValueError, match="Unrecognized column type 'hyperloglog'"):
+            validate_point_queries(
+                engines, "/tmp/wh", "ns", "tbl", alive_ids, columns, seed=42
+            )
 
     def test_mixed_columns(self):
         alive_ids = {1, 2, 3}
