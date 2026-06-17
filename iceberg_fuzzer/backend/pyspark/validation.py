@@ -1,8 +1,5 @@
 """PySpark backend — validation via SparkSession table reads."""
 
-import logging
-import os
-
 from pyspark.sql import functions as F
 
 from iceberg_fuzzer.backend import ColumnFilter, ValidationEngine, Checkpoint, AssertionResult
@@ -23,10 +20,7 @@ class PySparkValidation(ValidationEngine):
 
     def _get_spark(self):
         if self._spark is None:
-            logging.getLogger("py4j").setLevel(logging.ERROR)
-            os.environ.setdefault("SPARK_LOG_LEVEL", "ERROR")
             self._spark = create_spark_session(self._warehouse_path)
-            self._spark.sparkContext.setLogLevel("ERROR")
         return self._spark
 
     def _resolve_table_ref(self, namespace: str, table_name: str) -> str:
