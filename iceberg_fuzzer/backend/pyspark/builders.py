@@ -23,9 +23,11 @@ PySpark Iceberg table generation implementation
 """
 
 import heapq
+import logging
 import os
 import random
 import time
+from contextlib import contextmanager
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
@@ -44,6 +46,31 @@ from iceberg_fuzzer.table_spec import load_table_specs
 from iceberg_fuzzer.common import row_id_from_index
 
 
+@contextmanager
+def _suppress_jvm_output():
+    """Temporarily redirect OS-level stdout/stderr to /dev/null.
+
+    Spark's JVM (Ivy dependency resolution, Hadoop filesystem init, log4j)
+    writes directly to file descriptors 1 and 2, bypassing Python's
+    sys.stdout/sys.stderr. Python-level logging configuration cannot silence
+    this output. The only reliable way to suppress it is to redirect the
+    underlying OS file descriptors for the duration of the noisy operation.
+    """
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved_stdout = os.dup(1)
+    saved_stderr = os.dup(2)
+    os.dup2(devnull, 1)
+    os.dup2(devnull, 2)
+    try:
+        yield
+    finally:
+        os.dup2(saved_stdout, 1)
+        os.dup2(saved_stderr, 2)
+        os.close(saved_stdout)
+        os.close(saved_stderr)
+        os.close(devnull)
+
+
 def create_spark_session(warehouse_path, app_name=None):
     """Create Spark session with Iceberg support and performance optimizations"""
     if app_name is None:
@@ -56,6 +83,7 @@ def create_spark_session(warehouse_path, app_name=None):
         .appName(app_name) \
         .master("local[*]") \
         .config("spark.ui.enabled", "false") \
+        .config("spark.ui.showConsoleProgress", "false") \
         .config("spark.eventLog.enabled", "false") \
         .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
         .config("spark.sql.catalog.spark_catalog", "org.apache.iceberg.spark.SparkSessionCatalog") \
@@ -150,10 +178,15 @@ def create_spark_session(warehouse_path, app_name=None):
             .config("spark.hadoop.hadoop.tmp.dir", "/tmp/hadoop-tmp") \
             .config("spark.hadoop.fs.automatic.close", "false")
 
-    spark = builder.getOrCreate()
+    # Silence py4j's Python-level logger (the Python↔JVM bridge)
+    logging.getLogger("py4j").setLevel(logging.ERROR)
+    # Env var read by Spark when configuring log4j inside the JVM at boot
+    os.environ.setdefault("SPARK_LOG_LEVEL", "ERROR")
 
-    # Set log level to ERROR to suppress WARN messages
-    spark.sparkContext.setLogLevel("ERROR")
+    # During getOrCreate(), Ivy/Hadoop/log4j write directly to OS fds 1 & 2
+    # before any runtime config can take effect — the context manager hides that burst.
+    with _suppress_jvm_output():
+        spark = builder.getOrCreate()
 
     return spark
 

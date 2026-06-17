@@ -1,8 +1,5 @@
 """PySpark backend — mutation (append, etc.)."""
 
-import logging
-import os
-
 from pyspark.sql import Row
 
 from iceberg_fuzzer.backend import MutationEngine
@@ -21,10 +18,7 @@ class PySparkMutation(MutationEngine):
 
     def _get_spark(self):
         if self._spark is None:
-            logging.getLogger("py4j").setLevel(logging.ERROR)
-            os.environ.setdefault("SPARK_LOG_LEVEL", "ERROR")
             self._spark = create_spark_session(self._warehouse_path)
-            self._spark.sparkContext.setLogLevel("ERROR")
         return self._spark
 
     def _catalog_name(self) -> str:
