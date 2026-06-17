@@ -2,7 +2,7 @@
 
 from pyspark.sql import Row
 
-from iceberg_fuzzer.backend import MutationEngine
+from iceberg_fuzzer.backend import AppendResult, DeleteResult, MutationEngine
 from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
 from iceberg_fuzzer.backend.pyspark.data import generate_value
 from iceberg_fuzzer.common import row_id_from_index
@@ -36,16 +36,18 @@ class PySparkMutation(MutationEngine):
         ).collect()[0]
         return row.snapshot_id
 
-    def append_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
+    def append_rows(self, namespace: str, table_name: str, num_rows: int) -> AppendResult:
         spark = self._get_spark()
         qualified = self._qualified_name(namespace, table_name)
 
         schema = spark.table(qualified).schema
         starting_offset = spark.sql(f"SELECT COALESCE(MAX(id), 0) FROM {qualified}").collect()[0][0]
 
+        appended_ids: set[int] = set()
         rows = []
         for i in range(num_rows):
             rid = row_id_from_index(i, starting_offset)
+            appended_ids.add(rid)
             row_data = {
                 field.name: generate_value(field.name, field.dataType.simpleString(), rid)
                 for field in schema
@@ -55,13 +57,14 @@ class PySparkMutation(MutationEngine):
         df = spark.createDataFrame(rows, schema)
         df.writeTo(qualified).append()
         print(f"    Appended {num_rows} rows to {qualified}")
-        return self._get_current_snapshot_id(qualified)
+        snapshot_id = self._get_current_snapshot_id(qualified)
+        return AppendResult(snapshot_id=snapshot_id, appended_ids=appended_ids)
 
-    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
+    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> DeleteResult:
         spark = self._get_spark()
         qualified = self._qualified_name(namespace, table_name)
 
-        all_ids = [row.id for row in spark.sql(f"SELECT id FROM {qualified}").collect()]
+        all_ids = sorted(row.id for row in spark.sql(f"SELECT id FROM {qualified}").collect())
 
         if num_rows > len(all_ids):
             raise ValueError(
@@ -72,7 +75,10 @@ class PySparkMutation(MutationEngine):
         id_list = ", ".join(str(i) for i in ids_to_delete)
         spark.sql(f"DELETE FROM {qualified} WHERE id IN ({id_list})")
         print(f"    Deleted {num_rows} rows from {qualified}")
-        return self._get_current_snapshot_id(qualified)
+        return DeleteResult(
+            snapshot_id=self._get_current_snapshot_id(qualified),
+            deleted_ids=set(ids_to_delete),
+        )
 
     def rollback_to_snapshot(self, namespace: str, table_name: str, snapshot_id: int) -> int:
         spark = self._get_spark()

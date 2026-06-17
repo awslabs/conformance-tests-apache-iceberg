@@ -4,8 +4,17 @@ import os
 
 import duckdb
 
-from iceberg_fuzzer.backend import ValidationEngine, Checkpoint, AssertionResult, is_s3_tables_warehouse
+from iceberg_fuzzer.backend import (
+    ValidationEngine,
+    Checkpoint,
+    AssertionResult,
+    ColumnFilter,
+    ColumnName,
+    ColTypeStr,
+    is_s3_tables_warehouse,
+)
 from iceberg_fuzzer.backend.duckdb.canonical import DuckDBCanonicalCast
+from iceberg_fuzzer.backend.point_query import format_sql_literal
 
 
 def _extract_region(warehouse_path: str) -> str:
@@ -123,6 +132,40 @@ class DuckDBValidation(ValidationEngine):
             AssertionResult.row_count(checkpoint.row_count, _get_row_count(conn, source)),
             AssertionResult.content_hash(checkpoint.content_hash, _get_content_hash(conn, source)),
         ]
+
+    def filtered_count(
+        self,
+        warehouse: str,
+        namespace: str,
+        table_name: str,
+        column_filter: ColumnFilter,
+    ) -> int:
+        source = self._table_source(warehouse, namespace, table_name)
+        conn = self._get_conn()
+        col = _escape_identifier(column_filter.column)
+        if column_filter.is_null:
+            where = f"{col} IS NULL"
+        else:
+            where = f"{col} = {format_sql_literal(column_filter.value)}"
+        query = f"SELECT COUNT(*) FROM {source} WHERE {where}"
+        return conn.execute(query).fetchone()[0]
+
+    def get_columns(
+        self, warehouse: str, namespace: str, table_name: str
+    ) -> list[tuple[ColumnName, ColTypeStr]]:
+        source = self._table_source(warehouse, namespace, table_name)
+        conn = self._get_conn()
+        query = f"DESCRIBE SELECT * FROM {source}"
+        rows = conn.execute(query).fetchall()
+        return [
+            (col_name, col_type) for col_name, col_type, *_ in rows if col_name != "id"
+        ]
+
+    def get_row_ids(self, warehouse: str, namespace: str, table_name: str) -> set[int]:
+        source = self._table_source(warehouse, namespace, table_name)
+        conn = self._get_conn()
+        rows = conn.execute(f"SELECT id FROM {source}").fetchall()
+        return {row[0] for row in rows}
 
     def close(self):
         if self._conn is not None:
