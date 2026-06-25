@@ -249,6 +249,50 @@ Examples:
                        default=1,
                        help='Number of parallel workers for deletion (default: 1)')
 
+    # Build-shapes subcommand
+    shapes_parser = subparsers.add_parser('build-shapes',
+        help='Build Iceberg tables from exhaustive shape configs',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Build a single config by ID
+  iceberg-fuzzer build-shapes --warehouse-path /tmp/warehouse --config-id 84823 --target-size-mb 0.01
+
+  # Build first 10 configs with validation
+  iceberg-fuzzer build-shapes --warehouse-path /tmp/warehouse --limit 10 --validate
+
+  # Build all configs with custom namespace
+  iceberg-fuzzer build-shapes --warehouse-path /tmp/warehouse --namespace my_shapes --target-size-mb 0.1
+        """)
+
+    shapes_parser.add_argument('--warehouse-path',
+                       required=True,
+                       help='Local warehouse path for Iceberg tables')
+    shapes_parser.add_argument('--max-row-count',
+                       type=int,
+                       default=6,
+                       help='Max row count for config generation (default: 6)')
+    shapes_parser.add_argument('--seed',
+                       type=int,
+                       default=42,
+                       help='Random seed (default: 42)')
+    shapes_parser.add_argument('--target-size-mb',
+                       type=float,
+                       default=0.1,
+                       help='Target sentinel file size in MB (default: 0.1)')
+    shapes_parser.add_argument('--namespace',
+                       default='exhaustive_shapes',
+                       help='Iceberg namespace (default: exhaustive_shapes)')
+    shapes_parser.add_argument('--config-id',
+                       type=int,
+                       help='Build only the config with this ID')
+    shapes_parser.add_argument('--limit',
+                       type=int,
+                       help='Limit number of configs to build')
+    shapes_parser.add_argument('--validate',
+                       action='store_true',
+                       help='Run validations after building each table')
+
     # Workflow subcommand
     workflow_parser = subparsers.add_parser('workflow',
         help='Run correctness workflows against existing tables',
@@ -290,6 +334,57 @@ Examples:
                        help='Random seed for non-deterministic operations (e.g., delete row selection)')
 
     args = parser.parse_args()
+
+    # Handle build-shapes command
+    if args.command == 'build-shapes':
+        from iceberg_fuzzer.exhaustive import TableConfigGenerator, UnifiedTableBuilder
+
+        gen = TableConfigGenerator(max_row_count=args.max_row_count, seed=args.seed)
+        builder = UnifiedTableBuilder(
+            args.warehouse_path,
+            target_size_mb=args.target_size_mb,
+            seed=args.seed,
+        )
+
+        built = 0
+        failed = 0
+        try:
+            for config in gen.generate_all():
+                if args.config_id is not None and config['config_id'] != args.config_id:
+                    continue
+
+                table_name = f"table_{config['config_id']}"
+                try:
+                    stats = builder.build_table(config, args.namespace, table_name)
+                    built += 1
+
+                    status = "OK"
+                    if args.validate and stats.validation_messages:
+                        status = "WARN"
+                        failed += 1
+
+                    print(f"[{built}] {table_name}: {stats.snapshot_count} snaps, "
+                          f"{stats.data_file_count} data, {stats.delete_file_count} del "
+                          f"— {status}")
+
+                    if args.validate and stats.validation_messages:
+                        for msg in stats.validation_messages:
+                            print(f"      {msg}")
+
+                except Exception as e:
+                    failed += 1
+                    print(f"[ERR] {table_name}: {e}")
+
+                if args.config_id is not None:
+                    break
+                if args.limit is not None and built >= args.limit:
+                    break
+
+        finally:
+            builder.close()
+
+        print(f"\nDone: {built} built, {failed} failed")
+        sys.exit(1 if failed > 0 else 0)
 
     # Handle workflow command
     if args.command == 'workflow':
