@@ -752,7 +752,7 @@ class TableConfigGenerator:
         for skeleton in nonreps_bag:
             for result in self._level4_value_assignment(skeleton):
                 if result.get('is_representative'):
-                    logger.warning(
+                    logger.debug(
                         f"L3-nonrep became L5-rep: config_id={result.get('config_id')}, "
                         f"row_count={result.get('row_count')}, pattern={result.get('delete_pattern')}"
                     )
@@ -890,6 +890,9 @@ class TableConfigGenerator:
             pattern, data_files, row_count, sentinel_constraint
         )
 
+        if not row_assignments:
+            return []
+
         # Build delete files based on partition
         delete_files = []
         for file_idx, delete_indices in enumerate(partition):
@@ -962,6 +965,9 @@ class TableConfigGenerator:
                 else:
                     non_sentinel_positions.append(pos_tuple)
 
+        if not all_positions:
+            return []
+
         # Assign positions to variables
         assignments = [None] * len(pattern)
         non_sentinel_idx = 0
@@ -969,21 +975,21 @@ class TableConfigGenerator:
         for var in sorted(var_groups.keys()):
             indices = var_groups[var]
 
-            # Determine which position to use based on constraint
+            # Determine which position to use based on sentinel constraint:
+            # Variables constrained to 'sentinel' target the sentinel row specifically;
+            # unconstrained variables round-robin through non-sentinel positions.
             if sentinel_constraint and sentinel_constraint.get(var) == 'sentinel':
-                # This variable should get the sentinel row
                 if sentinel_positions:
                     pos = sentinel_positions[0]
                 else:
-                    # Fallback: sentinel not available (shouldn't happen with valid data)
+                    # Fallback: sentinel not in any data file (shouldn't happen with valid config)
                     pos = all_positions[0]
             else:
-                # This variable should get a non-sentinel row
                 if non_sentinel_positions:
                     pos = non_sentinel_positions[non_sentinel_idx % len(non_sentinel_positions)]
                     non_sentinel_idx += 1
                 else:
-                    # Fallback: only sentinel row available (edge case with row_count=1)
+                    # Only sentinel row available (edge case: row_count=1)
                     pos = all_positions[0]
 
             # All deletes with same variable get same position
