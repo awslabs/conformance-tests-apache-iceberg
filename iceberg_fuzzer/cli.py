@@ -23,15 +23,42 @@ Unified CLI for generating Apache Iceberg tables with PySpark, PyIceberg, or Pol
 """
 
 import argparse
+import logging
 import os
 import subprocess
 import sys
+
+logger = logging.getLogger(__name__)
 
 # Resolve validator script path relative to this file
 _CLI_DIR = os.path.dirname(os.path.abspath(__file__))
 _VALIDATOR_SCRIPT = os.path.join(
     _CLI_DIR, 'validator', 'local_duckdb', 'validator_duckdb.py'
 )
+
+
+def _incompatibility_reason(col_type, encoding, compression, nullable, value_strategy):
+    """Return a reason string if the (type, encoding, compression, nullability,
+    value_strategy) combination cannot produce a valid table, else None.
+
+    The single compatibility gate build-shapes applies before building:
+      1. value_strategy 'nulls' requires a nullable column.
+      2. encoding × type: the encoding must be valid for the column type.
+      3. encoding × compression: the codec must be compatible with the encoding.
+    """
+    from iceberg_fuzzer.exhaustive.dimensions.encoding import is_compatible as _enc_type_ok
+    from iceberg_fuzzer.exhaustive.dimensions.compression import (
+        is_compression_compatible as _enc_comp_ok)
+
+    if value_strategy == "nulls" and not nullable:
+        return "nulls value_strategy requires a nullable type"
+    if encoding is not None and not _enc_type_ok(col_type, encoding.upper()):
+        return f"encoding {encoding.upper()} incompatible with type {col_type}"
+    if encoding is not None and compression is not None:
+        if not _enc_comp_ok(encoding.upper(), compression.upper()):
+            return (f"compression {compression.upper()} incompatible with "
+                    f"encoding {encoding.upper()}")
+    return None
 
 def _validate_backend_constraints(backend, warehouse_path):
     """Validate backend-specific constraints for warehouse path."""
@@ -292,6 +319,18 @@ Examples:
     shapes_parser.add_argument('--validate',
                        action='store_true',
                        help='Run validations after building each table')
+    # Optional dimension knobs — a single 'value' column of the given type,
+    # with a table-wide encoding/compression. Omitting all keeps the legacy
+    # INT/zstd path unchanged. (Only 'int' is supported for now.)
+    shapes_parser.add_argument('--data-type',
+                       help="Column Iceberg type (default: int). Only 'int' supported for now.")
+    shapes_parser.add_argument('--nullable',
+                       action='store_true',
+                       help='Make the column nullable (required for nulls value_strategy)')
+    shapes_parser.add_argument('--encoding',
+                       help='Parquet encoding for the column, e.g. PLAIN, DICTIONARY')
+    shapes_parser.add_argument('--compression',
+                       help='Parquet compression codec, e.g. snappy, gzip, zstd, none')
 
     # Workflow subcommand
     workflow_parser = subparsers.add_parser('workflow',
@@ -338,30 +377,72 @@ Examples:
     # Handle build-shapes command
     if args.command == 'build-shapes':
         from iceberg_fuzzer.exhaustive import TableConfigGenerator, UnifiedTableBuilder
+        from iceberg_fuzzer.exhaustive.dimensions.data_types import (
+            DataTypeChoice, TypedValueFiller)
+        from iceberg_fuzzer.exhaustive.dimensions.interfaces import WriteOptions
+        from iceberg_fuzzer.exhaustive.dimensions.encoding import EncodingChoice
+        from iceberg_fuzzer.exhaustive.dimensions.compression import (
+            CompressionChoice, CompressionCodec)
+
+        # Build the dimension inputs from the CLI flags. Each flag has an
+        # independent default so any subset may be given: type defaults to int,
+        # encoding to PLAIN, compression to zstd, and the column is non-nullable
+        # unless --nullable is passed.
+        col_type = getattr(args, 'data_type', None) or "int"
+        encoding = (getattr(args, 'encoding', None) or "PLAIN").upper()
+        compression = (getattr(args, 'compression', None) or "zstd").upper()
+        nullable = getattr(args, 'nullable', False)
+
+        schema_provider = DataTypeChoice([("value", col_type)], nullable=nullable)
+        filler = TypedValueFiller()
+        write_options = WriteOptions(
+            encoding=EncodingChoice({"value": encoding}),
+            compression=CompressionChoice(default_codec=CompressionCodec(compression)),
+            schema={"value": col_type})
 
         gen = TableConfigGenerator(max_row_count=args.max_row_count, seed=args.seed)
-        builder = UnifiedTableBuilder(
-            args.warehouse_path,
-            target_size_mb=args.target_size_mb,
-            seed=args.seed,
-        )
 
         built = 0
         failed = 0
-        try:
+        skipped = 0
+        with UnifiedTableBuilder(
+            args.warehouse_path,
+            target_size_mb=args.target_size_mb,
+            seed=args.seed,
+        ) as builder:
             for config in gen.generate_all():
                 if args.config_id is not None and config['config_id'] != args.config_id:
                     continue
 
                 table_name = f"table_{config['config_id']}"
+
+                # Compatibility gate: skip (with a logged reason) any config whose
+                # value_strategy/type/encoding/compression combination can't
+                # produce a valid table.
+                reason = _incompatibility_reason(
+                    col_type, encoding, compression, nullable,
+                    config.get('value_strategy'))
+                if reason is not None:
+                    skipped += 1
+                    logger.info("skip %s: %s", table_name, reason)
+
+                    if args.config_id is not None:
+                        break
+                    continue
+
                 try:
-                    stats = builder.build_table(config, args.namespace, table_name)
+                    # Fill typed_value (respecting the config's value_strategy)
+                    # before building.
+                    build_config = filler.fill(config, schema_provider)
+
+                    stats = builder.build_table(
+                        build_config, args.namespace, table_name,
+                        schema_provider=schema_provider, write_options=write_options)
                     built += 1
 
                     status = "OK"
                     if args.validate and stats.validation_messages:
                         status = "WARN"
-                        failed += 1
 
                     print(f"[{built}] {table_name}: {stats.snapshot_count} snaps, "
                           f"{stats.data_file_count} data, {stats.delete_file_count} del "
@@ -380,10 +461,7 @@ Examples:
                 if args.limit is not None and built >= args.limit:
                     break
 
-        finally:
-            builder.close()
-
-        print(f"\nDone: {built} built, {failed} failed")
+        print(f"\nDone: {built} built, {failed} failed, {skipped} skipped")
         sys.exit(1 if failed > 0 else 0)
 
     # Handle workflow command

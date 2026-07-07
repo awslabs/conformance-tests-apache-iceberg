@@ -629,7 +629,7 @@ class TableConfigGenerator:
                         # Manifest strategies
                         for manifest_strategy in ['minimal', 'maximal']:
                             self.config_count += 1
-                            yield {
+                            config = {
                                 'config_id': self.config_count,
                                 'row_count': 1,
                                 'delete_pattern': pattern,
@@ -645,6 +645,13 @@ class TableConfigGenerator:
                                 'delete_files': copy.deepcopy(delete_files),
                                 'snapshots': snapshots,
                             }
+                            # The single row is the null row; record it in
+                            # null_rows for the nulls strategy only, matching the
+                            # multi-row path (which leaves the key absent
+                            # otherwise).
+                            if value_strategy == 'nulls':
+                                config['null_rows'] = [0]
+                            yield config
 
     def _generate_single_row_snapshot_orderings(self, delete_files: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
         """
