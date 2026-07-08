@@ -328,8 +328,8 @@ def _process_table(
                 result.error = op_result.error
                 return result
 
-            # Update alive_ids based on the operation.
-            if not dry_run:
+            # Update alive_ids and run point query validation.
+            if point_queries and not dry_run:
                 step_config = step.get('config', {})
                 match operation:
                     case 'append':
@@ -351,8 +351,6 @@ def _process_table(
                     case _:
                         raise NotImplementedError(f"No alive_ids tracking for operation '{operation}'")
 
-            # Run point query validation after each step
-            if point_queries and not dry_run and not op_result.error:
                 pq_assertions = validate_point_queries(
                     engines, warehouse_path, namespace, table_name,
                     alive_ids, queryable_columns, seed=seed,
