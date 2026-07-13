@@ -99,7 +99,6 @@ class UnifiedTableBuilder:
         # stores a new entry rather than reusing a stale figure. _data_codec is
         # set from write_options at the top of build_table.
         self._bytes_per_row_by_codec: Dict[str, int] = {}
-        self._base_target_row_count_cache: Optional[int] = None
         self._target_row_count: Optional[int] = None
         self._data_codec: str = DEFAULT_COMPRESSION
 
@@ -120,11 +119,13 @@ class UnifiedTableBuilder:
 
     @property
     def _base_target_row_count(self) -> int:
-        """Base row count for sentinel files, derived from bytes_per_row."""
-        if self._base_target_row_count_cache is None:
-            target_bytes = self.target_size_mb * 1024 * 1024
-            self._base_target_row_count_cache = max(1, int(target_bytes / self.bytes_per_row))
-        return self._base_target_row_count_cache
+        """Base row count for sentinel files, derived from bytes_per_row.
+
+        Not cached — bytes_per_row (the only disk I/O) is already cached per
+        codec, and the division is trivial to redo.
+        """
+        target_bytes = self.target_size_mb * 1024 * 1024
+        return max(1, int(target_bytes / self.bytes_per_row))
 
     @property
     def target_row_count(self) -> int:
@@ -227,9 +228,7 @@ class UnifiedTableBuilder:
                 "write_options supplies no compression codec for column 'value'; "
                 "data-file compression must be explicit.")
         data_codec = data_codec.lower()
-        if data_codec != self._data_codec:
-            self._data_codec = data_codec
-            self._base_target_row_count_cache = None
+        self._data_codec = data_codec
 
         spark = self._get_spark()
 
@@ -496,18 +495,23 @@ class UnifiedTableBuilder:
 
         kwargs: Dict[str, Any] = {'compression': compression_map}
         if has_explicit_encoding:
+            # Explicit encoding was requested, so a failure to apply it must fail
+            # the build loudly rather than silently fall back to writer defaults
+            # (a silently mis-encoded table is worse than no table).
+            import pyarrow
             try:
-                import pyarrow
                 pa_version = tuple(int(x) for x in pyarrow.__version__.split('.')[:2])
-                if pa_version >= (14, 0):
-                    kwargs['use_dictionary'] = False
-                    kwargs['column_encoding'] = encoding_map
-                else:
-                    logger.warning(
-                        "PyArrow %s does not support column_encoding (requires >=14.0); "
-                        "encoding settings ignored.", pyarrow.__version__)
-            except (ValueError, AttributeError):
-                pass
+            except (ValueError, AttributeError) as e:
+                raise RuntimeError(
+                    f"Could not parse PyArrow version {pyarrow.__version__!r} to "
+                    f"confirm column_encoding support (requires >=14.0); refusing "
+                    f"to write with requested encoding {encoding_map}.") from e
+            if pa_version < (14, 0):
+                raise RuntimeError(
+                    f"PyArrow {pyarrow.__version__} does not support column_encoding "
+                    f"(requires >=14.0); cannot honor requested encoding {encoding_map}.")
+            kwargs['use_dictionary'] = False
+            kwargs['column_encoding'] = encoding_map
         return kwargs
 
     def _write_delete_files(self, config, delete_file_ids, file_index_to_path, data_dir):

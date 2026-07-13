@@ -320,17 +320,21 @@ Examples:
                        action='store_true',
                        help='Run validations after building each table')
     # Optional dimension knobs — a single 'value' column of the given type,
-    # with a table-wide encoding/compression. Omitting all keeps the legacy
-    # INT/zstd path unchanged. (Only 'int' is supported for now.)
+    # with a table-wide encoding/compression. Each has a default so any subset
+    # may be given. (Only 'int' is supported for now; nested types like
+    # 'list<int>' / 'struct<a:int,b:string>' land in a follow-up.)
     shapes_parser.add_argument('--data-type',
-                       help="Column Iceberg type (default: int). Only 'int' supported for now.")
+                       default='int',
+                       help="Column Iceberg type (default: %(default)s). Only 'int' supported for now.")
     shapes_parser.add_argument('--nullable',
                        action='store_true',
                        help='Make the column nullable (required for nulls value_strategy)')
     shapes_parser.add_argument('--encoding',
-                       help='Parquet encoding for the column, e.g. PLAIN, DICTIONARY')
+                       default='PLAIN',
+                       help='Parquet encoding for the column, e.g. PLAIN, DICTIONARY (default: %(default)s)')
     shapes_parser.add_argument('--compression',
-                       help='Parquet compression codec, e.g. snappy, gzip, zstd, none')
+                       default='zstd',
+                       help='Parquet compression codec, e.g. snappy, gzip, zstd, none (default: %(default)s)')
 
     # Workflow subcommand
     workflow_parser = subparsers.add_parser('workflow',
@@ -384,14 +388,13 @@ Examples:
         from iceberg_fuzzer.exhaustive.dimensions.compression import (
             CompressionChoice, CompressionCodec)
 
-        # Build the dimension inputs from the CLI flags. Each flag has an
-        # independent default so any subset may be given: type defaults to int,
-        # encoding to PLAIN, compression to zstd, and the column is non-nullable
-        # unless --nullable is passed.
-        col_type = getattr(args, 'data_type', None) or "int"
-        encoding = (getattr(args, 'encoding', None) or "PLAIN").upper()
-        compression = (getattr(args, 'compression', None) or "zstd").upper()
-        nullable = getattr(args, 'nullable', False)
+        # Build the dimension inputs from the CLI flags. Defaults are set on the
+        # arguments (type=int, encoding=PLAIN, compression=zstd, non-nullable),
+        # so any subset may be given and we can read them directly.
+        col_type = args.data_type
+        encoding = args.encoding.upper()
+        compression = args.compression.upper()
+        nullable = args.nullable
 
         schema_provider = DataTypeChoice([("value", col_type)], nullable=nullable)
         filler = TypedValueFiller()
