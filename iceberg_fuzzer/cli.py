@@ -375,6 +375,9 @@ Examples:
                        type=int,
                        default=None,
                        help='Random seed for non-deterministic operations (e.g., delete row selection)')
+    workflow_run_parser.add_argument('--point-queries', action=argparse.BooleanOptionalAction,
+                       default=True,
+                       help='Run point query validation after each step (default: %(default)s)')
 
     args = parser.parse_args()
 
@@ -478,6 +481,7 @@ Examples:
             namespace=args.namespace,
             dry_run=args.dry_run,
             seed=args.seed,
+            point_queries=args.point_queries,
         )
         sys.exit(0 if result is None or result.passed else 1)
 

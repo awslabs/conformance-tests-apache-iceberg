@@ -7,8 +7,36 @@ and implements one or more of: generation, validation, mutation.
 
 import random
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+ColumnName = str
+# TODO: Once get_columns uses PyIceberg, consider using PyIceberg's type classes
+# (e.g. IntegerType, TimestamptzType) directly instead of strings. str() on those
+# already gives canonical names like "int", "timestamptz".
+ColTypeStr = str
+
+
+@dataclass
+class ColumnFilter:
+    """A single-column equality or IS NULL filter for point queries."""
+
+    column: str
+    value: Any = None
+    is_null: bool = False
+
+    @staticmethod
+    def eq(column: str, value: Any) -> "ColumnFilter":
+        return ColumnFilter(column=column, value=value)
+
+    @staticmethod
+    def null(column: str) -> "ColumnFilter":
+        return ColumnFilter(column=column, is_null=True)
+
+    def __repr__(self) -> str:
+        if self.is_null:
+            return f"{self.column} IS NULL"
+        return f"{self.column} = {self.value}"
 
 
 @dataclass
@@ -54,6 +82,15 @@ class AssertionResult:
         """Assert content hash matches."""
         return cls.equal("content_hash", expected, actual, prefix=prefix)
 
+    @classmethod
+    def skipped(cls, name: str, reason: str):
+        """Record that a check was skipped (passes but notes why).
+
+        # TODO: Add a proper skipped/status field instead of overloading
+        # expected/actual for non-assertion metadata.
+        """
+        return cls(name=name, passed=True, expected="skipped", actual=reason)
+
 
 class ValidationEngine(ABC):
     """Captures table state and validates it is preserved after an operation.
@@ -91,6 +128,29 @@ class ValidationEngine(ABC):
         """
         pass
 
+    @abstractmethod
+    def filtered_count(
+        self,
+        warehouse: str,
+        namespace: str,
+        table_name: str,
+        column_filter: ColumnFilter,
+    ) -> int:
+        """Return the number of rows matching a single-column filter."""
+        pass
+
+    @abstractmethod
+    def get_columns(
+        self, warehouse: str, namespace: str, table_name: str
+    ) -> list[tuple[ColumnName, ColTypeStr]]:
+        """Return (name, type_string) pairs for all non-id columns."""
+        pass
+
+    @abstractmethod
+    def get_row_ids(self, warehouse: str, namespace: str, table_name: str) -> set[int]:
+        """Return the set of all 'id' column values currently in the table."""
+        pass
+
     def close(self):
         """Release resources. Called when the workflow completes."""
         pass
@@ -99,6 +159,22 @@ class ValidationEngine(ABC):
 def is_s3_tables_warehouse(warehouse_path: str) -> bool:
     """Return True if warehouse_path is an S3 Tables ARN."""
     return warehouse_path.startswith("arn:aws:s3tables:")
+
+
+@dataclass
+class AppendResult:
+    """Result of an append operation, including which rows were added."""
+
+    snapshot_id: int
+    appended_ids: set[int] = field(default_factory=set)
+
+
+@dataclass
+class DeleteResult:
+    """Result of a delete operation, including which rows were removed."""
+
+    snapshot_id: int
+    deleted_ids: set[int] = field(default_factory=set)
 
 
 class MutationEngine(ABC):
@@ -112,21 +188,12 @@ class MutationEngine(ABC):
         self._rng = random.Random(seed)
 
     @abstractmethod
-    def append_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
-        """Append rows to an existing table.
-
-        Args:
-            namespace: The table's namespace.
-            table_name: The table name.
-            num_rows: Number of rows to append.
-
-        Returns:
-            The snapshot ID after the append completes.
-        """
+    def append_rows(self, namespace: str, table_name: str, num_rows: int) -> AppendResult:
+        """Append num_rows to an existing table."""
         pass
 
     @abstractmethod
-    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> int:
+    def delete_rows(self, namespace: str, table_name: str, num_rows: int) -> DeleteResult:
         """Delete rows from an existing table.
 
         Selects num_rows rows at random (using the instance's RNG) and removes them.

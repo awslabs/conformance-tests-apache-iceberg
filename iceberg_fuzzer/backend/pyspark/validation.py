@@ -2,7 +2,15 @@
 
 from pyspark.sql import functions as F
 
-from iceberg_fuzzer.backend import ValidationEngine, Checkpoint, AssertionResult
+from iceberg_fuzzer.backend import (
+    ValidationEngine,
+    Checkpoint,
+    AssertionResult,
+    ColumnFilter,
+    ColumnName,
+    ColTypeStr,
+)
+from iceberg_fuzzer.backend.point_query import format_sql_literal
 from iceberg_fuzzer.backend.pyspark.canonical import PySparkCanonicalCast
 from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
 
@@ -56,6 +64,35 @@ class PySparkValidation(ValidationEngine):
             AssertionResult.row_count(checkpoint.row_count, current.row_count),
             AssertionResult.content_hash(checkpoint.content_hash, current.content_hash),
         ]
+
+    def filtered_count(
+        self,
+        warehouse: str,
+        namespace: str,
+        table_name: str,
+        column_filter: ColumnFilter,
+    ) -> int:
+        table_ref = self._resolve_table_ref(namespace, table_name)
+        spark = self._get_spark()
+        col = f"`{column_filter.column}`"
+        if column_filter.is_null:
+            where = f"{col} IS NULL"
+        else:
+            where = f"{col} = {format_sql_literal(column_filter.value)}"
+        query = f"SELECT COUNT(*) FROM {table_ref} WHERE {where}"
+        return spark.sql(query).collect()[0][0]
+
+    def get_columns(self, warehouse: str, namespace: str, table_name: str) -> list[tuple[ColumnName, ColTypeStr]]:
+        spark = self._get_spark()
+        table_ref = self._resolve_table_ref(namespace, table_name)
+        schema = spark.table(table_ref).schema
+        return [(f.name, f.dataType.simpleString()) for f in schema if f.name != "id"]
+
+    def get_row_ids(self, warehouse: str, namespace: str, table_name: str) -> set[int]:
+        table_ref = self._resolve_table_ref(namespace, table_name)
+        spark = self._get_spark()
+        rows = spark.sql(f"SELECT id FROM {table_ref}").collect()
+        return {row.id for row in rows}
 
     def close(self):
         if self._spark is not None:

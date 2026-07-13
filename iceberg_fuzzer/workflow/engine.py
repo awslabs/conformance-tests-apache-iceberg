@@ -10,8 +10,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
 
-from iceberg_fuzzer.backend import AssertionResult, Checkpoint, ValidationEngine
+from iceberg_fuzzer.backend import AssertionResult, Checkpoint, ColTypeStr, ColumnName, ValidationEngine
 from iceberg_fuzzer.backend.duckdb import DuckDBValidation
+from iceberg_fuzzer.backend.point_query import validate_point_queries
 from iceberg_fuzzer.backend.pyspark.mutation import PySparkMutation
 from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation
 from iceberg_fuzzer.workflow.loader import Workflow, load_workflow
@@ -27,10 +28,12 @@ class OperationResult:
     assertions: list[AssertionResult]
     error: str | None = None
     snapshot_id: SnapshotId | None = None
+    appended_ids: set[int] | None = None
+    deleted_ids: set[int] | None = None
 
     @classmethod
-    def success(cls, assertions: list[AssertionResult], snapshot_id: SnapshotId | None = None):
-        return cls(assertions=assertions, snapshot_id=snapshot_id)
+    def success(cls, assertions: list[AssertionResult], snapshot_id: SnapshotId | None = None, appended_ids: set[int] | None = None, deleted_ids: set[int] | None = None):
+        return cls(assertions=assertions, snapshot_id=snapshot_id, appended_ids=appended_ids, deleted_ids=deleted_ids)
 
     @classmethod
     def failed(cls, error: str):
@@ -168,7 +171,7 @@ def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engi
     # Use first engine for pre-count (all should agree)
     _, first_engine = engines[0]
     pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
-    snapshot_id = backend.append_rows(namespace, name, num_rows)
+    append_result = backend.append_rows(namespace, name, num_rows)
 
     assertions: list[AssertionResult] = []
     post_hashes: dict[str, int] = {}
@@ -179,7 +182,7 @@ def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engi
         post_hashes[engine_name] = post.content_hash
 
     assertions.extend(_cross_engine_assertions(post_hashes))
-    return OperationResult.success(assertions, snapshot_id=snapshot_id)
+    return OperationResult.success(assertions, snapshot_id=append_result.snapshot_id, appended_ids=append_result.appended_ids)
 
 
 def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationResult:
@@ -196,7 +199,7 @@ def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engi
 
     _, first_engine = engines[0]
     pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
-    snapshot_id = backend.delete_rows(namespace, name, num_rows)
+    delete_result = backend.delete_rows(namespace, name, num_rows)
 
     assertions: list[AssertionResult] = []
     post_hashes: dict[str, int] = {}
@@ -207,7 +210,7 @@ def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engi
         post_hashes[engine_name] = post.content_hash
 
     assertions.extend(_cross_engine_assertions(post_hashes))
-    return OperationResult.success(assertions, snapshot_id=snapshot_id)
+    return OperationResult.success(assertions, snapshot_id=delete_result.snapshot_id, deleted_ids=delete_result.deleted_ids)
 
 
 def _handle_rollback(step, engines, warehouse_path, namespace, name, mutation_engines,
@@ -259,6 +262,7 @@ def _process_table(
     engines: list[tuple[str, ValidationEngine]],
     dry_run: bool = False,
     seed: int | None = None,
+    point_queries: bool = True,
 ) -> TableResult:
     """Process a single table through all workflow steps."""
     workflow_name = workflow_def.name
@@ -281,6 +285,16 @@ def _process_table(
 
     snapshot_id_by_step: dict[StepId, SnapshotId] = {}
     accumulated_checkpoints: dict[StepId, dict[EngineName, Checkpoint]] = {}
+
+    # Point query state: track alive IDs and queryable columns
+    alive_ids: set[int] = set()
+    alive_ids_by_step: dict[StepId, set[int]] = {}
+    queryable_columns: list[tuple[ColumnName, ColTypeStr]] = []
+
+    if point_queries and not dry_run and engines:
+        _, first_engine = engines[0]
+        alive_ids = first_engine.get_row_ids(warehouse_path, namespace, table_name)
+        queryable_columns = first_engine.get_columns(warehouse_path, namespace, table_name)
 
     try:
         for step in workflow_def.steps:
@@ -310,11 +324,40 @@ def _process_table(
             except Exception as e:
                 op_result = OperationResult.failed(f"Step '{step_id}' failed: {e}")
 
-            result.step_assertions[step_id] = op_result.assertions
-
             if op_result.error:
                 result.error = op_result.error
                 return result
+
+            # Update alive_ids and run point query validation.
+            if point_queries and not dry_run:
+                step_config = step.get('config', {})
+                match operation:
+                    case 'append':
+                        if op_result.appended_ids is not None:
+                            alive_ids = alive_ids | op_result.appended_ids
+                    case 'delete':
+                        if op_result.deleted_ids is not None:
+                            alive_ids = alive_ids - op_result.deleted_ids
+                    case 'rollback':
+                        to_step = step_config['to_step']
+                        if to_step not in alive_ids_by_step:
+                            raise RuntimeError(f"No saved alive_ids for rollback target '{to_step}'")
+                        alive_ids = alive_ids_by_step[to_step].copy()
+                    case 'replace':
+                        # A correct compaction preserves the logical row set, so keeping our
+                        # prediction unchanged lets point queries detect rows incorrectly
+                        # dropped or duplicated by a buggy compactor.
+                        pass
+                    case _:
+                        raise NotImplementedError(f"No alive_ids tracking for operation '{operation}'")
+
+                pq_assertions = validate_point_queries(
+                    engines, warehouse_path, namespace, table_name,
+                    alive_ids, queryable_columns, seed=seed,
+                )
+                op_result.assertions.extend(pq_assertions)
+
+            result.step_assertions[step_id] = op_result.assertions
 
             if op_result.snapshot_id is not None:
                 snapshot_id_by_step[step_id] = op_result.snapshot_id
@@ -326,6 +369,8 @@ def _process_table(
                         warehouse_path, namespace, table_name
                     )
                 accumulated_checkpoints[step_id] = checkpoints_by_engine
+                if point_queries:
+                    alive_ids_by_step[step_id] = alive_ids.copy()
     finally:
         for me in mutation_engines.values():
             me.close()
@@ -364,6 +409,7 @@ def run_workflow(
     dry_run: bool = False,
     output_dir: str = 'output/workflow-logs',
     seed: int | None = None,
+    point_queries: bool = True,
 ) -> TableResult | None:
     """Run a workflow against a single table.
 
@@ -388,7 +434,7 @@ def run_workflow(
         ]
 
     try:
-        result = _process_table(workflow_def, warehouse_path, namespace, table_name, output_dir, engines, dry_run, seed=seed)
+        result = _process_table(workflow_def, warehouse_path, namespace, table_name, output_dir, engines, dry_run, seed=seed, point_queries=point_queries)
     finally:
         for _, engine in engines:
             engine.close()
