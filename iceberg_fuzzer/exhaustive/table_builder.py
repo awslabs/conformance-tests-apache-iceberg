@@ -37,9 +37,27 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pyspark.sql import SparkSession
 
+from .dimensions.interfaces import SchemaProvider, WriteOptionsProvider
+from .dimensions.compression import CompressionChoice
+
 logger = logging.getLogger(__name__)
 
 ICEBERG_SPARK_RUNTIME = "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1"
+
+# Bootstrap codec for the bytes-per-row measurement probe, used only before
+# build_table sets the actual data codec from write_options (e.g. when
+# bytes_per_row is read standalone). It is NOT a data-file write fallback: data
+# files take their codec exclusively from write_options, which is required.
+# Derived from CompressionChoice's own default rather than a scattered literal.
+DEFAULT_COMPRESSION = CompressionChoice.default_codec.value.lower()
+
+# Delete files always use this codec — their schema (file_path, pos) is fixed,
+# so per-column write_options do not apply to them.
+DELETE_COMPRESSION = "zstd"
+
+# Sentinel distinguishing "no typed_value key" from "typed_value is None" (a
+# legitimately null row under the nulls value_strategy).
+_NO_TYPED_VALUE = object()
 
 
 @dataclass
@@ -70,11 +88,19 @@ class UnifiedTableBuilder:
         self._spark: Optional[SparkSession] = None
         self._file_counter = 0
 
-        # Measure bytes per row for sentinel sizing
-        self.bytes_per_row = self._measure_bytes_per_row()
-        target_bytes = target_size_mb * 1024 * 1024
-        self._base_target_row_count = max(1, int(target_bytes / self.bytes_per_row))
-        self.target_row_count = self._base_target_row_count
+        # Sentinel sizing is derived from a measured bytes-per-row. The values
+        # are computed lazily on first access — the measurement writes a sample
+        # Parquet file, so keeping it out of __init__ lets the many pure unit
+        # tests (config validation, file naming, context manager) construct a
+        # builder with no disk I/O and no mocking.
+        #
+        # bytes-per-row depends on the data codec, so it is cached per codec:
+        # reusing a builder across tables with different codecs re-measures and
+        # stores a new entry rather than reusing a stale figure. _data_codec is
+        # set from write_options at the top of build_table.
+        self._bytes_per_row_by_codec: Dict[str, int] = {}
+        self._target_row_count: Optional[int] = None
+        self._data_codec: str = DEFAULT_COMPRESSION
 
     def __enter__(self):
         return self
@@ -83,20 +109,50 @@ class UnifiedTableBuilder:
         self.close()
         return False
 
-    def _measure_bytes_per_row(self) -> int:
-        """Measure bytes per row by writing a sample parquet file."""
+    @property
+    def bytes_per_row(self) -> int:
+        """Measured bytes-per-row for the current data codec (cached per codec)."""
+        codec = self._data_codec
+        if codec not in self._bytes_per_row_by_codec:
+            self._bytes_per_row_by_codec[codec] = self._measure_bytes_per_row(codec)
+        return self._bytes_per_row_by_codec[codec]
+
+    @property
+    def _base_target_row_count(self) -> int:
+        """Base row count for sentinel files, derived from bytes_per_row.
+
+        Not cached — bytes_per_row (the only disk I/O) is already cached per
+        codec, and the division is trivial to redo.
+        """
+        target_bytes = self.target_size_mb * 1024 * 1024
+        return max(1, int(target_bytes / self.bytes_per_row))
+
+    @property
+    def target_row_count(self) -> int:
+        """Current sentinel target row count (defaults to the base, mutable
+        across sentinel retries)."""
+        if self._target_row_count is None:
+            self._target_row_count = self._base_target_row_count
+        return self._target_row_count
+
+    @target_row_count.setter
+    def target_row_count(self, value: int) -> None:
+        self._target_row_count = value
+
+    def _measure_bytes_per_row(self, codec: str = DEFAULT_COMPRESSION) -> int:
+        """Measure bytes per row by writing a sample parquet file.
+
+        Uses the given codec so sentinel sizing reflects the codec the real
+        data files are written with (defaults to DEFAULT_COMPRESSION).
+        """
         sample_size = 1000
         schema = pa.schema([pa.field("value", pa.int32(), nullable=False)
                            .with_metadata({"PARQUET:field_id": "1"})])
         table = pa.Table.from_arrays(
             [pa.array(list(range(sample_size)), type=pa.int32())], schema=schema)
-        with tempfile.NamedTemporaryFile(suffix='.parquet', delete=False) as tmp:
-            tmp_path = tmp.name
-        try:
-            pq.write_table(table, tmp_path, compression='zstd')
-            return os.path.getsize(tmp_path) // sample_size
-        finally:
-            os.unlink(tmp_path)
+        with tempfile.NamedTemporaryFile(suffix='.parquet') as tmp:
+            pq.write_table(table, tmp.name, compression=codec)
+            return os.path.getsize(tmp.name) // sample_size
 
     def _next_file_name(self, prefix: str) -> str:
         """Generate a deterministic file name from seed + counter."""
@@ -134,19 +190,45 @@ class UnifiedTableBuilder:
     # PUBLIC API
     # =========================================================================
 
-    def build_table(self, config: Dict[str, Any], namespace: str, table_name: str) -> BuildStats:
+    def build_table(self, config: Dict[str, Any], namespace: str, table_name: str,
+                    schema_provider: SchemaProvider,
+                    write_options: WriteOptionsProvider) -> BuildStats:
         """
         Build an Iceberg table from a raw config dict.
 
         The config dict comes directly from the exhaustive generator — all fields
         (data_files, delete_files, snapshots, sentinel_in_file, value_strategy, etc.)
         are read directly. No wrappers.
+
+        Args:
+            config: Raw config dict from the exhaustive generator, with typed
+                values already filled per its value_strategy (see TypedValueFiller).
+            namespace: Iceberg namespace.
+            table_name: Table name.
+            schema_provider: SchemaProvider (a DataTypeChoice) supplying the column
+                DDL, Arrow schema, and per-row value generation.
+            write_options: WriteOptionsProvider supplying per-column compression
+                and encoding.
         """
         required_keys = ('data_files', 'delete_files', 'snapshots', 'row_count')
         missing = [k for k in required_keys if k not in config]
         if missing:
             raise ValueError(
                 f"Config missing required keys: {missing}. Got keys: {list(config.keys())}")
+
+        # Sentinel sizing measures bytes-per-row with the codec the data files
+        # actually use. The probe writes a single 'value' int column, so its
+        # codec is that column's — required, no default (same rule as the write
+        # path). bytes-per-row is cached per codec, so calling this builder for
+        # different config_ids with different codecs re-measures per codec; a
+        # codec change here invalidates the derived base-row-count cache.
+        data_codec = write_options.get_compression("value")
+        if not data_codec:
+            raise ValueError(
+                "write_options supplies no compression codec for column 'value'; "
+                "data-file compression must be explicit.")
+        data_codec = data_codec.lower()
+        self._data_codec = data_codec
 
         spark = self._get_spark()
 
@@ -163,9 +245,8 @@ class UnifiedTableBuilder:
         for attempt in range(max_retries + 1):
             spark.sql(f"DROP TABLE IF EXISTS {full_table_name}")
 
-            # Create table — nullable if config uses nulls strategy
-            nullable = config.get('value_strategy') == 'nulls'
-            col_def = 'value INT' if nullable else 'value INT NOT NULL'
+            # Create table DDL from the schema provider.
+            col_def = schema_provider.get_spark_ddl()
             spark.sql(f"""
                 CREATE TABLE {full_table_name} ({col_def})
                 USING iceberg
@@ -176,7 +257,9 @@ class UnifiedTableBuilder:
             """)
 
             # Build all snapshots
-            self._build_snapshots(spark, full_table_name, config)
+            self._build_snapshots(spark, full_table_name, config,
+                                  schema_provider=schema_provider,
+                                  write_options=write_options)
 
             # Check sentinel file size
             sentinel_file_id = config.get('sentinel_in_file')
@@ -207,7 +290,9 @@ class UnifiedTableBuilder:
     # SNAPSHOT BUILDING
     # =========================================================================
 
-    def _build_snapshots(self, spark: SparkSession, full_table_name: str, config: Dict[str, Any]):
+    def _build_snapshots(self, spark: SparkSession, full_table_name: str, config: Dict[str, Any],
+                         schema_provider: SchemaProvider,
+                         write_options: WriteOptionsProvider):
         """Iterate config snapshots, commit each via RowDelta for exact file layout control."""
         sentinel_file_id = config.get('sentinel_in_file')
 
@@ -225,7 +310,9 @@ class UnifiedTableBuilder:
             self._build_snapshot_row_delta(
                 spark, full_table_name, config, snapshot_idx,
                 data_file_ids, delete_file_ids, sentinel_file_id,
-                file_index_to_path)
+                file_index_to_path,
+                schema_provider=schema_provider,
+                write_options=write_options)
 
     # =========================================================================
     # ROW DELTA PATH: PyArrow + JVM API
@@ -233,7 +320,9 @@ class UnifiedTableBuilder:
 
     def _build_snapshot_row_delta(self, spark, full_table_name, config, snapshot_idx,
                                   data_file_ids, delete_file_ids, sentinel_file_id,
-                                  file_index_to_path):
+                                  file_index_to_path,
+                                  schema_provider: SchemaProvider,
+                                  write_options: WriteOptionsProvider):
         """Build a snapshot with multiple files using RowDelta."""
         table_path = self._get_table_path(full_table_name)
         data_dir = table_path / "data"
@@ -245,7 +334,9 @@ class UnifiedTableBuilder:
         if data_file_ids:
             new_data_file_infos = self._write_data_files(
                 config, data_file_ids, sentinel_file_id, data_dir, table_path,
-                file_index_to_path)
+                file_index_to_path,
+                schema_provider=schema_provider,
+                write_options=write_options)
 
         # Step 2: Write position delete parquet files
         delete_file_infos = []
@@ -261,18 +352,23 @@ class UnifiedTableBuilder:
     # =========================================================================
 
     def _write_data_files(self, config, data_file_ids, sentinel_file_id, data_dir,
-                          table_path, file_index_to_path):
-        """Write data parquet files with Iceberg field IDs via PyArrow."""
-        field_ids = self._read_iceberg_field_ids(table_path)
+                          table_path, file_index_to_path,
+                          schema_provider: SchemaProvider,
+                          write_options: WriteOptionsProvider):
+        """Write data parquet files with Iceberg field IDs via PyArrow.
 
-        # Build schema with field IDs
-        pa_fields = []
-        for col_name, col_type, field_id, required in field_ids:
-            pa_type = self._iceberg_type_to_arrow(col_type)
-            pa_fields.append(
-                pa.field(col_name, pa_type, nullable=not required)
-                .with_metadata({'PARQUET:field_id': str(field_id)}))
-        data_schema = pa.schema(pa_fields)
+        Uses the schema provider's Arrow schema and per-row value generation
+        (honoring the config's value_strategy via typed_value), and applies the
+        per-column compression/encoding from write_options.
+        """
+        # Field-id seam: choose where the field ids come from, then hand the map
+        # to the provider (which only stamps it). Today we use the computed ids;
+        # to instead harvest Iceberg's own assignment, swap this one line for a
+        # read-back of the created table's metadata.
+        field_ids = schema_provider.get_field_ids()
+        data_schema = schema_provider.get_arrow_schema(field_ids)
+
+        write_kwargs = self._build_write_kwargs(data_schema, write_options)
 
         file_infos = []
 
@@ -283,25 +379,140 @@ class UnifiedTableBuilder:
                 raise ValueError(
                     f"Config missing data_file with file_id='{file_id}'. "
                     f"Available: {[f['file_id'] for f in config['data_files']]}")
-            values = [row['value'] for row in data_file['rows']]
 
-            if sentinel_file_id and file_id == sentinel_file_id:
-                values = self._pad_sentinel_values(values)
+            arrays = self._generate_arrays_from_provider(
+                data_file, data_schema, schema_provider, sentinel_file_id, file_id)
 
-            arrays = [pa.array(values, type=pa_fields[0].type)]
             table = pa.Table.from_arrays(arrays, schema=data_schema)
 
             file_name = self._next_file_name("data")
             file_path = data_dir / file_name
-            pq.write_table(table, str(file_path), compression='zstd')
+            pq.write_table(table, str(file_path), **write_kwargs)
 
             file_size = file_path.stat().st_size
-            file_infos.append((str(file_path), file_size, len(values)))
+            file_infos.append((str(file_path), file_size, table.num_rows))
 
             # Register in the cross-snapshot map for position-delete resolution
             file_index_to_path[data_file['file_index']] = str(file_path)
 
         return file_infos
+
+    def _generate_arrays_from_provider(self, data_file, data_schema, schema_provider,
+                                        sentinel_file_id, file_id):
+        """Generate PyArrow arrays for each column, honoring the config's values.
+
+        Real rows take their value from the config (typed_value if the filler
+        ran, else generate_value(row_id)). Sentinel padding rows have no config
+        entry, so they are generated as typed filler via generate_value.
+        """
+        rows = data_file['rows']
+        is_sentinel = sentinel_file_id and file_id == sentinel_file_id
+
+        padding_ids = []
+        if is_sentinel:
+            padding_needed = self.target_row_count - len(rows)
+            if padding_needed > 0:
+                padding_ids = [-(i + 1000000) for i in range(padding_needed)]
+
+        num_columns = len(data_schema)
+        arrays = []
+        for field_idx in range(num_columns):
+            col_name = data_schema.field(field_idx).name
+            col_type = data_schema.field(field_idx).type
+            values = [self._resolve_row_value(row, col_name, num_columns, schema_provider)
+                      for row in rows]
+            values += [schema_provider.generate_value(col_name, pid) for pid in padding_ids]
+            arrays.append(pa.array(values, type=col_type))
+        return arrays
+
+    @staticmethod
+    def _resolve_row_value(row, col_name, num_columns, schema_provider):
+        """Resolve a single row's value for a column on the schema_provider path.
+
+        Order: row['typed_value'] (set by TypedValueFiller — already applies the
+        value_strategy) if present, else generate_value(col, row_id). A
+        multi-column typed_value is a {col: value} dict; single-column is the
+        value itself. row['value'] (the abstract shape int) is not used here.
+        """
+        tv = row.get('typed_value', _NO_TYPED_VALUE)
+        if tv is not _NO_TYPED_VALUE:
+            if num_columns > 1:
+                return tv.get(col_name) if isinstance(tv, dict) else tv
+            return tv
+        return schema_provider.generate_value(col_name, row['row_id'])
+
+    @staticmethod
+    def _leaf_column_paths(field: pa.Field, prefix: str = "") -> List[str]:
+        """Return the physical Parquet leaf-column path(s) for an Arrow field.
+
+        pq.write_table keys per-column compression/encoding by leaf path, which
+        for nested types differs from the top-level name. (Primitive-only for
+        now; complex-type recursion lands with complex types.)
+        """
+        name = f"{prefix}{field.name}" if prefix else field.name
+        return [name]
+
+    def _build_write_kwargs(self, data_schema: pa.Schema,
+                            write_options: WriteOptionsProvider) -> Dict[str, Any]:
+        """Build kwargs for pq.write_table from write_options.
+
+        Data-file compression comes exclusively from write_options — every
+        column must supply a codec (there is no default fallback). Requesting an
+        explicit (non-dictionary) encoding sets use_dictionary=False so PyArrow
+        doesn't override it with its default dictionary encoding.
+        """
+        col_names = [data_schema.field(i).name for i in range(len(data_schema))]
+
+        compression_map = {}
+        for i, col_name in enumerate(col_names):
+            codec = write_options.get_compression(col_name)
+            if not codec:
+                raise ValueError(
+                    f"write_options supplies no compression codec for column "
+                    f"'{col_name}'; data-file compression must be explicit.")
+            for leaf in self._leaf_column_paths(data_schema.field(i)):
+                compression_map[leaf] = codec.lower()
+
+        # Any incompatibility should have been caught by the CLI gate; if one
+        # slips through, fail loudly here rather than silently swapping the
+        # requested encoding for a fallback.
+        incompatibilities = write_options.validate_compatibility()
+        if incompatibilities:
+            raise ValueError(
+                "Incompatible write options: " + "; ".join(incompatibilities))
+
+        encoding_map = {}
+        has_explicit_encoding = False
+        for i, col_name in enumerate(col_names):
+            enc = write_options.get_encoding(col_name)
+            if enc is None:
+                continue
+            if enc.upper() == 'DICTIONARY':
+                continue  # expressed via use_dictionary, not column_encoding
+            for leaf in self._leaf_column_paths(data_schema.field(i)):
+                encoding_map[leaf] = enc
+            has_explicit_encoding = True
+
+        kwargs: Dict[str, Any] = {'compression': compression_map}
+        if has_explicit_encoding:
+            # Explicit encoding was requested, so a failure to apply it must fail
+            # the build loudly rather than silently fall back to writer defaults
+            # (a silently mis-encoded table is worse than no table).
+            import pyarrow
+            try:
+                pa_version = tuple(int(x) for x in pyarrow.__version__.split('.')[:2])
+            except (ValueError, AttributeError) as e:
+                raise RuntimeError(
+                    f"Could not parse PyArrow version {pyarrow.__version__!r} to "
+                    f"confirm column_encoding support (requires >=14.0); refusing "
+                    f"to write with requested encoding {encoding_map}.") from e
+            if pa_version < (14, 0):
+                raise RuntimeError(
+                    f"PyArrow {pyarrow.__version__} does not support column_encoding "
+                    f"(requires >=14.0); cannot honor requested encoding {encoding_map}.")
+            kwargs['use_dictionary'] = False
+            kwargs['column_encoding'] = encoding_map
+        return kwargs
 
     def _write_delete_files(self, config, delete_file_ids, file_index_to_path, data_dir):
         """Write position-delete parquet files."""
@@ -344,7 +555,7 @@ class UnifiedTableBuilder:
 
             file_name = self._next_file_name("delete")
             file_path = data_dir / file_name
-            pq.write_table(delete_table, str(file_path), compression='zstd')
+            pq.write_table(delete_table, str(file_path), compression=DELETE_COMPRESSION)
 
             file_size = file_path.stat().st_size
             file_infos.append((str(file_path), file_size, len(delete_rows)))
@@ -393,33 +604,6 @@ class UnifiedTableBuilder:
     # HELPERS
     # =========================================================================
 
-    def _pad_sentinel_values(self, values: List[Any]) -> List[Any]:
-        """Pad values list for sentinel file to reach target size."""
-        padding_needed = self.target_row_count - len(values)
-        if padding_needed > 0:
-            values = values + [-(i + 1000000) for i in range(padding_needed)]
-        return values
-
-    def _read_iceberg_field_ids(self, table_path: Path) -> List[Tuple[str, str, int, bool]]:
-        """Read field IDs and nullability from Iceberg metadata.
-
-        Returns list of (name, type, field_id, required).
-        """
-        metadata_dir = table_path / "metadata"
-        metadata_files = sorted(
-            metadata_dir.glob("v*.metadata.json"),
-            key=lambda p: int(p.name.split('.')[0][1:]), reverse=True)
-        if not metadata_files:
-            raise FileNotFoundError(f"No metadata files in {metadata_dir}")
-        with open(metadata_files[0]) as f:
-            metadata = json.load(f)
-        current_schema_id = metadata.get("current-schema-id", 0)
-        for s in metadata.get("schemas", []):
-            if s.get("schema-id") == current_schema_id:
-                return [(fld["name"], fld["type"], fld["id"], fld.get("required", True))
-                        for fld in s["fields"]]
-        raise ValueError(f"Schema {current_schema_id} not found")
-
     def _get_table_path(self, full_table_name: str) -> Path:
         """Convert full table name to filesystem path.
 
@@ -465,7 +649,12 @@ class UnifiedTableBuilder:
             return None
 
     def _iceberg_type_to_arrow(self, iceberg_type: str) -> pa.DataType:
-        """Map Iceberg type string to PyArrow type."""
+        """Map an Iceberg type string to a PyArrow type.
+
+        Raises on an unrecognized type rather than silently defaulting to int32
+        — an unsupported type should fail the build loudly, not corrupt the
+        column (per PR#60 review).
+        """
         mapping = {
             "int": pa.int32(), "integer": pa.int32(),
             "long": pa.int64(), "float": pa.float32(),
@@ -474,7 +663,9 @@ class UnifiedTableBuilder:
             "date": pa.date32(), "timestamp": pa.timestamp('us'),
             "timestamptz": pa.timestamp('us', tz='UTC'),
         }
-        return mapping.get(iceberg_type, pa.int32())
+        if iceberg_type not in mapping:
+            raise ValueError(f"Unsupported Iceberg type: {iceberg_type!r}")
+        return mapping[iceberg_type]
 
     # =========================================================================
     # METADATA QUERY
