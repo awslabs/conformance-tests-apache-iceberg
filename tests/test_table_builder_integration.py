@@ -246,3 +246,74 @@ class TestNoDataNoDeleteSnapshot:
         assert stats.data_file_count == len(config['data_files'])
         assert stats.delete_file_count == 0
         assert all(stats.validations.values()), stats.validation_messages
+
+
+def build_typed(builder, config, namespace, table_name, col_type):
+    """Build config with a single column of the given type (PLAIN/zstd)."""
+    nullable = config.get("value_strategy") == "nulls"
+    provider = DataTypeChoice([("value", col_type)], nullable=nullable)
+    write_options = WriteOptions(
+        encoding=EncodingChoice({"value": "PLAIN"}),
+        compression=CompressionChoice(default_codec=CompressionCodec("ZSTD")),
+        schema={"value": col_type})
+    filled = TypedValueFiller().fill(config, provider)
+    return builder.build_table(
+        filled, namespace, table_name,
+        schema_provider=provider, write_options=write_options), provider
+
+
+class TestFieldIdValidation:
+    """The field-id check (V8) confirms compute_field_ids matches the ids
+    Iceberg actually assigned — especially for nested types, where a drift
+    would silently point parquet columns at the wrong fields."""
+
+    # Types that carry nested field ids (the interesting cases) plus a
+    # primitive baseline. uuid/fixed are Spark-DDL-limited (see data_types.py)
+    # so they surface as their approximation types, but ids still line up.
+    TYPES = [
+        "int",
+        "timestamptz",
+        "list<int>",
+        "map<string,int>",
+        "struct<a:int,b:string>",
+    ]
+
+    @pytest.mark.parametrize("col_type", TYPES)
+    def test_field_ids_match_iceberg(self, builder, config_cache, col_type):
+        config = get_config(config_cache, 1)
+        tbl = "fid_" + col_type.replace("<", "_").replace(">", "").replace(
+            ",", "_").replace(":", "").replace(" ", "")
+        stats, provider = build_typed(builder, config, "e2e_fid", tbl, col_type)
+
+        # The field-id validation must have run and passed.
+        assert 'field_ids' in stats.validations, stats.validations
+        assert stats.validations['field_ids'], stats.validation_messages
+
+        # And the harvested ids equal the computed ones exactly.
+        harvested = builder._harvest_field_ids(
+            builder._get_table_path(f"local.e2e_fid.{tbl}"))
+        assert harvested == provider.get_field_ids()
+
+
+class TestValidateDisabled:
+    """validate=False produces a table but skips verification."""
+
+    def test_no_validation_when_disabled(self, builder, config_cache):
+        config = get_config(config_cache, 1)
+        nullable = config.get("value_strategy") == "nulls"
+        provider = DataTypeChoice([("value", "int")], nullable=nullable)
+        write_options = WriteOptions(
+            encoding=EncodingChoice({"value": "PLAIN"}),
+            compression=CompressionChoice(default_codec=CompressionCodec("ZSTD")),
+            schema={"value": "int"})
+        filled = TypedValueFiller().fill(config, provider)
+
+        stats = builder.build_table(
+            filled, "e2e_noval", "table_1_noval",
+            schema_provider=provider, write_options=write_options,
+            validate=False)
+
+        # Table was built (metadata still queried) but no validation ran.
+        assert stats.data_file_count == len(config['data_files'])
+        assert stats.validations == {}
+        assert stats.validation_messages == []

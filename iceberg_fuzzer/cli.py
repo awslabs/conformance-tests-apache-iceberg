@@ -285,8 +285,8 @@ Examples:
   # Build a single config by ID
   iceberg-fuzzer build-shapes --warehouse-path /tmp/warehouse --config-id 84823 --target-size-mb 0.01
 
-  # Build first 10 configs with validation
-  iceberg-fuzzer build-shapes --warehouse-path /tmp/warehouse --limit 10 --validate
+  # Build first 10 configs, skipping validation for speed (validation is on by default)
+  iceberg-fuzzer build-shapes --warehouse-path /tmp/warehouse --limit 10 --no-validate
 
   # Build all configs with custom namespace
   iceberg-fuzzer build-shapes --warehouse-path /tmp/warehouse --namespace my_shapes --target-size-mb 0.1
@@ -316,16 +316,21 @@ Examples:
     shapes_parser.add_argument('--limit',
                        type=int,
                        help='Limit number of configs to build')
-    shapes_parser.add_argument('--validate',
+    shapes_parser.add_argument('--no-validate',
                        action='store_true',
-                       help='Run validations after building each table')
+                       help='Skip validation after building each table (validation '
+                            'is on by default). Use for fast bulk generation of '
+                            'tables you already trust.')
     # Optional dimension knobs — a single 'value' column of the given type,
     # with a table-wide encoding/compression. Each has a default so any subset
-    # may be given. (Only 'int' is supported for now; nested types like
-    # 'list<int>' / 'struct<a:int,b:string>' land in a follow-up.)
+    # may be given. Primitive and nested types are supported; nested types use
+    # Iceberg/Spark type-expression syntax (quote them for the shell).
     shapes_parser.add_argument('--data-type',
                        default='int',
-                       help="Column Iceberg type (default: %(default)s). Only 'int' supported for now.")
+                       help="Column Iceberg type (default: %(default)s). Primitives "
+                            "(int, long, string, boolean, double, decimal(P,S), "
+                            "fixed(L), timestamp, ...) and nested types, e.g. "
+                            "'list<int>', 'map<string,int>', 'struct<a:int,b:string>'.")
     shapes_parser.add_argument('--nullable',
                        action='store_true',
                        help='Make the column nullable (required for nulls value_strategy)')
@@ -398,6 +403,7 @@ Examples:
         encoding = args.encoding.upper()
         compression = args.compression.upper()
         nullable = args.nullable
+        validate = not args.no_validate
 
         schema_provider = DataTypeChoice([("value", col_type)], nullable=nullable)
         filler = TypedValueFiller()
@@ -443,18 +449,19 @@ Examples:
 
                     stats = builder.build_table(
                         build_config, args.namespace, table_name,
-                        schema_provider=schema_provider, write_options=write_options)
+                        schema_provider=schema_provider, write_options=write_options,
+                        validate=validate)
                     built += 1
 
                     status = "OK"
-                    if args.validate and stats.validation_messages:
+                    if validate and stats.validation_messages:
                         status = "WARN"
 
                     print(f"[{built}] {table_name}: {stats.snapshot_count} snaps, "
                           f"{stats.data_file_count} data, {stats.delete_file_count} del "
                           f"— {status}")
 
-                    if args.validate and stats.validation_messages:
+                    if validate and stats.validation_messages:
                         for msg in stats.validation_messages:
                             print(f"      {msg}")
 

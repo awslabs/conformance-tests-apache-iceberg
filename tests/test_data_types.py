@@ -1,9 +1,9 @@
-"""Tests for the data-types dimension (INT-only scope).
+"""Tests for the data-types dimension.
 
-Only ``int`` is supported for now; additional types (long, string, complex,
-...) bring their own generate_value logic and tests in follow-up changes. Two
-build invariants are also guarded here: the schema is single-column, and any
-non-int type is rejected at construction.
+Covers primitive types (int, long, float, double, string, decimal(P,S),
+fixed(L), date/timestamp, ...) and complex types (list/map/struct with
+nesting): value generation, Spark DDL, PyArrow schema + breadth-first field
+ids, and the single-column / unsupported-type build invariants.
 """
 
 import random
@@ -16,11 +16,12 @@ from iceberg_fuzzer.exhaustive.dimensions.data_types import (
     DataTypeChoice,
     TypedValueFiller,
     generate_value,
+    physical_value,
 )
 
 
 class TestGenerateValue:
-    """Module-level generate_value (int only)."""
+    """Module-level generate_value (primitives + complex types)."""
 
     def test_int_returns_row_id(self):
         assert generate_value("int", 0) == 0
@@ -29,9 +30,68 @@ class TestGenerateValue:
     def test_integer_alias(self):
         assert generate_value("integer", 7) == 7
 
-    def test_non_int_raises(self):
+    def test_primitive_types(self):
+        assert generate_value("long", 3) == 3000
+        assert generate_value("string", 3) == "value_3"
+        assert generate_value("boolean", 4) is True
+        # float/double use high-significant-digit fractions so float32 and
+        # float64 round them differently (see TestFloatPrecision).
+        assert generate_value("double", 3) == 3.987654321098765
+        assert generate_value("float", 3) == 3.123456789012345
+
+    def test_parametrized_decimal_and_fixed(self):
+        from decimal import Decimal
+        assert generate_value("decimal(10,2)", 3) == Decimal("3.03")
+        assert generate_value("fixed(4)", 3) == bytes([3, 4, 5, 6])
+
+    def test_complex_types_generate_nested_values(self):
+        assert generate_value("list<int>", 1) == [10, 11]
+        m = generate_value("map<string,int>", 3)
+        assert m == {"value_30": 130, "value_31": 131}
+        assert generate_value("struct<a:int,b:string>", 3) == {"a": 30, "b": "value_31"}
+
+    def test_unsupported_type_raises(self):
         with pytest.raises(ValueError, match="Unsupported data type"):
-            generate_value("string", 0)
+            generate_value("not_a_real_type", 0)
+
+
+class TestFloatPrecision:
+    """float/double generators exercise the 32-bit vs 64-bit precision boundary,
+    and physical_value narrows expectations to the physical storage width."""
+
+    def test_float_and_double_differ_for_same_row(self):
+        # Distinct constants → a float column and a double column hold different
+        # logical values for the same row.
+        assert generate_value("float", 5) != generate_value("double", 5)
+
+    def test_float_value_is_not_float32_representable(self):
+        # The whole point: the generated value loses precision when narrowed to
+        # float32, so writing it to a float column actually tests narrowing.
+        v = generate_value("float", 5)
+        assert physical_value("float", v) != v, "value must round under float32"
+
+    def test_double_value_is_float64_exact(self):
+        v = generate_value("double", 5)
+        assert physical_value("double", v) == v, "double must not be narrowed"
+
+    def test_float32_column_stores_the_narrowed_value(self):
+        # A float32 column physically stores exactly physical_value('float', v).
+        v = generate_value("float", 7)
+        stored = pa.array([v], type=pa.float32())[0].as_py()
+        assert stored == physical_value("float", v)
+
+    def test_float_and_double_store_different_bits(self):
+        # Same logical row → the float column and double column store DIFFERENT
+        # physical values (proving precision is genuinely exercised).
+        f_stored = pa.array([generate_value("float", 9)], type=pa.float32())[0].as_py()
+        d_stored = pa.array([generate_value("double", 9)], type=pa.float64())[0].as_py()
+        assert f_stored != d_stored
+
+    def test_physical_value_narrows_nested_floats(self):
+        v = generate_value("list<float>", 2)
+        narrowed = physical_value("list<float>", v)
+        assert narrowed != v  # at least one element rounds under float32
+        assert all(e == pa.array([e], type=pa.float32())[0].as_py() for e in narrowed)
 
 
 class TestTypedValueFiller:
@@ -211,6 +271,79 @@ class TestDataTypeChoiceGetArrowSchema:
         assert dtc.get_arrow_schema(dtc.get_field_ids()).field(0).nullable is False
 
 
+class TestPrimitiveTypes:
+    """Each primitive maps to the expected DDL + Arrow type."""
+
+    def test_ddl_and_arrow(self):
+        cases = {
+            "long": ("BIGINT", pa.int64()),
+            "string": ("STRING", pa.string()),
+            "boolean": ("BOOLEAN", pa.bool_()),
+            "double": ("DOUBLE", pa.float64()),
+            "date": ("DATE", pa.date32()),
+            "timestamp": ("TIMESTAMP_NTZ", pa.timestamp("us")),
+            "timestamptz": ("TIMESTAMP", pa.timestamp("us", tz="UTC")),
+            "decimal(10,2)": ("DECIMAL(10,2)", pa.decimal128(10, 2)),
+            "fixed(4)": ("BINARY", pa.binary(4)),
+        }
+        for type_str, (ddl_type, arrow_type) in cases.items():
+            dtc = DataTypeChoice(columns=[("value", type_str)])
+            assert dtc.get_spark_ddl() == f"value {ddl_type} NOT NULL", type_str
+            assert dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type == arrow_type, type_str
+
+
+class TestComplexTypes:
+    """Nested list/map/struct DDL, breadth-first field ids, and Arrow schema."""
+
+    def test_list_ddl_and_arrow(self):
+        dtc = DataTypeChoice(columns=[("value", "list<int>")])
+        assert dtc.get_spark_ddl() == "value ARRAY<INT> NOT NULL"
+        t = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
+        assert pa.types.is_list(t)
+        assert t.value_type == pa.int32()
+
+    def test_map_ddl_and_arrow(self):
+        dtc = DataTypeChoice(columns=[("value", "map<string,int>")])
+        assert dtc.get_spark_ddl() == "value MAP<STRING, INT> NOT NULL"
+        t = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
+        assert pa.types.is_map(t)
+
+    def test_struct_ddl_and_arrow(self):
+        dtc = DataTypeChoice(columns=[("value", "struct<a:int,b:string>")])
+        assert dtc.get_spark_ddl() == "value STRUCT<a: INT, b: STRING> NOT NULL"
+        t = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
+        assert pa.types.is_struct(t)
+        assert t.num_fields == 2
+
+    def test_field_ids_breadth_first(self):
+        """Roots/level-1 numbered before level-2 — Iceberg's BFS order."""
+        dtc = DataTypeChoice(
+            columns=[("value", "struct<inner:struct<x:int,y:string>,items:list<int>>")])
+        assert dtc.get_field_ids() == {
+            ("value",): 1,
+            ("value", "inner"): 2,
+            ("value", "items"): 3,
+            ("value", "inner", "x"): 4,
+            ("value", "inner", "y"): 5,
+            ("value", "items", "element"): 6,
+        }
+
+    def test_nested_arrow_stamps_all_field_ids(self):
+        """Every nested Arrow field carries its PARQUET:field_id."""
+        dtc = DataTypeChoice(columns=[("value", "struct<a:int,b:string>")])
+        struct_type = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
+        ids = {struct_type.field(i).name: struct_type.field(i).metadata[b"PARQUET:field_id"]
+               for i in range(struct_type.num_fields)}
+        assert ids == {"a": b"2", "b": b"3"}
+
+    def test_map_key_required_value_optional(self):
+        """Iceberg convention: map key required, value optional."""
+        dtc = DataTypeChoice(columns=[("value", "map<string,int>")], nullable=True)
+        t = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
+        assert t.key_field.nullable is False
+        assert t.item_field.nullable is True
+
+
 class TestDataTypeChoiceGenerateValue:
     """DataTypeChoice.generate_value()."""
 
@@ -243,7 +376,7 @@ class TestDataTypeChoiceNullable:
 
 
 class TestDataTypeChoiceInvariants:
-    """Single-column + int-only invariants specific to this build."""
+    """Single-column invariant + unsupported-type rejection."""
 
     def test_multi_column_rejected(self):
         with pytest.raises(ValueError, match="exactly one column"):
@@ -253,29 +386,38 @@ class TestDataTypeChoiceInvariants:
         with pytest.raises(ValueError, match="exactly one column"):
             DataTypeChoice(columns=[])
 
-    def test_non_int_type_rejected(self):
+    def test_unsupported_type_rejected(self):
         with pytest.raises(ValueError, match="Unsupported data type"):
-            DataTypeChoice(columns=[("value", "string")])
+            DataTypeChoice(columns=[("value", "not_a_real_type")])
+
+    def test_unsupported_nested_leaf_rejected(self):
+        with pytest.raises(ValueError, match="Unsupported data type"):
+            DataTypeChoice(columns=[("value", "list<not_a_real_type>")])
 
 
 class TestDataTypeDimension:
-    """DataTypeDimension enumeration and sampling (int only)."""
+    """DataTypeDimension enumeration and sampling (primitive + complex)."""
 
-    def test_supported_types_is_int_only(self):
-        assert DataTypeDimension.SUPPORTED_TYPES == ["int"]
+    def test_supported_types_include_primitives_and_complex(self):
+        assert "int" in DataTypeDimension.SUPPORTED_TYPES
+        assert "string" in DataTypeDimension.SUPPORTED_TYPES
+        assert "list<int>" in DataTypeDimension.COMPLEX_TYPES
 
-    def test_enumerate_yields_nullable_and_non_nullable_int(self):
-        choices = list(DataTypeDimension().enumerate())
-        assert len(choices) == 2
+    def test_enumerate_yields_nullable_and_non_nullable_for_each_type(self):
+        dim = DataTypeDimension()
+        choices = list(dim.enumerate())
+        expected_types = dim.SUPPORTED_TYPES + dim.COMPLEX_TYPES
+        # Two variants (nullable + non-nullable) per type.
+        assert len(choices) == 2 * len(expected_types)
         for c in choices:
             assert len(c.columns) == 1
-            assert c.columns[0][1] == "int"
         assert {c.nullable for c in choices} == {False, True}
 
-    def test_sample_generates_valid_int_schema(self):
-        choice = DataTypeDimension().sample(random.Random(42))
+    def test_sample_generates_valid_schema(self):
+        dim = DataTypeDimension()
+        choice = dim.sample(random.Random(42))
         assert len(choice.columns) == 1
-        assert choice.columns[0][1] == "int"
+        assert choice.columns[0][1] in (dim.SUPPORTED_TYPES + dim.COMPLEX_TYPES)
 
     def test_sample_nullability_varies(self):
         dim = DataTypeDimension()
