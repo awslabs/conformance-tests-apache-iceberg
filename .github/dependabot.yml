@@ -12,3 +12,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # CodeQL is broken into multiple actions, however all steps must run the same version.
+      # To mitigate, configure Dependabot to aggregate updates to those actions in one PR.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
