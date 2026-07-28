@@ -12,13 +12,16 @@ Run with: pytest tests/test_table_builder_integration.py -v
 Mark: these tests are slow (~30s for Spark startup + table builds).
 """
 
+import re
+
 import pytest
 import pyarrow.parquet as pq
 from pathlib import Path
 
 from iceberg_fuzzer.exhaustive.table_builder import UnifiedTableBuilder
 from iceberg_fuzzer.exhaustive.shape_config_generator import TableConfigGenerator
-from iceberg_fuzzer.exhaustive.dimensions.data_types import DataTypeChoice, TypedValueFiller
+from iceberg_fuzzer.exhaustive.dimensions.data_types import (
+    DataTypeChoice, TypedValueFiller, DataTypeDimension)
 from iceberg_fuzzer.exhaustive.dimensions.interfaces import WriteOptions
 from iceberg_fuzzer.exhaustive.dimensions.encoding import EncodingChoice
 from iceberg_fuzzer.exhaustive.dimensions.compression import CompressionChoice, CompressionCodec
@@ -267,22 +270,22 @@ class TestFieldIdValidation:
     Iceberg actually assigned — especially for nested types, where a drift
     would silently point parquet columns at the wrong fields."""
 
-    # Types that carry nested field ids (the interesting cases) plus a
-    # primitive baseline. uuid/fixed are Spark-DDL-limited (see data_types.py)
-    # so they surface as their approximation types, but ids still line up.
-    TYPES = [
-        "int",
-        "timestamptz",
-        "list<int>",
-        "map<string,int>",
-        "struct<a:int,b:string>",
-    ]
+    # Every supported type, sourced from the dimension's own lists so the
+    # coverage can't drift when a type is added. Field ids only ever diverge at
+    # nested levels, but building each primitive too is cheap insurance and
+    # removes any judgment about which types are "interesting". uuid/fixed are
+    # Spark-DDL-limited (see data_types.py) so they surface as their
+    # approximation types, but ids still line up.
+    TYPES = DataTypeDimension.SUPPORTED_TYPES + DataTypeDimension.COMPLEX_TYPES
 
     @pytest.mark.parametrize("col_type", TYPES)
     def test_field_ids_match_iceberg(self, builder, config_cache, col_type):
         config = get_config(config_cache, 1)
-        tbl = "fid_" + col_type.replace("<", "_").replace(">", "").replace(
-            ",", "_").replace(":", "").replace(" ", "")
+        # Map any type string to a unique, filesystem/SQL-safe table name:
+        # collapse every run of non-alphanumerics to '_'. Handles parens/commas/
+        # colons/spaces (e.g. decimal(10,2) -> decimal_10_2_) so no type yields
+        # an invalid identifier, and stays distinct across all of TYPES.
+        tbl = "fid_" + re.sub(r"[^0-9a-zA-Z]+", "_", col_type)
         stats, provider = build_typed(builder, config, "e2e_fid", tbl, col_type)
 
         # The field-id validation must have run and passed.

@@ -720,6 +720,15 @@ class UnifiedTableBuilder:
                 field_ids[val_path] = type_node["value-id"]
                 walk_type(key_path, type_node["key"])
                 walk_type(val_path, type_node["value"])
+            else:
+                # A dict type_node must be struct/list/map — the only complex
+                # Iceberg kinds. Any other value means a bug or an unhandled new
+                # kind / changed metadata format. Fail loudly rather than
+                # silently returning a field-id map with missing subtree ids
+                # (which would make the V8 comparison wrong, not just fail).
+                raise ValueError(
+                    f"Unexpected complex type kind {kind!r} at path {path} in "
+                    f"table metadata; _harvest_field_ids cannot map its field ids.")
 
         for fld in schema.get("fields", []):
             path = (fld["name"],)

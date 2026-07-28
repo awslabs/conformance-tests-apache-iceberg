@@ -10,18 +10,31 @@ logger = logging.getLogger(__name__)
 
 # Mapping from Iceberg type to valid Parquet encodings.
 #
-# An encoding is listed only if PyArrow WRITES it AND readers (DuckDB, Spark)
-# READ it back — a file that writes but can't be read is worse than useless.
-# Notes:
-# - RLE is only valid for BOOLEAN (not int/long, despite Parquet's spec listing
-#   RLE for integers — PyArrow's writer rejects it).
-# - BYTE_STREAM_SPLIT is restricted to FLOAT/DOUBLE. PyArrow will write it for
-#   int/long/date/decimal/fixed/timestamp, but DuckDB's reader rejects it
-#   ("BYTE_STREAM_SPLIT encoding is only supported for FLOAT or DOUBLE data"),
-#   matching the original Parquet-spec restriction. Listing it for those types
-#   produced unreadable files, so it is float/double-only here.
+# An encoding is listed based on two criteria:
+#   - It appears in the Parquet spec's supported encodings for the type:
+#     https://parquet.apache.org/docs/file-format/data-pages/encodings/#supported-encodings
+#   - Parquet versioning is not well defined today. Forward-incompatible
+#     features, such as newer encodings, were introduced later without a clear
+#     indicator of breaking changes, so using them with older readers may fail.
+#     We therefore list an encoding only if PyArrow WRITES it AND our readers
+#     (DuckDB, Spark) READ it back — a file that writes but can't be read is
+#     worse than useless.
+#
+# Specific callouts:
+# - RLE is only valid for BOOLEAN. PyArrow's writer rejects it at write time for
+#   other types, e.g. int/long ("Encoding RLE is not supported for type int32"),
+#   so no file is ever produced — the modern integer equivalent is
+#   DELTA_BINARY_PACKED.
+# - BYTE_STREAM_SPLIT is restricted to FLOAT/DOUBLE. Parquet format 2.11
+#   extended it to int/long/date/decimal/fixed/timestamp, and PyArrow writes
+#   that newer variant, but it is forward-incompatible: older readers (DuckDB
+#   here) cannot read it and reject with "BYTE_STREAM_SPLIT encoding is only
+#   supported for FLOAT or DOUBLE data". Listing it for those types just
+#   produced unreadable files, so it is float/double-only here. (Could be made
+#   opt-in later — generate the files but skip DuckDB read-back validation — to
+#   fuzz writer-side handling of the newer encoding.)
 # - uuid maps to a STRING physical column, so it accepts DELTA_LENGTH_BYTE_ARRAY.
-# DICTIONARY is universally available (applied via use_dictionary).
+# - DICTIONARY is universally available (applied via use_dictionary).
 ENCODING_COMPATIBILITY = {
     "int": ["PLAIN", "DICTIONARY", "DELTA_BINARY_PACKED"],
     "integer": ["PLAIN", "DICTIONARY", "DELTA_BINARY_PACKED"],

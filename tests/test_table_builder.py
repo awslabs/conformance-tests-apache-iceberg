@@ -201,6 +201,17 @@ class TestHarvestFieldIds:
         with pytest.raises(FileNotFoundError):
             builder._harvest_field_ids(tmp_path / "empty")
 
+    def test_unexpected_complex_kind_raises(self, builder, tmp_path):
+        # A dict type_node with an unknown 'type' must fail loudly, not silently
+        # return a field-id map missing the subtree.
+        table_path = tmp_path / "t_bad"
+        _write_metadata(table_path, [
+            {"id": 1, "name": "value", "required": False,
+             "type": {"type": "union", "fields": []}},  # 'union' is not a real kind
+        ])
+        with pytest.raises(ValueError, match="Unexpected complex type kind 'union'"):
+            builder._harvest_field_ids(table_path)
+
 
 class TestValidateGate:
     """validate=False skips _validate_against_config entirely (no Spark reads);

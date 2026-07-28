@@ -17,6 +17,7 @@ from iceberg_fuzzer.exhaustive.dimensions.data_types import (
     TypedValueFiller,
     generate_value,
     physical_value,
+    check_required_fields,
 )
 
 
@@ -53,6 +54,20 @@ class TestGenerateValue:
     def test_unsupported_type_raises(self):
         with pytest.raises(ValueError, match="Unsupported data type"):
             generate_value("not_a_real_type", 0)
+
+    def test_timestamps_vary_at_microsecond_granularity(self):
+        # Arrow type is 'us'; generation must produce non-zero, varying
+        # sub-second components so microsecond round-tripping is exercised
+        # (whole-second values would never test it).
+        for t in ("timestamp", "timestamptz"):
+            micros = {generate_value(t, i).microsecond for i in range(1, 6)}
+            assert micros == {1, 2, 3, 4, 5}, t  # row_id i -> i microseconds
+
+    def test_timestamps_injective_including_subsecond(self):
+        # Distinct row ids -> distinct instants across a realistic range.
+        for t in ("timestamp", "timestamptz"):
+            vals = [generate_value(t, i) for i in range(10000)]
+            assert len(set(vals)) == 10000, t
 
 
 class TestFloatPrecision:
@@ -342,6 +357,107 @@ class TestComplexTypes:
         t = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
         assert t.key_field.nullable is False
         assert t.item_field.nullable is True
+
+
+class TestRequiredStructFields:
+    """NOT NULL on a struct field → required field (DDL + Arrow nullability)."""
+
+    def test_ddl_emits_not_null_for_required_field(self):
+        dtc = DataTypeChoice(columns=[("value", "struct<a:int NOT NULL,b:string>")])
+        # 'a' required → NOT NULL; 'b' optional → no marker.
+        assert dtc.get_spark_ddl() == \
+            "value STRUCT<a: INT NOT NULL, b: STRING> NOT NULL"
+
+    def test_arrow_nullability_reflects_required(self):
+        dtc = DataTypeChoice(columns=[("value", "struct<a:int NOT NULL,b:string>")])
+        t = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
+        fields = {t.field(i).name: t.field(i).nullable for i in range(t.num_fields)}
+        assert fields == {"a": False, "b": True}
+
+    def test_case_insensitive_marker(self):
+        for marker in ["NOT NULL", "not null", "Not Null"]:
+            dtc = DataTypeChoice(columns=[("value", f"struct<a:int {marker}>")])
+            t = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
+            assert t.field(0).nullable is False, marker
+
+    def test_all_fields_optional_by_default(self):
+        dtc = DataTypeChoice(columns=[("value", "struct<a:int,b:string>")])
+        t = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
+        assert all(t.field(i).nullable for i in range(t.num_fields))
+
+    def test_required_marker_composes_with_nested_type(self):
+        # 'items' required (NOT NULL on the field), but the list element stays
+        # optional — the marker attaches to the field, not the element.
+        dtc = DataTypeChoice(columns=[("value", "struct<items:list<int> NOT NULL>")])
+        t = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
+        items = t.field(0)
+        assert items.name == "items"
+        assert items.nullable is False              # field required
+        assert items.type.value_field.nullable is True  # element still optional
+        assert dtc.get_spark_ddl() == \
+            "value STRUCT<items: ARRAY<INT> NOT NULL> NOT NULL"
+
+    def test_field_ids_unaffected_by_required(self):
+        # Required-ness must not change breadth-first id assignment.
+        req = DataTypeChoice(columns=[("value", "struct<a:int NOT NULL,b:string>")])
+        opt = DataTypeChoice(columns=[("value", "struct<a:int,b:string>")])
+        assert req.get_field_ids() == opt.get_field_ids()
+
+    def test_generate_value_never_none_for_required(self):
+        dtc = DataTypeChoice(columns=[("value", "struct<a:int NOT NULL,b:string>")])
+        v = dtc.generate_value("value", 5)
+        assert v["a"] is not None
+
+
+class TestRequiredFieldInvariant:
+    """check_required_fields locks 'a present struct never nulls a required
+    field', so a bad value fails at fill time, not at Iceberg commit."""
+
+    T = "struct<a:int NOT NULL,b:string>"
+
+    def test_present_struct_with_filled_required_ok(self):
+        check_required_fields(self.T, {"a": 1, "b": "x"})          # no raise
+
+    def test_whole_value_none_ok(self):
+        # Whole-struct null is the top-level nullable case — allowed.
+        check_required_fields(self.T, None)                         # no raise
+
+    def test_optional_field_may_be_none(self):
+        check_required_fields(self.T, {"a": 1, "b": None})          # no raise
+
+    def test_required_field_none_raises(self):
+        with pytest.raises(ValueError, match="Required field value.a is null"):
+            check_required_fields(self.T, {"a": None, "b": "x"})
+
+    def test_nested_struct_in_list_enforced(self):
+        t = "list<struct<a:int NOT NULL>>"
+        check_required_fields(t, [{"a": 1}, {"a": 2}])              # ok
+        with pytest.raises(ValueError, match="null"):
+            check_required_fields(t, [{"a": 1}, {"a": None}])
+
+    def test_filler_generated_structs_pass(self):
+        # The real generation path must satisfy the invariant for every row.
+        config = {
+            "value_strategy": "row_numbers",
+            "data_files": [{"rows": [{"row_id": i, "value": i} for i in range(4)]}],
+        }
+        TypedValueFiller().fill(config, DataTypeChoice([("value", self.T)]))
+
+    def test_filler_nulls_strategy_allows_whole_struct_null(self):
+        # nulls strategy nulls the WHOLE struct on some rows — must not trip the
+        # required-field guard (a null struct doesn't implicate inner fields).
+        config = {
+            "value_strategy": "nulls",
+            "data_files": [{"rows": [
+                {"row_id": 0, "value": 0},
+                {"row_id": 1, "value": None},
+            ]}],
+        }
+        result = TypedValueFiller().fill(
+            config, DataTypeChoice([("value", self.T)], nullable=True))
+        rows = result["data_files"][0]["rows"]
+        assert rows[1]["typed_value"] is None          # whole struct null, allowed
+        assert rows[0]["typed_value"]["a"] is not None  # present struct, a filled
 
 
 class TestDataTypeChoiceGenerateValue:

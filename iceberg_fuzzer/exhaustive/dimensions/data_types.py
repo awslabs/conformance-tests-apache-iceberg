@@ -1,8 +1,9 @@
 """Data types dimension — typed value filling.
 
 Supports primitive Iceberg types (int, long, string, decimal(P,S), ...) and
-complex types (list, map, struct) with arbitrary nesting, structured so adding
-a primitive stays a one-line change:
+complex types (list, map, struct) with arbitrary nesting. The design goal is
+that adding a new primitive is localized to the registry — a new handler plus
+one REGISTRY entry — with no if/elif switch to update anywhere else:
 
 - Each primitive type is one ``IcebergType`` handler bundling its Arrow type,
   Spark DDL, and value generation, registered by name in ``REGISTRY`` (with
@@ -26,13 +27,39 @@ import struct
 import uuid as uuid_mod
 from collections import deque
 from dataclasses import dataclass
-from datetime import date, datetime, time as dt_time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterator, List, Tuple, Union
 
 import pyarrow as pa
 
 from . import Dimension
+
+
+# ---------------------------------------------------------------------------
+# Module constants
+# ---------------------------------------------------------------------------
+
+# Base date/datetime that date/timestamp/timestamptz values advance FROM. The
+# specific date is arbitrary — values only need to be deterministic and
+# injective per row_id, not anchored to any real-world instant — but a fixed,
+# recent, unambiguous date (no leap-day / pre-epoch / DST edge) keeps generated
+# values easy to eyeball and stable across runs.
+_EPOCH_DATE = date(2023, 1, 1)
+_EPOCH_DATETIME = datetime(2023, 1, 1)
+
+# Offset applied to a row id before advancing a date/time from the epoch. Row
+# ids can be huge and negative (sentinel padding uses -(i + 1_000_000)), and
+# date(1,1,1)..date(9999,12,31) is only ~3.65M days wide — a raw offset
+# overflows. Bounding into [0, _DATE_SPAN) keeps every generated value a valid
+# date while staying injective across the realistic row-id range.
+_DATE_SPAN = 3_000_000  # days, comfortably inside date32's supported range
+
+
+def _bounded(row_id: int, span: int) -> int:
+    """Map any int (incl. large negatives) into [0, span) injectively within a
+    contiguous run — Python's % always returns a non-negative result here."""
+    return row_id % span
 
 
 # ---------------------------------------------------------------------------
@@ -119,24 +146,6 @@ class BinaryType(IcebergType):
         return f"value_{row_id}".encode()
 
 
-_EPOCH_DATE = date(2023, 1, 1)
-_EPOCH_DATETIME = datetime(2023, 1, 1)
-
-
-# Offset applied to a row id before advancing a date/time from the epoch. Row
-# ids can be huge and negative (sentinel padding uses -(i + 1_000_000)), and
-# date(1,1,1)..date(9999,12,31) is only ~3.65M days wide — a raw offset
-# overflows. Bounding into [0, _DATE_SPAN) keeps every generated value a valid
-# date while staying injective across the realistic row-id range.
-_DATE_SPAN = 3_000_000  # days, comfortably inside date32's supported range
-
-
-def _bounded(row_id: int, span: int) -> int:
-    """Map any int (incl. large negatives) into [0, span) injectively within a
-    contiguous run — Python's % always returns a non-negative result here."""
-    return row_id % span
-
-
 class DateType(IcebergType):
     arrow_type = pa.date32()
     spark_ddl = "DATE"
@@ -154,9 +163,14 @@ class TimestampType(IcebergType):
     spark_ddl = "TIMESTAMP_NTZ"
 
     def generate(self, row_id: int) -> Any:
-        # Advance a bounded number of seconds from the epoch (seconds keep the
-        # datetime well inside range for any id).
-        return _EPOCH_DATETIME + timedelta(seconds=_bounded(row_id, _DATE_SPAN))
+        # Advance seconds (wide calendar spread) PLUS a microsecond component so
+        # the sub-second field varies — the Arrow type is 'us' granularity, and
+        # whole-second values would never exercise microsecond round-tripping.
+        # Injective over the realistic id range: the seconds term alone is
+        # injective on [0, _DATE_SPAN), so the (seconds, micros) pair is too.
+        return _EPOCH_DATETIME + timedelta(
+            seconds=_bounded(row_id, _DATE_SPAN),
+            microseconds=_bounded(row_id, 1_000_000))
 
 
 class TimestamptzType(IcebergType):
@@ -165,8 +179,11 @@ class TimestamptzType(IcebergType):
     spark_ddl = "TIMESTAMP"
 
     def generate(self, row_id: int) -> Any:
+        # Same seconds + microseconds spread as TimestampType (see there), with
+        # a UTC zone since Iceberg timestamptz is with-zone.
         return (_EPOCH_DATETIME.replace(tzinfo=timezone.utc)
-                + timedelta(seconds=_bounded(row_id, _DATE_SPAN)))
+                + timedelta(seconds=_bounded(row_id, _DATE_SPAN),
+                            microseconds=_bounded(row_id, 1_000_000)))
 
 
 class UUIDType(IcebergType):
@@ -260,8 +277,20 @@ _FIXED_RE = re.compile(r"fixed\(\s*(\d+)\s*\)")
 def _handler(iceberg_type: str) -> IcebergType:
     """Look up (or build) the primitive handler for a type string, or raise.
 
-    Parametrized types (decimal(P,S), fixed(L)) are built on demand from their
-    parameters; everything else is a fixed REGISTRY entry.
+    Two lookup mechanisms, by necessity:
+    - Non-parametrized types are pre-built singletons in REGISTRY, matched by
+      exact name (one IntType() serves every 'int' column).
+    - Parametrized types (decimal(P,S), fixed(L)) can't be registry entries:
+      each distinct (P,S)/(L) needs its OWN handler instance (different
+      arrow_type and DDL), the parameter space is unbounded (no finite set of
+      keys to pre-populate), and a dict can't match a pattern and extract
+      groups. So they're parsed out of the string and CONSTRUCTED on demand
+      here. The bare 'decimal'/'fixed' forms build a default-parameter instance.
+
+    The bare-name cases could instead live in REGISTRY (mapping 'decimal' ->
+    DecimalType()), but the regex branches would remain for the parametrized
+    forms regardless — so keeping both cases here keeps all decimal/fixed
+    handling in one place rather than splitting it across REGISTRY and _handler.
     """
     t = iceberg_type.strip().lower()
     if t in REGISTRY:
@@ -289,7 +318,14 @@ ParsedType = Union[str, Dict[str, Any]]
 a dict describing a complex type:
   - {'kind': 'list', 'element': ParsedType}
   - {'kind': 'map', 'key': ParsedType, 'value': ParsedType}
-  - {'kind': 'struct', 'fields': List[Tuple[str, ParsedType]]}
+  - {'kind': 'struct', 'fields': List[Tuple[str, ParsedType, bool]]}
+
+Each struct field is (name, type, required). `required` comes from a trailing
+`NOT NULL` marker on the field's type (e.g. 'struct<a:int NOT NULL, b:string>'):
+Spark DDL accepts NOT NULL inside STRUCT<...>, and Iceberg records the field as
+required. List elements and map values are always optional here — Spark DDL
+CANNOT express a required list element / map value (ARRAY<INT NOT NULL> and
+MAP<K, V NOT NULL> are parse errors), so those require the JVM-schema path.
 """
 
 
@@ -337,10 +373,16 @@ def _split_top_level_comma(s: str, max_splits: int = -1) -> List[str]:
     return parts
 
 
-def _parse_struct_fields(inner: str) -> List[Tuple[str, ParsedType]]:
-    """Parse 'a: int, b: string' into [('a', 'int'), ('b', 'string')],
-    respecting angle-bracket depth for nested field types."""
-    fields: List[Tuple[str, ParsedType]] = []
+def _parse_struct_fields(inner: str) -> List[Tuple[str, ParsedType, bool]]:
+    """Parse 'a: int NOT NULL, b: string' into
+    [('a', 'int', True), ('b', 'string', False)], respecting angle-bracket depth
+    for nested field types.
+
+    A trailing (case-insensitive) 'NOT NULL' on a field's type marks it required.
+    It is stripped before the type is parsed, so it composes with nested types:
+    'struct<a: list<int> NOT NULL>' -> field a required, element still optional.
+    """
+    fields: List[Tuple[str, ParsedType, bool]] = []
     for field_str in _split_top_level_comma(inner):
         field_str = field_str.strip()
         if not field_str:
@@ -348,7 +390,11 @@ def _parse_struct_fields(inner: str) -> List[Tuple[str, ParsedType]]:
         colon_idx = field_str.index(":")
         name = field_str[:colon_idx].strip()
         type_part = field_str[colon_idx + 1:].strip()
-        fields.append((name, parse_type(type_part)))
+        required = False
+        if type_part.upper().endswith("NOT NULL"):
+            required = True
+            type_part = type_part[:-len("NOT NULL")].strip()
+        fields.append((name, parse_type(type_part), required))
     return fields
 
 
@@ -359,10 +405,11 @@ def _is_complex(parsed: ParsedType) -> bool:
 def _child_specs(parsed: ParsedType) -> List[Tuple[str, ParsedType, bool]]:
     """Direct children of a parsed type as (name, parsed_type, nullable).
 
-    Nullability follows Iceberg conventions: map keys are required, all other
-    nested fields (list element, map value, struct field) are optional.
-    Primitives have no children. This is the single source of truth for both
-    field-id assignment and Arrow-field nullability.
+    Nullability: map keys are always required; list elements and map values are
+    always optional (Spark DDL can't express them otherwise). Struct fields are
+    optional by default but required when marked NOT NULL in the type string
+    (see _parse_struct_fields). Primitives have no children. This is the single
+    source of truth for both field-id assignment and Arrow-field nullability.
     """
     if not _is_complex(parsed):
         return []
@@ -372,7 +419,9 @@ def _child_specs(parsed: ParsedType) -> List[Tuple[str, ParsedType, bool]]:
     if kind == "map":
         return [("key", parsed["key"], False), ("value", parsed["value"], True)]
     if kind == "struct":
-        return [(name, ftype, True) for name, ftype in parsed["fields"]]
+        # A field is nullable iff it is NOT marked required (NOT NULL).
+        return [(name, ftype, not required)
+                for name, ftype, required in parsed["fields"]]
     return []
 
 
@@ -431,6 +480,39 @@ def generate_value(iceberg_type: str, row_id: int) -> Any:
     return _generate(parse_type(iceberg_type), row_id)
 
 
+def check_required_fields(iceberg_type: str, value: Any) -> None:
+    """Raise ValueError if a PRESENT value violates a required (NOT NULL) field.
+
+    Guards the invariant that a required struct field is never null when its
+    struct is present. A wholly-null value (value is None) is allowed — that is
+    the top-level column being null, which is governed separately by the shape's
+    nullable flag and does not implicate inner required fields. Iceberg rejects a
+    null-in-required-field write with an opaque commit error; this fails early
+    and clearly instead. Recurses so nesting (struct-in-list, etc.) is covered.
+    """
+    _check_required(parse_type(iceberg_type), value, path="value")
+
+
+def _check_required(parsed: ParsedType, value: Any, path: str) -> None:
+    if value is None or not _is_complex(parsed):
+        return  # absent value or primitive leaf — nothing to enforce here
+    kind = parsed["kind"]
+    if kind == "list":
+        for i, v in enumerate(value):
+            _check_required(parsed["element"], v, f"{path}[{i}]")
+    elif kind == "map":
+        for k, v in value.items():
+            _check_required(parsed["value"], v, f"{path}[{k!r}]")
+    elif kind == "struct":
+        for name, ftype, required in parsed["fields"]:
+            fval = value.get(name) if isinstance(value, dict) else None
+            if required and fval is None:
+                raise ValueError(
+                    f"Required field {path}.{name} is null in a present struct "
+                    f"(schema marks it NOT NULL); Iceberg would reject this write.")
+            _check_required(ftype, fval, f"{path}.{name}")
+
+
 def _generate(parsed: ParsedType, row_id: int) -> Any:
     if not _is_complex(parsed):
         return _handler(parsed).generate(row_id)
@@ -448,8 +530,10 @@ def _generate(parsed: ParsedType, row_id: int) -> Any:
             result[k] = v
         return result
     if kind == "struct":
+        # required flag doesn't affect value generation — generate() is
+        # deterministic and never returns None, so required fields are satisfied.
         return {name: _generate(ftype, row_id * 10 + idx)
-                for idx, (name, ftype) in enumerate(parsed["fields"])}
+                for idx, (name, ftype, _required) in enumerate(parsed["fields"])}
     return None
 
 
@@ -481,7 +565,7 @@ def _physical(parsed: ParsedType, value: Any) -> Any:
         return {k: _physical(parsed["value"], v) for k, v in value.items()}
     if kind == "struct":
         return {name: _physical(ftype, value[name])
-                for name, ftype in parsed["fields"]}
+                for name, ftype, _required in parsed["fields"]}
     return value
 
 
@@ -501,8 +585,13 @@ class DataTypeChoice:
     Args:
         columns: List holding exactly one (column_name, iceberg_type) tuple.
         nullable: If True, the (top-level) column is nullable (DDL omits NOT
-                  NULL, Arrow field has nullable=True). Nested-field nullability
-                  follows Iceberg conventions (see _child_specs). Default: False.
+                  NULL, Arrow field has nullable=True). This flag applies ONLY to
+                  the top-level column — it does NOT propagate to nested fields.
+                  Nested-field nullability is independent: map keys are always
+                  required, list elements / map values always optional, and
+                  struct fields optional unless marked NOT NULL in the type
+                  string (e.g. 'struct<a:int NOT NULL,b:string>'). See
+                  _child_specs. Default: False.
     """
     columns: List[Tuple[str, str]]
     nullable: bool = False
@@ -603,8 +692,12 @@ def _parsed_to_spark_ddl(parsed: ParsedType) -> str:
         return (f"MAP<{_parsed_to_spark_ddl(parsed['key'])}, "
                 f"{_parsed_to_spark_ddl(parsed['value'])}>")
     if kind == "struct":
-        fields = ", ".join(f"{name}: {_parsed_to_spark_ddl(ftype)}"
-                           for name, ftype in parsed["fields"])
+        # Emit NOT NULL for required fields — Spark DDL accepts it inside
+        # STRUCT<...> and Iceberg records the field as required.
+        fields = ", ".join(
+            f"{name}: {_parsed_to_spark_ddl(ftype)}"
+            + (" NOT NULL" if required else "")
+            for name, ftype, required in parsed["fields"])
         return f"STRUCT<{fields}>"
     raise ValueError(f"Unknown complex kind: {kind!r}")
 
@@ -659,9 +752,16 @@ class TypedValueFiller:
                     value_map[row["row_id"]] = unique_values[row.get("value")]
 
         result = copy.deepcopy(config)
+        _col_name, col_type = type_choice.columns[0]
         for data_file in result.get("data_files", []):
             for row in data_file.get("rows", []):
-                row["typed_value"] = value_map.get(row["row_id"])
+                tv = value_map.get(row["row_id"])
+                row["typed_value"] = tv
+                # Lock the invariant: a present value must honor required
+                # (NOT NULL) nested fields. Whole-value nulls are fine (that's
+                # the top-level nullable case). Fails here rather than letting
+                # Iceberg reject the commit with an opaque error.
+                check_required_fields(col_type, tv)
         result["schema"] = type_choice.columns
         return result
 
@@ -684,6 +784,10 @@ class DataTypeDimension(Dimension):
         "map<string,int>",
         "map<int,string>",
         "struct<a:int,b:string>",
+        # Required struct field (NOT NULL) — exercises Iceberg's required-field
+        # path. Spark DDL supports NOT NULL inside STRUCT<...>; list-element /
+        # map-value required-ness is not expressible in DDL (see _child_specs).
+        "struct<a:int NOT NULL,b:string>",
         "struct<inner:struct<x:int,y:string>,items:list<int>>",
     ]
 

@@ -69,7 +69,7 @@ def _canon(v):
             return ("T", v.timestamp())
         return ("T", v.isoformat())
     if isinstance(v, date):
-        return ("D", v.isoformat())
+        return ("DATE", v.isoformat())  # distinct tag from dict's "D"
     return ("P", v)
 
 
