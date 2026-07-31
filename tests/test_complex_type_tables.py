@@ -238,7 +238,6 @@ PRIMITIVE_CASES = [
     ("timestamptz", "timestamptz", "DELTA_BINARY_PACKED", "SNAPPY"),
     ("decimal", "decimal(10,2)", "DICTIONARY", "GZIP"),
     ("fixed", "fixed(16)", "DICTIONARY", "ZSTD"),
-    ("uuid", "uuid", "DICTIONARY", "SNAPPY"),
 ]
 
 

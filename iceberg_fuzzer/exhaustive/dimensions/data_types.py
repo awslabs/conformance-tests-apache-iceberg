@@ -24,7 +24,6 @@ import copy
 import random
 import re
 import struct
-import uuid as uuid_mod
 from collections import deque
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -186,31 +185,27 @@ class TimestamptzType(IcebergType):
                             microseconds=_bounded(row_id, 1_000_000)))
 
 
-class UUIDType(IcebergType):
-    # Iceberg's native uuid (16-byte fixed) is UNREACHABLE via this builder:
-    # tables are created with Spark SQL DDL, and Spark rejects `UUID`/`uuid` with
-    # UNSUPPORTED_DATATYPE (only binary/string DDL work). A true uuid column would
-    # need the PyIceberg/Java table-creation path. So uuid is modeled as a STRING
-    # column holding the canonical uuid text — deterministic via uuid5 (uuid4 is
-    # random and would break reproducibility). Emit the string form; PyArrow
-    # rejects a uuid.UUID object for a string() column.
-    #
-    # TODO(fidelity): model the NATIVE 16-byte Iceberg uuid. Requires creating
-    # the table via the PyIceberg/Java API (not Spark DDL) and writing
-    # fixed_size_binary(16) = uuid.bytes. Until then a uuid column is physically
-    # indistinguishable from a plain string, so uuid-aware readers aren't tested.
-    arrow_type = pa.string()
-    spark_ddl = "STRING"
-
-    def generate(self, row_id: int) -> Any:
-        return str(uuid_mod.uuid5(uuid_mod.NAMESPACE_DNS, f"row_{row_id}"))
-
-
 class DecimalType(IcebergType):
     """Parametrized decimal(P, S). Not a fixed REGISTRY entry — built by
     _handler from a parsed 'decimal(p,s)' string (or the bare 'decimal')."""
 
+    # Iceberg decimal(P, S) requires 1 <= P <= 38 and 0 <= S <= P. Validate here
+    # rather than letting a bad P/S through: pa.decimal128 accepts S > P happily
+    # and generate() even returns plausible-looking values, so the mistake only
+    # surfaces much later as an opaque ArrowInvalid at array-construction time
+    # ("Decimal type with precision 5 does not fit into precision inferred from
+    # first array element: 2"). Failing at handler lookup names the real problem.
+    MAX_PRECISION = 38
+
     def __init__(self, precision: int = 10, scale: int = 2):
+        if not 1 <= precision <= self.MAX_PRECISION:
+            raise ValueError(
+                f"decimal precision must be between 1 and {self.MAX_PRECISION}, "
+                f"got {precision}")
+        if not 0 <= scale <= precision:
+            raise ValueError(
+                f"decimal scale must be between 0 and the precision ({precision}), "
+                f"got {scale}")
         self.precision = precision
         self.scale = scale
         self.arrow_type = pa.decimal128(precision, scale)
@@ -234,6 +229,11 @@ class FixedType(IcebergType):
     parsed 'fixed(l)' string."""
 
     def __init__(self, length: int = 16):
+        # Iceberg fixed(L) requires L >= 1. pa.binary(0) is a legal Arrow type, so
+        # fixed(0) would otherwise build a zero-width column that no Iceberg
+        # schema can express.
+        if length < 1:
+            raise ValueError(f"fixed length must be >= 1, got {length}")
         self.length = length
         self.arrow_type = pa.binary(length)   # fixed_size_binary[length] on disk
         # Spark DDL has no fixed-length-binary type: FIXED(L)/BINARY(L) both fail
@@ -250,6 +250,21 @@ class FixedType(IcebergType):
         return bytes([(row_id + i) % 256 for i in range(self.length)])
 
 
+# Deliberately absent: uuid. Iceberg's native uuid is a 16-byte fixed value, but
+# tables here are created with Spark SQL DDL and Spark rejects a uuid column
+# outright — `CREATE TABLE (value UUID)` -> [UNSUPPORTED_DATATYPE] Unsupported
+# data type "UUID" (verified on Spark 3.5.3/Iceberg 1.7.1 and 4.0.0/Iceberg
+# 1.11.0). Only binary/string DDL are accepted, so uuid could only be FAKED as a
+# STRING of uuid text — indistinguishable from a plain string at both the Iceberg
+# and Parquet layers, i.e. reporting coverage the fuzzer doesn't have. Omitted
+# from the registry so _handler rejects it instead. (fixed(L) is different, and
+# stays supported: its Parquet column really is fixed_size_binary[L] — a real
+# physical type behind a lossy DDL, not a fabrication.)
+#
+# TODO(fidelity): native uuid needs table creation via the PyIceberg/Java schema
+# API instead of Spark DDL, then writing fixed_size_binary(16) = uuid.bytes. That
+# path would also unblock native fixed(L) and required list-elements/map-values.
+#
 # name -> handler for the fixed (non-parametrized) primitives. Adding one is a
 # new IcebergType subclass plus one entry here — there is no if/elif switch.
 REGISTRY: Dict[str, IcebergType] = {
@@ -267,7 +282,6 @@ REGISTRY: Dict[str, IcebergType] = {
     "timestamp": TimestampType(),
     "timestamp_ntz": TimestampType(),
     "timestamptz": TimestamptzType(),
-    "uuid": UUIDType(),
 }
 
 _DECIMAL_RE = re.compile(r"decimal\(\s*(\d+)\s*,\s*(\d+)\s*\)")
@@ -775,7 +789,7 @@ class DataTypeDimension(Dimension):
 
     SUPPORTED_TYPES = [
         "boolean", "int", "long", "float", "double", "string", "binary",
-        "date", "timestamp", "timestamptz", "uuid", "decimal(10,2)", "fixed(16)",
+        "date", "timestamp", "timestamptz", "decimal(10,2)", "fixed(16)",
     ]
 
     COMPLEX_TYPES = [

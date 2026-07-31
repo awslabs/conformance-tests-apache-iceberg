@@ -45,6 +45,16 @@ class TestGenerateValue:
         assert generate_value("decimal(10,2)", 3) == Decimal("3.03")
         assert generate_value("fixed(4)", 3) == bytes([3, 4, 5, 6])
 
+    @pytest.mark.parametrize("type_str", ["uuid", "UUID", "list<uuid>",
+                                          "struct<a:uuid>", "map<string,uuid>"])
+    def test_uuid_rejected(self, type_str):
+        # uuid is deliberately unsupported: Spark DDL cannot express it, so it
+        # could only be faked as a STRING column (see data_types.py). It must be
+        # rejected as a top-level type AND as a nested leaf, not silently
+        # modeled as something else.
+        with pytest.raises(ValueError, match="Unsupported data type"):
+            generate_value(type_str, 0)
+
     def test_complex_types_generate_nested_values(self):
         assert generate_value("list<int>", 1) == [10, 11]
         m = generate_value("map<string,int>", 3)
@@ -305,6 +315,52 @@ class TestPrimitiveTypes:
             dtc = DataTypeChoice(columns=[("value", type_str)])
             assert dtc.get_spark_ddl() == f"value {ddl_type} NOT NULL", type_str
             assert dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type == arrow_type, type_str
+
+
+class TestParametrizedTypeBounds:
+    """decimal(P,S) / fixed(L) reject out-of-range parameters at handler lookup.
+
+    Without these guards a bad P/S builds a handler and generates
+    plausible-looking values, then fails deep inside PyArrow at array
+    construction with an opaque message.
+    """
+
+    @pytest.mark.parametrize("type_str", [
+        "decimal(0,0)",     # precision below 1
+        "decimal(39,2)",    # precision above 38
+        "decimal(2,5)",     # scale > precision
+    ])
+    def test_bad_decimal_rejected(self, type_str):
+        with pytest.raises(ValueError, match="decimal (precision|scale) must be"):
+            generate_value(type_str, 0)
+
+    @pytest.mark.parametrize("type_str", ["fixed(0)", "fixed(00)"])
+    def test_bad_fixed_rejected(self, type_str):
+        with pytest.raises(ValueError, match="fixed length must be >= 1"):
+            generate_value(type_str, 0)
+
+    @pytest.mark.parametrize("type_str", [
+        "decimal(1,0)", "decimal(38,38)", "decimal(38,0)", "fixed(1)",
+    ])
+    def test_boundary_values_accepted(self, type_str):
+        # The extremes of the legal range must still work — the guard must not
+        # be off by one.
+        assert generate_value(type_str, 3) is not None
+
+    def test_bad_parameters_rejected_when_nested(self):
+        with pytest.raises(ValueError, match="decimal scale must be"):
+            generate_value("list<decimal(2,5)>", 0)
+
+    def test_generated_decimal_fits_declared_arrow_type(self):
+        # The regression this guards: values must survive pa.array() with the
+        # handler's own arrow_type, for every legal P/S combination.
+        for type_str in ["decimal(1,0)", "decimal(10,2)", "decimal(38,38)",
+                         "decimal(38,0)", "decimal(5,5)"]:
+            dtc = DataTypeChoice(columns=[("value", type_str)])
+            arrow_type = dtc.get_arrow_schema(dtc.get_field_ids()).field(0).type
+            values = [generate_value(type_str, i) for i in range(5)]
+            arr = pa.array(values, type=arrow_type)   # must not raise
+            assert len(arr) == 5, type_str
 
 
 class TestComplexTypes:

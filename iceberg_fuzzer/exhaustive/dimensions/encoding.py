@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 #   produced unreadable files, so it is float/double-only here. (Could be made
 #   opt-in later — generate the files but skip DuckDB read-back validation — to
 #   fuzz writer-side handling of the newer encoding.)
-# - uuid maps to a STRING physical column, so it accepts DELTA_LENGTH_BYTE_ARRAY.
 # - DICTIONARY is universally available (applied via use_dictionary).
 ENCODING_COMPATIBILITY = {
     "int": ["PLAIN", "DICTIONARY", "DELTA_BINARY_PACKED"],
@@ -49,7 +48,6 @@ ENCODING_COMPATIBILITY = {
     "timestamptz": ["PLAIN", "DICTIONARY", "DELTA_BINARY_PACKED"],
     "date": ["PLAIN", "DICTIONARY", "DELTA_BINARY_PACKED"],
     "decimal": ["PLAIN", "DICTIONARY"],
-    "uuid": ["PLAIN", "DICTIONARY", "DELTA_LENGTH_BYTE_ARRAY"],
     "fixed": ["PLAIN", "DICTIONARY"],
     "time": ["PLAIN", "DICTIONARY", "DELTA_BINARY_PACKED"],
 }

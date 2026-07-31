@@ -273,9 +273,9 @@ class TestFieldIdValidation:
     # Every supported type, sourced from the dimension's own lists so the
     # coverage can't drift when a type is added. Field ids only ever diverge at
     # nested levels, but building each primitive too is cheap insurance and
-    # removes any judgment about which types are "interesting". uuid/fixed are
-    # Spark-DDL-limited (see data_types.py) so they surface as their
-    # approximation types, but ids still line up.
+    # removes any judgment about which types are "interesting". fixed(L) is
+    # Spark-DDL-limited (see data_types.py) so its Iceberg column surfaces as
+    # plain binary, but ids still line up.
     TYPES = DataTypeDimension.SUPPORTED_TYPES + DataTypeDimension.COMPLEX_TYPES
 
     @pytest.mark.parametrize("col_type", TYPES)
