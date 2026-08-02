@@ -12,13 +12,16 @@ Run with: pytest tests/test_table_builder_integration.py -v
 Mark: these tests are slow (~30s for Spark startup + table builds).
 """
 
+import re
+
 import pytest
 import pyarrow.parquet as pq
 from pathlib import Path
 
 from iceberg_fuzzer.exhaustive.table_builder import UnifiedTableBuilder
 from iceberg_fuzzer.exhaustive.shape_config_generator import TableConfigGenerator
-from iceberg_fuzzer.exhaustive.dimensions.data_types import DataTypeChoice, TypedValueFiller
+from iceberg_fuzzer.exhaustive.dimensions.data_types import (
+    DataTypeChoice, TypedValueFiller, DataTypeDimension)
 from iceberg_fuzzer.exhaustive.dimensions.interfaces import WriteOptions
 from iceberg_fuzzer.exhaustive.dimensions.encoding import EncodingChoice
 from iceberg_fuzzer.exhaustive.dimensions.compression import CompressionChoice, CompressionCodec
@@ -246,3 +249,74 @@ class TestNoDataNoDeleteSnapshot:
         assert stats.data_file_count == len(config['data_files'])
         assert stats.delete_file_count == 0
         assert all(stats.validations.values()), stats.validation_messages
+
+
+def build_typed(builder, config, namespace, table_name, col_type):
+    """Build config with a single column of the given type (PLAIN/zstd)."""
+    nullable = config.get("value_strategy") == "nulls"
+    provider = DataTypeChoice([("value", col_type)], nullable=nullable)
+    write_options = WriteOptions(
+        encoding=EncodingChoice({"value": "PLAIN"}),
+        compression=CompressionChoice(default_codec=CompressionCodec("ZSTD")),
+        schema={"value": col_type})
+    filled = TypedValueFiller().fill(config, provider)
+    return builder.build_table(
+        filled, namespace, table_name,
+        schema_provider=provider, write_options=write_options), provider
+
+
+class TestFieldIdValidation:
+    """The field-id check (V8) confirms compute_field_ids matches the ids
+    Iceberg actually assigned — especially for nested types, where a drift
+    would silently point parquet columns at the wrong fields."""
+
+    # Every supported type, sourced from the dimension's own lists so the
+    # coverage can't drift when a type is added. Field ids only ever diverge at
+    # nested levels, but building each primitive too is cheap insurance and
+    # removes any judgment about which types are "interesting". fixed(L) is
+    # Spark-DDL-limited (see data_types.py) so its Iceberg column surfaces as
+    # plain binary, but ids still line up.
+    TYPES = DataTypeDimension.SUPPORTED_TYPES + DataTypeDimension.COMPLEX_TYPES
+
+    @pytest.mark.parametrize("col_type", TYPES)
+    def test_field_ids_match_iceberg(self, builder, config_cache, col_type):
+        config = get_config(config_cache, 1)
+        # Map any type string to a unique, filesystem/SQL-safe table name:
+        # collapse every run of non-alphanumerics to '_'. Handles parens/commas/
+        # colons/spaces (e.g. decimal(10,2) -> decimal_10_2_) so no type yields
+        # an invalid identifier, and stays distinct across all of TYPES.
+        tbl = "fid_" + re.sub(r"[^0-9a-zA-Z]+", "_", col_type)
+        stats, provider = build_typed(builder, config, "e2e_fid", tbl, col_type)
+
+        # The field-id validation must have run and passed.
+        assert 'field_ids' in stats.validations, stats.validations
+        assert stats.validations['field_ids'], stats.validation_messages
+
+        # And the harvested ids equal the computed ones exactly.
+        harvested = builder._harvest_field_ids(
+            builder._get_table_path(f"local.e2e_fid.{tbl}"))
+        assert harvested == provider.get_field_ids()
+
+
+class TestValidateDisabled:
+    """validate=False produces a table but skips verification."""
+
+    def test_no_validation_when_disabled(self, builder, config_cache):
+        config = get_config(config_cache, 1)
+        nullable = config.get("value_strategy") == "nulls"
+        provider = DataTypeChoice([("value", "int")], nullable=nullable)
+        write_options = WriteOptions(
+            encoding=EncodingChoice({"value": "PLAIN"}),
+            compression=CompressionChoice(default_codec=CompressionCodec("ZSTD")),
+            schema={"value": "int"})
+        filled = TypedValueFiller().fill(config, provider)
+
+        stats = builder.build_table(
+            filled, "e2e_noval", "table_1_noval",
+            schema_provider=provider, write_options=write_options,
+            validate=False)
+
+        # Table was built (metadata still queried) but no validation ran.
+        assert stats.data_file_count == len(config['data_files'])
+        assert stats.validations == {}
+        assert stats.validation_messages == []

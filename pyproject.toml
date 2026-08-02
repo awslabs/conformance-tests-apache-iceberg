@@ -26,6 +26,10 @@ dependencies = [
     "boto3>=1.35.0",
     "sqlalchemy>=1.4.0",
     "duckdb>=1.5.1",
+    # DuckDB imports pytz at runtime to handle timestamptz (tz-aware) values;
+    # the complex-type read-back tests exercise that path, so declare it
+    # explicitly rather than relying on it arriving transitively.
+    "pytz>=2024.1",
 ]
 
 [project.optional-dependencies]

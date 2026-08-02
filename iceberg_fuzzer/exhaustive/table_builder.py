@@ -192,7 +192,8 @@ class UnifiedTableBuilder:
 
     def build_table(self, config: Dict[str, Any], namespace: str, table_name: str,
                     schema_provider: SchemaProvider,
-                    write_options: WriteOptionsProvider) -> BuildStats:
+                    write_options: WriteOptionsProvider,
+                    validate: bool = True) -> BuildStats:
         """
         Build an Iceberg table from a raw config dict.
 
@@ -209,6 +210,12 @@ class UnifiedTableBuilder:
                 DDL, Arrow schema, and per-row value generation.
             write_options: WriteOptionsProvider supplying per-column compression
                 and encoding.
+            validate: When True (default), read the built table back and compare
+                it against the config (row/file/delete/snapshot counts, sentinel
+                size, field ids). When False, skip all verification — no Spark
+                metadata queries, no delete-parquet reads, no field-id harvest —
+                so bulk generation of tables you already trust pays no cost.
+                stats.validations/validation_messages are left empty when False.
         """
         required_keys = ('data_files', 'delete_files', 'snapshots', 'row_count')
         missing = [k for k in required_keys if k not in config]
@@ -237,7 +244,7 @@ class UnifiedTableBuilder:
 
         full_table_name = f"{full_namespace}.{table_name}"
         min_sentinel_bytes = int(self.target_size_mb * 1024 * 1024)
-        max_retries = 5
+        max_retries = 10
 
         # Reset target_row_count per table so sentinel retries don't leak
         self.target_row_count = self._base_target_row_count
@@ -273,17 +280,25 @@ class UnifiedTableBuilder:
             if attempt == max_retries:
                 break
 
-            # Adjust target_row_count and retry
+            # Adjust target_row_count and retry. The estimate assumes size grows
+            # linearly with rows, but for compressible types (e.g. string) the
+            # marginal bytes-per-row shrinks as similar rows are added, so a
+            # linear step lands short and the loop only creeps toward the target.
+            # Overshoot by OVERSHOOT_FACTOR so a sub-linear step still clears the
+            # minimum; exceeding the *minimum* sentinel size is harmless.
+            OVERSHOOT_FACTOR = 1.5
             compressed_bpr = max(1, sentinel_size // self.target_row_count)
             deficit = min_sentinel_bytes - sentinel_size
-            extra_rows = max(1, deficit // compressed_bpr + 1)
+            extra_rows = max(1, int(deficit / compressed_bpr * OVERSHOOT_FACTOR) + 1)
             self.target_row_count += extra_rows
 
         stats = self._query_table_metadata(spark, full_table_name)
-        validations, messages = self._validate_against_config(
-            spark, full_table_name, config, stats)
-        stats.validations = validations
-        stats.validation_messages = messages
+        if validate:
+            validations, messages = self._validate_against_config(
+                spark, full_table_name, config, stats,
+                schema_provider=schema_provider)
+            stats.validations = validations
+            stats.validation_messages = messages
         return stats
 
     # =========================================================================
@@ -445,11 +460,32 @@ class UnifiedTableBuilder:
     def _leaf_column_paths(field: pa.Field, prefix: str = "") -> List[str]:
         """Return the physical Parquet leaf-column path(s) for an Arrow field.
 
-        pq.write_table keys per-column compression/encoding by leaf path, which
-        for nested types differs from the top-level name. (Primitive-only for
-        now; complex-type recursion lands with complex types.)
+        pq.write_table keys per-column compression/encoding by physical leaf
+        path, which for nested types differs from the top-level name. This walks
+        the Arrow type to PyArrow's leaf paths:
+          - primitive    -> "name"
+          - list<T>      -> "name.list.element" (recurse into T)
+          - map<K,V>     -> "name.key_value.key" / ".value" (recurse into K, V)
+          - struct<...>  -> "name.field" per field (recurse into each)
         """
         name = f"{prefix}{field.name}" if prefix else field.name
+        t = field.type
+
+        if pa.types.is_list(t) or pa.types.is_large_list(t):
+            element = t.value_field.with_name("element")
+            return UnifiedTableBuilder._leaf_column_paths(element, prefix=f"{name}.list.")
+        if pa.types.is_map(t):
+            kv = f"{name}.key_value."
+            key = t.key_field.with_name("key")
+            value = t.item_field.with_name("value")
+            return (UnifiedTableBuilder._leaf_column_paths(key, prefix=kv)
+                    + UnifiedTableBuilder._leaf_column_paths(value, prefix=kv))
+        if pa.types.is_struct(t):
+            paths: List[str] = []
+            for i in range(t.num_fields):
+                paths.extend(
+                    UnifiedTableBuilder._leaf_column_paths(t.field(i), prefix=f"{name}."))
+            return paths
         return [name]
 
     def _build_write_kwargs(self, data_schema: pa.Schema,
@@ -631,6 +667,76 @@ class UnifiedTableBuilder:
             path = path / part
         return path
 
+    def _harvest_field_ids(self, table_path: Path) -> Dict[Tuple[str, ...], int]:
+        """Read the field-id assignment Iceberg wrote into the table metadata.
+
+        Returns a {field_path -> id} map in the SAME shape as
+        data_types.compute_field_ids, so the two can be compared with ==. Field
+        paths follow the provider convention: a top-level column is a 1-tuple,
+        e.g. ('value',); nested nodes extend it — list -> ('xs','element'),
+        map -> ('m','key')/('m','value'), struct -> ('r','a').
+
+        Iceberg's metadata encodes a field's type as either a primitive string
+        or a nested object with its own ids: struct fields carry 'id' + 'name';
+        list carries 'element-id' (+ 'element' type); map carries 'key-id' /
+        'value-id' (+ 'key'/'value' types).
+        """
+        metadata_dir = table_path / "metadata"
+        metadata_files = sorted(
+            metadata_dir.glob("v*.metadata.json"),
+            key=lambda p: int(p.name.split('.')[0][1:]), reverse=True)
+        if not metadata_files:
+            raise FileNotFoundError(f"No metadata files in {metadata_dir}")
+        with open(metadata_files[0]) as f:
+            metadata = json.load(f)
+
+        current_schema_id = metadata.get("current-schema-id", 0)
+        schema = next(
+            (s for s in metadata.get("schemas", [])
+             if s.get("schema-id") == current_schema_id), None)
+        if schema is None:
+            raise ValueError(f"Schema {current_schema_id} not found in metadata")
+
+        field_ids: Dict[Tuple[str, ...], int] = {}
+
+        def walk_type(path: Tuple[str, ...], type_node: Any) -> None:
+            """Recurse into a type node, stamping nested ids under `path`."""
+            if not isinstance(type_node, dict):
+                return  # primitive type string — no nested ids
+            kind = type_node.get("type")
+            if kind == "struct":
+                for fld in type_node.get("fields", []):
+                    child_path = path + (fld["name"],)
+                    field_ids[child_path] = fld["id"]
+                    walk_type(child_path, fld["type"])
+            elif kind == "list":
+                child_path = path + ("element",)
+                field_ids[child_path] = type_node["element-id"]
+                walk_type(child_path, type_node["element"])
+            elif kind == "map":
+                key_path = path + ("key",)
+                val_path = path + ("value",)
+                field_ids[key_path] = type_node["key-id"]
+                field_ids[val_path] = type_node["value-id"]
+                walk_type(key_path, type_node["key"])
+                walk_type(val_path, type_node["value"])
+            else:
+                # A dict type_node must be struct/list/map — the only complex
+                # Iceberg kinds. Any other value means a bug or an unhandled new
+                # kind / changed metadata format. Fail loudly rather than
+                # silently returning a field-id map with missing subtree ids
+                # (which would make the V8 comparison wrong, not just fail).
+                raise ValueError(
+                    f"Unexpected complex type kind {kind!r} at path {path} in "
+                    f"table metadata; _harvest_field_ids cannot map its field ids.")
+
+        for fld in schema.get("fields", []):
+            path = (fld["name"],)
+            field_ids[path] = fld["id"]
+            walk_type(path, fld["type"])
+
+        return field_ids
+
     def _get_sentinel_file_size(self, spark, full_table_name) -> Optional[int]:
         """Query sentinel file size from Iceberg metadata."""
         try:
@@ -723,8 +829,15 @@ class UnifiedTableBuilder:
     # =========================================================================
 
     def _validate_against_config(self, spark, full_table_name, config,
-                                 stats: BuildStats) -> Tuple[Dict[str, bool], List[str]]:
-        """Compare observed table metadata against expected config. Returns (validations, messages)."""
+                                 stats: BuildStats,
+                                 schema_provider: SchemaProvider = None
+                                 ) -> Tuple[Dict[str, bool], List[str]]:
+        """Compare observed table metadata against expected config. Returns (validations, messages).
+
+        schema_provider, when supplied, enables the field-id check (V8): the ids
+        we STAMPED into the parquet files (computed) must equal the ids Iceberg
+        assigned in the created table's metadata (harvested).
+        """
         validations = {}
         messages = []
         sentinel_file_id = config.get('sentinel_in_file')
@@ -816,6 +929,23 @@ class UnifiedTableBuilder:
                     f"Sentinel size: {sentinel_size} bytes < {min_bytes} required")
         else:
             validations['sentinel_file_size'] = True
+
+        # V8: Field ids — the ids we STAMPED into the data parquet (computed by
+        # the provider) must equal the ids Iceberg assigned in the table
+        # metadata. A mismatch means the files point at the wrong columns, which
+        # would silently read wrong data; surface it via the standard channel.
+        if schema_provider is not None:
+            try:
+                computed = schema_provider.get_field_ids()
+                harvested = self._harvest_field_ids(
+                    self._get_table_path(full_table_name))
+                validations['field_ids'] = (computed == harvested)
+                if not validations['field_ids']:
+                    messages.append(
+                        f"Field ids: computed {computed}, table has {harvested}")
+            except Exception as e:
+                validations['field_ids'] = False
+                messages.append(f"Field id check failed: {e}")
 
         return validations, messages
 

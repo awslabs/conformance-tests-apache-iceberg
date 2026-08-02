@@ -24,7 +24,8 @@ import pytest
 
 from iceberg_fuzzer.exhaustive.table_builder import UnifiedTableBuilder
 from iceberg_fuzzer.exhaustive.shape_config_generator import TableConfigGenerator
-from iceberg_fuzzer.exhaustive.dimensions.data_types import DataTypeChoice, TypedValueFiller
+from iceberg_fuzzer.exhaustive.dimensions.data_types import (
+    DataTypeChoice, TypedValueFiller, physical_value)
 from iceberg_fuzzer.exhaustive.dimensions.interfaces import WriteOptions
 from iceberg_fuzzer.exhaustive.dimensions.encoding import EncodingChoice
 from iceberg_fuzzer.exhaustive.dimensions.compression import CompressionChoice, CompressionCodec
@@ -106,13 +107,15 @@ def test_build_and_read_back_with_duckdb(builder, config_cache, name, config_id)
     # Expected physical values are the filler's typed_value for every real row
     # (the filler applies the value_strategy — e.g. repetition remaps abstract
     # values to grouped typed values, nulls become None). Sentinel padding rows
-    # are negative and excluded here.
+    # are negative and excluded here. Each expected value is narrowed to the
+    # column's physical storage width via physical_value (a no-op for int; for a
+    # float column it narrows float64 → float32 so the read-back matches).
     provider = DataTypeChoice(
         [("value", "int")],
         nullable=config.get("value_strategy") == "nulls")
     filled = TypedValueFiller().fill(config, provider)
     expected_real = [
-        r.get('typed_value')
+        physical_value("int", r.get('typed_value'))
         for df in filled['data_files'] for r in df['rows']
     ]
     physical_real = [v for v in values if v is None or v >= 0]
