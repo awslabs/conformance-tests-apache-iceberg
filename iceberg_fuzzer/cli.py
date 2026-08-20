@@ -165,21 +165,21 @@ def main():
         epilog="""
 Examples:
   # Generate simple tables with PySpark
-  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml
+  %(prog)s --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml
 
   # Generate write-pattern tables with PySpark (parallel)
-  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse \
+  %(prog)s --backend pyspark --warehouse-path /tmp/warehouse \
       --specs specs/write_patterns.yaml --num-parallel 4
 
   # Generate partitioned tables with PySpark
-  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse \
+  %(prog)s --backend pyspark --warehouse-path /tmp/warehouse \
       --specs specs/partitioned.yaml --num-parallel 8
 
   # Generate minimal set with any backend
-  python3 cli.py generate --backend polars --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal
+  %(prog)s --backend polars --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal
 
   # Generate random subset
-  python3 cli.py generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 50
+  %(prog)s --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 50
         """)
 
     generate_parser.add_argument('--backend',
@@ -219,10 +219,10 @@ Examples:
         epilog="""
 Examples:
   # Validate tables with parallel workers
-  python3 cli.py validate --warehouse-path /tmp/warehouse --specs specs/simple.yaml --num-parallel 16
+  %(prog)s --warehouse-path /tmp/warehouse --specs specs/simple.yaml --num-parallel 16
 
   # Full content validation (slower)
-  python3 cli.py validate --warehouse-path /tmp/warehouse --specs specs/simple.yaml --full-content-validation
+  %(prog)s --warehouse-path /tmp/warehouse --specs specs/simple.yaml --full-content-validation
         """)
 
     validate_parser.add_argument('--warehouse-path',
@@ -252,13 +252,13 @@ Examples:
         epilog="""
 Examples:
   # Delete all tables in local warehouse (with confirmation)
-  python3 cli.py delete --backend pyspark --warehouse-path /tmp/warehouse
+  %(prog)s --backend pyspark --warehouse-path /tmp/warehouse
 
   # Delete all tables in S3 Tables bucket (with confirmation)
-  python3 cli.py delete --backend pyspark --warehouse-path "arn:aws:s3tables:us-west-2:123456789012:bucket/my-bucket"
+  %(prog)s --backend pyspark --warehouse-path "arn:aws:s3tables:us-west-2:123456789012:bucket/my-bucket"
 
   # Delete without interactive confirmation
-  python3 cli.py delete --backend pyspark --warehouse-path /tmp/warehouse --confirm
+  %(prog)s --backend pyspark --warehouse-path /tmp/warehouse --confirm
         """)
 
     delete_parser.add_argument('--backend',
@@ -283,13 +283,13 @@ Examples:
         epilog="""
 Examples:
   # Build a single config by ID
-  iceberg-fuzzer build-shapes --warehouse-path /tmp/warehouse --config-id 84823 --target-size-mb 0.01
+  %(prog)s --warehouse-path /tmp/warehouse --config-id 84823 --target-size-mb 0.01
 
   # Build first 10 configs, skipping validation for speed (validation is on by default)
-  iceberg-fuzzer build-shapes --warehouse-path /tmp/warehouse --limit 10 --no-validate
+  %(prog)s --warehouse-path /tmp/warehouse --limit 10 --no-validate
 
   # Build all configs with custom namespace
-  iceberg-fuzzer build-shapes --warehouse-path /tmp/warehouse --namespace my_shapes --target-size-mb 0.1
+  %(prog)s --warehouse-path /tmp/warehouse --namespace my_shapes --target-size-mb 0.1
         """)
 
     shapes_parser.add_argument('--warehouse-path',
@@ -348,11 +348,11 @@ Examples:
         epilog="""
 Examples:
   # Run a compaction workflow
-  python3 cli.py workflow run --workflow specs/workflows/compaction.yaml \
+  %(prog)s run --workflow specs/workflows/compaction.yaml \
       --warehouse-path /tmp/warehouse --table-name my_table --namespace simple
 
   # Dry-run to see what would execute
-  python3 cli.py workflow run --workflow specs/workflows/compaction.yaml \
+  %(prog)s run --workflow specs/workflows/compaction.yaml \
       --warehouse-path /tmp/warehouse --table-name my_table --namespace simple --dry-run
         """)
 
