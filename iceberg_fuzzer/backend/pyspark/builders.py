@@ -256,15 +256,19 @@ def is_s3_table_warehouse(warehouse_path):
     """Check if warehouse path is an S3 table ARN"""
     return warehouse_path.startswith('arn:aws:s3tables:')
 
+def get_catalog_name(warehouse_path):
+    """Get the Spark catalog name configured for this warehouse type.
+
+    Single source of truth for the catalog name, so that code reading tables
+    addresses the same catalog the writers created them in.
+    """
+    return "s3tables" if is_s3_table_warehouse(warehouse_path) else "local"
+
 def get_catalog_and_namespace(warehouse_path, table_type):
     """Get catalog name and namespace based on warehouse type and table type"""
-    if is_s3_table_warehouse(warehouse_path):
-        catalog = "s3tables"
-        namespace = table_type  # simple, write_pattern, or partitioned
-    else:
-        catalog = "local"
-        namespace = table_type
-    return catalog, namespace
+    # The namespace is the table type verbatim (simple, write_pattern,
+    # partitioned, evolution) for every warehouse type.
+    return get_catalog_name(warehouse_path), table_type
 
 def create_table_safe(spark, catalog, namespace, table_name, schema_fields, props_sql, partition_clause=""):
     """Create table with IF NOT EXISTS to handle race conditions in S3 Tables"""
