@@ -3,8 +3,39 @@
 
 import yaml
 
+_COMPLEX_TYPE_PREFIXES = ('list<', 'map<', 'struct<')
+
 # Iceberg types Spark DDL cannot represent.
 _TYPES_SPARK_CANNOT_EXPRESS = ('time', 'uuid')
+
+
+def select_primitive_types(specs, minimal=False):
+    """Return the primitive type definitions a generate run covers.
+
+    Shared with the DuckDB validator so that the set of tables `generate`
+    produces and the set `validate` expects cannot drift apart.
+
+    Complex types are not supported and raise ValueError.
+    """
+    all_types = specs.get('primitive_types', [])
+
+    complex_types = [
+        t.get('name')
+        for t in all_types
+        if str(t.get('iceberg_type', '')).startswith(_COMPLEX_TYPE_PREFIXES)
+    ]
+    if complex_types:
+        raise ValueError(f"Complex types are not supported: {complex_types}")
+
+    # Minimal mode is the set every backend can write, so the types Spark
+    # cannot express are left out.
+    if minimal:
+        all_types = [
+            t for t in all_types
+            if t.get('iceberg_type', t.get('name')) not in _TYPES_SPARK_CANNOT_EXPRESS
+        ]
+
+    return all_types
 
 
 def load_table_specs(yaml_path, minimal=False):
@@ -15,16 +46,7 @@ def load_table_specs(yaml_path, minimal=False):
     if 'tables' in specs:
         return specs['tables']
 
-    # Collect primitive types
-    all_types = specs.get('primitive_types', [])
-
-    # Minimal mode is the set every backend can write, so the types Spark
-    # cannot express are left out.
-    if minimal:
-        all_types = [
-            t for t in all_types
-            if t.get('iceberg_type', t.get('name')) not in _TYPES_SPARK_CANNOT_EXPRESS
-        ]
+    all_types = select_primitive_types(specs, minimal=minimal)
 
     # Generate table specs
     tables = []
@@ -47,11 +69,15 @@ def load_table_specs(yaml_path, minimal=False):
                         table_name += f"_lvl{compression['level']}"
                     table_name += f"_{encoding.lower()}_v{version}"
 
+                    # `name` labels the table (binary_small, decimal_10_2); the
+                    # column needs the canonical `iceberg_type` (binary,
+                    # decimal(10,2)) that the backends' type maps key on.
                     tables.append({
                         'name': table_name,
                         'schema': [
                             {'name': 'id', 'type': 'int'},
-                            {'name': 'value', 'type': data_type['name']}
+                            {'name': 'value',
+                             'type': data_type.get('iceberg_type', data_type['name'])}
                         ],
                         'properties': {'format-version': str(version)}
                     })
