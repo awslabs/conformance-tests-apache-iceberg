@@ -3,6 +3,10 @@
 
 import yaml
 
+# Iceberg types Spark DDL cannot represent.
+_TYPES_SPARK_CANNOT_EXPRESS = ('time', 'uuid')
+
+
 def load_table_specs(yaml_path, minimal=False):
     """Load table specs from YAML with optional minimal filtering"""
     with open(yaml_path, 'r') as f:
@@ -14,14 +18,13 @@ def load_table_specs(yaml_path, minimal=False):
     # Collect primitive types
     all_types = specs.get('primitive_types', [])
 
-    # Filter out time types if minimal mode
+    # Minimal mode is the set every backend can write, so the types Spark
+    # cannot express are left out.
     if minimal:
-        # Exclude time types except timestamp/timestamptz
         all_types = [
             t for t in all_types
-            if not ('time' in t.get('name', '') and t.get('name') not in ['timestamp', 'timestamptz'])
+            if t.get('iceberg_type', t.get('name')) not in _TYPES_SPARK_CANNOT_EXPRESS
         ]
-        all_types = [t for t in all_types if t.get('name') not in ['uuid', 'fixed_16']]
 
     # Generate table specs
     tables = []

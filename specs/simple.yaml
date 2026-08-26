@@ -185,15 +185,11 @@ primitive_types:
       - "00000000-0000-0000-0000-000000000000"
       - "550e8400-e29b-41d4-a716-446655440000"
       - "f47ac10b-58cc-4372-a567-0e02b2c3d479"
-    
-  - name: fixed_16
-    iceberg_type: "fixed(16)"
-    sample_values:
-      - null
-      - "00000000000000000000000000000000"
-      - "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
-      - "0123456789ABCDEF0123456789ABCDEF"
-    
+
+  # No fixed(L) entry: Spark DDL cannot express it, and unlike time and uuid it
+  # is not caught by the guard in create_spark_schema, so PySpark writes it as a
+  # string of unstable content. build-shapes covers fixed(L) meanwhile.
+
   - name: string_small
     iceberg_type: string
     length_category: small
