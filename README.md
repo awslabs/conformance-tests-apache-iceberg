@@ -161,11 +161,15 @@ The project uses an object-oriented design with a unified CLI:
 
 ### Known Limitations
 
-**Time Data Type Issues**:
-- ❌ `time` data type has precision/timezone handling issues in PySpark
-- ❌ Excluded from minimal mode: `time`, `list<time>`, `map<int,time>`, `struct<field:time>`
-- ✅ `timestamp` and `timestamptz` work correctly
-- **Reason**: Spark lacks native TIME type, uses TIMESTAMP internally causing value shifts
+**Types Spark cannot express**:
+
+Spark SQL has no TIME, UUID or fixed-length binary type, so the PySpark backend
+cannot declare those columns in the DDL it generates. It rejects `time`, `uuid`
+and `fixed(L)` rather than substituting another type, so a run covering them
+reports those tables as failures and generates the rest.
+
+`--minimal` restricts a run to the types every backend can write, so it covers
+none of the three.
 
 ### Table Organization
 

@@ -412,8 +412,6 @@ def _generate_primitive_data(data_type, row_id):
         return datetime(2023, 1, 1).replace(hour=(row_id % 24))
     elif data_type == 'uuid':
         return uuid_lib.UUID(int=row_id).bytes
-    elif data_type == 'fixed' or data_type == 'fixed_16':
-        return f"fixed_{row_id}".ljust(16, '0')[:16].encode()
     elif data_type == 'time':
         return time(hour=(row_id % 24), minute=(row_id % 60))
     return f"value_{row_id}"
@@ -442,8 +440,9 @@ def _generate_list_element(element_type, row_id, offset):
         return Decimal(f"{row_id + offset}.{(row_id + offset)%100:02d}")
     elif element_type == 'uuid':
         return uuid_lib.UUID(int=row_id + offset).bytes
-    elif element_type == 'fixed' or element_type.startswith('fixed('):
-        return f"fixed_{row_id + offset}".ljust(16, '0')[:16].encode()
+    elif element_type.startswith('fixed('):
+        length = int(element_type[6:-1])
+        return f"fixed_{row_id + offset}".ljust(length, '0')[:length].encode()
     elif element_type == 'time':
         return f"{((row_id + offset) % 24):02d}:00:00"
     return f"item_{row_id}_{offset}"
@@ -476,8 +475,9 @@ def _generate_map_value(value_type, key):
         return Decimal(f"{key}.{key % 100:02d}")
     elif value_type == 'uuid':
         return uuid_lib.UUID(int=key).bytes
-    elif value_type == 'fixed' or value_type.startswith('fixed('):
-        return f"fixed_{key}".ljust(16, '0')[:16].encode()
+    elif value_type.startswith('fixed('):
+        length = int(value_type[6:-1])
+        return f"fixed_{key}".ljust(length, '0')[:length].encode()
     elif value_type == 'time':
         return f"{(key % 24):02d}:00:00"
     return f"value_{key}"
