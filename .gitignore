@@ -140,6 +140,7 @@ cython_debug/
 .vscode/
 
 # Test warehouses
+test-warehouse/
 test-warehouse-*/
 
 # Log files
