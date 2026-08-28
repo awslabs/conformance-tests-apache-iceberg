@@ -1704,6 +1704,15 @@ def _validate_tables(
 
     print(f"  Total expected: {len(all_expected)}")
 
+    if not all_expected:
+        print(
+            f"\nError: no tables to validate. '{specs_file}' matched none of the "
+            "table types this validator knows about, or the spec produced no "
+            "tables. Validating nothing is not a pass."
+        )
+        conn.close()
+        return False
+
     # Find only the expected tables, don't scan entire warehouse
     tables_to_validate = []
     missing_count = 0
