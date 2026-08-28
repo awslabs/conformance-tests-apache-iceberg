@@ -79,7 +79,11 @@ def load_table_specs(yaml_path, minimal=False):
                             {'name': 'value',
                              'type': data_type.get('iceberg_type', data_type['name'])}
                         ],
-                        'properties': {'format-version': str(version)}
+                        'properties': {'format-version': str(version)},
+                        # The name encodes these too, but a backend should not have
+                        # to parse the name to find out what it is writing.
+                        'compression': dict(compression),
+                        'encoding': encoding,
                     })
 
     return tables

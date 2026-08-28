@@ -46,7 +46,10 @@ class PyIcebergGenerator(TableGenerator):
 
     def _setup_warehouse(self):
         """Setup warehouse path and catalog"""
-        path = Path(self.warehouse_path)
+        # The path goes into a file:// URI that is stored as each table's
+        # location, so it has to be absolute: in `file://relative/path` the
+        # first segment parses as the authority and no reader resolves it.
+        path = Path(self.warehouse_path).resolve()
         path.mkdir(parents=True, exist_ok=True)
 
         self.catalog_config = {

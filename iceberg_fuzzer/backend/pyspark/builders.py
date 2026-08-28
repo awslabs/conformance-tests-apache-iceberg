@@ -39,11 +39,11 @@ from pyspark.sql.functions import col, lit, date_add
 from pyspark.sql.types import (
     StructType, StructField, BooleanType, IntegerType, LongType,
     FloatType, DoubleType, DecimalType, DateType, TimestampType,
-    StringType, BinaryType, ArrayType, MapType
+    StringType, BinaryType, ArrayType, MapType, TimestampNTZType
 )
 
 from iceberg_fuzzer.table_spec import load_table_specs
-from iceberg_fuzzer.common import row_id_from_index
+from iceberg_fuzzer.common import iceberg_compression_codec, row_id_from_index
 
 
 @contextmanager
@@ -439,7 +439,9 @@ def create_spark_schema(table_spec):
         elif field_type_str == 'date':
             spark_type = DateType()
         elif field_type_str == 'timestamp':
-            spark_type = TimestampType()
+            # Spark's TimestampType is zone-aware and Iceberg records it as
+            # timestamptz; the zone-free type is TimestampNTZType.
+            spark_type = TimestampNTZType()
         elif field_type_str == 'timestamptz':
             spark_type = TimestampType()
         elif field_type_str.startswith('decimal('):
@@ -470,7 +472,9 @@ def create_spark_schema(table_spec):
                 element_type = BinaryType()
             elif element_type_str == 'date':
                 element_type = DateType()
-            elif element_type_str == 'timestamp' or element_type_str == 'timestamptz':
+            elif element_type_str == 'timestamp':
+                element_type = TimestampNTZType()
+            elif element_type_str == 'timestamptz':
                 element_type = TimestampType()
             elif element_type_str.startswith('decimal('):
                 parts = element_type_str[8:-1].split(',')
@@ -516,7 +520,7 @@ def create_spark_schema(table_spec):
             elif value_type_str == 'date':
                 value_type = DateType()
             elif value_type_str == 'timestamp':
-                value_type = TimestampType()
+                value_type = TimestampNTZType()
             elif value_type_str == 'timestamptz':
                 value_type = TimestampType()
             elif value_type_str.startswith('decimal('):
@@ -873,44 +877,26 @@ def create_single_type_table(spark, warehouse_path, table_name, table_spec, coun
         if delete_existing:
             drop_table_if_exists(spark, catalog, namespace, table_name)
 
-        # Extract compression codec from table name
-        # Format: unpart_{type}_{compression}_{encoding}_{version}
-        # Compression can be: gzip_lvl1, gzip_lvl2, gzip_lvl3, zstd_lvl1, zstd_lvl2, zstd_lvl3, snappy, lz4
-        parts = table_name.split('_')
-
-        # Find compression part (comes after datatype, before encoding)
-        # Datatype can be multi-part (e.g., binary_long), so we need to find where compression starts
-        compression_keywords = ['gzip', 'zstd', 'snappy', 'lz4', 'none']
-        compression = 'snappy'  # default
-
-        for i, part in enumerate(parts):
-            if part in compression_keywords:
-                # Check if next part is lvl1/lvl2/lvl3
-                if i + 1 < len(parts) and parts[i + 1].startswith('lvl'):
-                    compression = f"{part}_{parts[i + 1]}"
-                else:
-                    compression = part
-                break
-
-        # Map compression names to Parquet codec names (strip level suffixes)
-        compression_map = {
-            'gzip': 'gzip',
-            'snappy': 'snappy',
-            'zstd': 'zstd',
-            'lz4': 'lz4_raw',
-            'none': 'uncompressed'
-        }
-
-        # Extract base compression (remove lvl1, lvl2, lvl3 suffixes)
-        base_compression = compression.split('_')[0]
-        codec = compression_map.get(base_compression, 'snappy')
+        compression = table_spec.get('compression', {})
+        codec = iceberg_compression_codec(compression.get('codec', 'snappy'))
+        if codec == 'lz4':
+            # Spark's Parquet writer only produces the LZ4_RAW framing
+            codec = 'lz4_raw'
+        level = compression.get('level')
 
         # Write 10 commits of 100 rows each
         for i in range(10):
             batch_df = generate_spark_data(spark, table_spec, 100, row_offset=i * 100)
 
             if i == 0:
-                props = {'write.parquet.compression-codec': codec}
+                props = {
+                    # format-version lives here; Iceberg defaults to 2, so a v1
+                    # table needs it set explicitly.
+                    **table_spec.get('properties', {}),
+                    'write.parquet.compression-codec': codec,
+                }
+                if level is not None:
+                    props['write.parquet.compression-level'] = str(level)
                 # Create table with SQL first
                 batch_df.createOrReplaceTempView("temp_create_data")
                 schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in batch_df.schema.fields])
