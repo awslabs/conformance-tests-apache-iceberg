@@ -155,8 +155,12 @@ class PyIcebergGenerator(TableGenerator):
         minimal: bool = False,
         random_count: int = None,
         delete_existing: bool = False
-    ):
-        """Generate simple single-type tables"""
+    ) -> bool:
+        """Generate simple single-type tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         table_specs = load_table_specs(self.specs_path, minimal=minimal)
 
         # Apply random selection if specified
@@ -202,9 +206,15 @@ class PyIcebergGenerator(TableGenerator):
                         print(f"✗ Exception creating table {table_name}: {e}")
 
         print(f"\nCompleted simple tables: {success_count}/{total_count} tables created successfully")
+        return success_count == total_count
 
-    def generate_single_table(self, table_name: str, delete_existing: bool = False):
-        """Generate a single table by name"""
+    def generate_single_table(self, table_name: str, delete_existing: bool = False) -> bool:
+        """Generate a single table by name.
+
+        Returns:
+            True if the table was created, False if the name matched no spec
+            or creation failed.
+        """
         # Try to find the table in simple specs
         try:
             simple_specs = load_table_specs(self.specs_path)
@@ -239,16 +249,8 @@ class PyIcebergGenerator(TableGenerator):
         except Exception as e:
             print(f"Error checking simple specs: {e}")
 
-        # Table not found - suggest alternatives
         print(f"❌ Table '{table_name}' not found in PyIceberg specs")
-
-        suggestions = suggest_table_names(table_name)
-        if suggestions:
-            print(f"\n💡 Did you mean one of these?")
-            for i, suggestion in enumerate(suggestions, 1):
-                print(f"   {i}. {suggestion}")
-        else:
-            print(f"\n💡 PyIceberg only supports simple tables")
+        print("\n💡 PyIceberg only supports simple tables")
 
         return False
 
@@ -275,8 +277,14 @@ class PyIcebergGenerator(TableGenerator):
         """Not supported in PyIceberg"""
         raise NotImplementedError("Evolution tables not supported in PyIceberg backend")
 
-    def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
-        """Generate minimal set of simple tables"""
+    def generate_minimal_tables(
+        self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False
+    ) -> bool:
+        """Generate minimal set of simple tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         return self.generate_simple_tables(num_parallel=num_parallel, minimal=True, random_count=random_count)
 
     def cleanup(self):

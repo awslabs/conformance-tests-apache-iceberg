@@ -22,7 +22,6 @@ KONA - Iceberg Table Fuzzer
 PySpark Iceberg table generation implementation
 """
 
-import heapq
 import logging
 import os
 import random
@@ -687,100 +686,13 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
     schema = create_spark_schema(table_spec)
     return spark.createDataFrame(data, schema)
 
-def get_all_possible_table_names(specs_path='specs'):
-    """Generate all possible table names from all spec files"""
+def create_single_table(spark, warehouse_path, table_name, delete_existing=True) -> bool:
+    """Create a single table by name from all available specs.
 
-    all_table_names = []
-
-    # Get simple table names
-    try:
-        simple_specs = load_table_specs(f'{specs_path}/simple.yaml')
-        all_table_names.extend([spec['name'] for spec in simple_specs])
-    except Exception:
-        pass  # Ignore errors
-
-    # Get write pattern table names
-    try:
-        write_pattern_specs = load_table_specs(f'{specs_path}/write_patterns.yaml')
-        all_table_names.extend([spec['name'] for spec in write_pattern_specs])
-    except Exception:
-        pass  # Ignore errors
-
-    # Get evolution table names
-    try:
-        evolution_specs = load_table_specs(f'{specs_path}/evolution.yaml')
-        all_table_names.extend([spec['name'] for spec in evolution_specs])
-    except Exception:
-        pass  # Ignore errors
-
-    # Generate partitioned table names programmatically
-    try:
-        # Load partitioned spec to get transforms and patterns
-        with open(f'{specs_path}/partitioned.yaml', 'r') as f:
-            partitioned_spec = yaml.safe_load(f)
-
-        transforms = partitioned_spec.get('partition_transforms', [])
-        patterns = partitioned_spec.get('patterns', [])
-
-        # Extract transform names and pattern names
-        transform_names = [t['name'] for t in transforms]
-        pattern_names = [p['name'] for p in patterns]
-        delete_modes = ['cow', 'posdelete']
-
-        for transform in transform_names:
-            for pattern in pattern_names:
-                for mode in delete_modes:
-                    table_name = f"part_{transform}_{pattern}_{mode}"
-                    all_table_names.append(table_name)
-    except Exception:
-        pass  # Ignore errors
-
-    return sorted(list(set(all_table_names)))
-
-def suggest_table_names(invalid_name, specs_path='specs'):
-    """Suggest closest matching table names using weighted edit distance"""
-
-    def weighted_levenshtein_distance(s1, s2):
-        if len(s1) < len(s2):
-            return weighted_levenshtein_distance(s2, s1)
-
-        if len(s2) == 0:
-            return len(s1)
-
-        previous_row = list(range(len(s2) + 1))
-        for i, c1 in enumerate(s1):
-            current_row = [i + 1]
-            for j, c2 in enumerate(s2):
-                # Weight differences more heavily at the beginning of the string
-                position_weight = 1.0 / (1.0 + i * 0.1)  # Higher weight for earlier positions
-
-                insertions = previous_row[j + 1] + position_weight
-                deletions = current_row[j] + position_weight
-                substitutions = previous_row[j] + (position_weight if c1 != c2 else 0)
-                current_row.append(min(insertions, deletions, substitutions))
-            previous_row = current_row
-
-        return previous_row[-1]
-
-    all_names = get_all_possible_table_names(specs_path)
-
-    # Calculate weighted edit distance for each name and keep top 5
-    distances = []
-    for name in all_names:
-        distance = weighted_levenshtein_distance(invalid_name.lower(), name.lower())
-        heapq.heappush(distances, (distance, name))
-
-    # Return top 5 closest matches
-    suggestions = []
-    for _ in range(min(5, len(distances))):
-        if distances:
-            _, name = heapq.heappop(distances)
-            suggestions.append(name)
-
-    return suggestions
-
-def create_single_table(spark, warehouse_path, table_name, delete_existing=True):
-    """Create a single table by name from all available specs"""
+    Returns:
+        True if the table was created, False if the name matched no spec
+        or creation failed.
+    """
 
     # Try to find the table in simple specs
     try:
@@ -838,16 +750,8 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
     except Exception:
         pass  # Ignore errors
 
-    # Table not found - suggest alternatives
     print(f"❌ Table '{table_name}' not found in any specs")
-
-    suggestions = suggest_table_names(table_name)
-    if suggestions:
-        print(f"\n💡 Did you mean one of these?")
-        for i, suggestion in enumerate(suggestions, 1):
-            print(f"   {i}. {suggestion}")
-    else:
-        print(f"\n💡 Run without --table-name to see all available tables")
+    print("\n💡 Run without --table-name to see all available tables")
 
     return False
 
@@ -2311,8 +2215,12 @@ def execute_evolution_operation(spark, catalog, namespace, table_name, operation
     except Exception as e:
         print(f"    ✗ Evolution operation {op_type} failed: {e}")
 
-def generate_evolution_tables(args, spark, warehouse_path):
-    """Generate evolution tables for testing Iceberg evolution features"""
+def generate_evolution_tables(args, spark, warehouse_path) -> bool:
+    """Generate evolution tables for testing Iceberg evolution features.
+
+    Returns:
+        True if every table in the set was created, False if any failed.
+    """
 
     with open(args.specs, 'r') as f:
         specs = yaml.safe_load(f)
@@ -2335,3 +2243,4 @@ def generate_evolution_tables(args, spark, warehouse_path):
             created += 1
 
     print(f"\nCompleted evolution tables: {created}/{total} tables created successfully")
+    return created == total

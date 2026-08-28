@@ -440,8 +440,12 @@ class PySparkGenerator(TableGenerator):
         minimal: bool = False,
         random_count: int = None,
         delete_existing: bool = False
-    ):
-        """Generate simple single-type tables"""
+    ) -> bool:
+        """Generate simple single-type tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         if delete_existing:
             print("Deleting existing simple tables before generation...")
             self.delete_tables_by_namespace("simple")
@@ -497,9 +501,15 @@ class PySparkGenerator(TableGenerator):
                     print(f"✗ Failed to create table {spec['name']}")
 
         print(f"\nCompleted single tables: {success_count}/{total_count} tables created successfully")
+        return success_count == total_count
 
-    def generate_single_table(self, table_name: str, delete_existing: bool = False):
-        """Generate a single table by name"""
+    def generate_single_table(self, table_name: str, delete_existing: bool = False) -> bool:
+        """Generate a single table by name.
+
+        Returns:
+            True if the table was created, False if the name matched no spec
+            or creation failed.
+        """
 
         # Ensure Spark session is initialized
         if not self.spark:
@@ -517,14 +527,20 @@ class PySparkGenerator(TableGenerator):
         else:
             print(f"✗ Failed to create table: {table_name}")
 
+        return success
+
 
     def generate_write_pattern_tables(
         self,
         num_parallel: int = 1,
         random_count: int = None,
         delete_existing: bool = False
-    ):
-        """Generate write-pattern tables"""
+    ) -> bool:
+        """Generate write-pattern tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         if delete_existing:
             print("Deleting existing write-pattern tables before generation...")
             self.delete_tables_by_namespace("write_pattern")
@@ -593,6 +609,7 @@ class PySparkGenerator(TableGenerator):
                     print(f"✗ Failed to create {spec['name']}: {e}")
 
         print(f"\nCompleted write-pattern tables: {success_count}/{total_count} tables created successfully")
+        return success_count == total_count
 
     def generate_partitioned_tables(
         self,
@@ -600,8 +617,12 @@ class PySparkGenerator(TableGenerator):
         random_count: int = None,
         minimal: bool = False,
         delete_existing: bool = False
-    ):
-        """Generate partitioned tables"""
+    ) -> bool:
+        """Generate partitioned tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         if delete_existing:
             print("Deleting existing partitioned tables before generation...")
             self.delete_tables_by_namespace("partitioned")
@@ -775,9 +796,14 @@ class PySparkGenerator(TableGenerator):
                     print(f"✗ Failed {spec['name']}: {e}")
 
         print(f"\nCompleted: {success_count}/{total_count} partitioned tables created")
+        return success_count == total_count
 
-    def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None):
-        """Generate minimal set of tables"""
+    def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None) -> bool:
+        """Generate minimal set of tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         table_specs = load_table_specs(self.specs_path, minimal=True)
 
         # Apply random selection if specified
@@ -814,6 +840,7 @@ class PySparkGenerator(TableGenerator):
                     print(f"✗ Failed to create table {spec['name']}")
 
         print(f"\nCompleted minimal tables: {success_count}/{total_count} tables created successfully")
+        return success_count == total_count
 
     def cleanup(self):
         """Cleanup Spark session"""
@@ -821,8 +848,14 @@ class PySparkGenerator(TableGenerator):
             self.spark.stop()
             self.spark = None
 
-    def generate_evolution_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
-        """Generate evolution tables for testing Iceberg evolution features"""
+    def generate_evolution_tables(
+        self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False
+    ) -> bool:
+        """Generate evolution tables for testing Iceberg evolution features.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         if delete_existing:
             print("Deleting existing evolution tables before generation...")
             self.delete_tables_by_namespace("evolution")
@@ -831,7 +864,7 @@ class PySparkGenerator(TableGenerator):
         self._ensure_spark()
 
         print("Generating evolution tables...")
-        generate_evolution_tables(
+        return generate_evolution_tables(
             type('Args', (), {
                 'specs': self.specs_path,
                 'num_parallel': num_parallel,

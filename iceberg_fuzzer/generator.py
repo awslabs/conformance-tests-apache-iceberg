@@ -55,23 +55,41 @@ class TableGenerator(ABC):
         return random.sample(table_specs, random_count)
 
     @abstractmethod
-    def generate_simple_tables(self, num_parallel: int = 1, minimal: bool = False, random_count: int = None):
-        """Generate simple single-type tables"""
+    def generate_simple_tables(
+        self, num_parallel: int = 1, minimal: bool = False, random_count: int = None
+    ) -> bool:
+        """Generate simple single-type tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         pass
 
     @abstractmethod
-    def generate_write_pattern_tables(self, num_parallel: int = 1, random_count: int = None):
-        """Generate write-pattern tables"""
+    def generate_write_pattern_tables(self, num_parallel: int = 1, random_count: int = None) -> bool:
+        """Generate write-pattern tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         pass
 
     @abstractmethod
-    def generate_partitioned_tables(self, num_parallel: int = 1, random_count: int = None):
-        """Generate partitioned tables"""
+    def generate_partitioned_tables(self, num_parallel: int = 1, random_count: int = None) -> bool:
+        """Generate partitioned tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         pass
 
     @abstractmethod
-    def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None):
-        """Generate minimal set of tables"""
+    def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None) -> bool:
+        """Generate minimal set of tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         pass
 
     @abstractmethod

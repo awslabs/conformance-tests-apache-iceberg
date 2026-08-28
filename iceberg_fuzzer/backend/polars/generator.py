@@ -33,7 +33,6 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import polars as pl
-import yaml
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.io.pyarrow import schema_to_pyarrow
 from pyiceberg.schema import Schema
@@ -408,8 +407,12 @@ class PolarsGenerator(TableGenerator):
         minimal: bool = False,
         random_count: int = None,
         delete_existing: bool = False
-    ):
-        """Generate simple single-type tables"""
+    ) -> bool:
+        """Generate simple single-type tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         table_specs = load_table_specs(self.specs_path, minimal=minimal)
 
         # Apply random selection if specified
@@ -435,6 +438,8 @@ class PolarsGenerator(TableGenerator):
                 if success:
                     success_count += 1
                     print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
+                else:
+                    print(f"✗ Failed to create table {spec['name']}")
         else:
             with ThreadPoolExecutor(max_workers=num_parallel) as executor:
                 futures = {executor.submit(self._create_simple_table, spec): spec for spec in table_specs}
@@ -445,88 +450,46 @@ class PolarsGenerator(TableGenerator):
                         if success:
                             success_count += 1
                             print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
+                        else:
+                            print(f"✗ Failed to create table {spec['name']}")
                     except Exception as e:
                         print(f"    → Failed to create table {spec['name']}: {e}")
 
         print(f"\nCompleted simple tables: {success_count}/{total_count} tables created successfully")
+        return success_count == total_count
 
-    def generate_single_table(self, table_name: str, delete_existing: bool = False):
-        """Generate a single table by name"""
+    def generate_single_table(self, table_name: str, delete_existing: bool = False) -> bool:
+        """Generate a single table by name.
 
-        # Load table specs to find the requested table
-        with open(self.specs_path, 'r') as f:
-            specs = yaml.safe_load(f)
+        Returns:
+            True if the table was created, False if the name matched no spec
+            or creation failed.
+        """
 
-        # Get all type definitions
-        all_types = []
-        all_types.extend(specs.get('primitive_types', []))
-        all_types.extend(specs.get('complex_types_list', []))
+        for spec in load_table_specs(self.specs_path):
+            if spec['name'] != table_name:
+                continue
 
-        # Generate all possible table specs to find match
-        compression_configs = []
-        for comp_config in specs.get('compression_configs', []):
-            codec = comp_config['codec']
-            levels = comp_config.get('levels', [None])
-            for level in levels:
-                compression_configs.append({'codec': codec, 'level': level})
+            print(f"Creating single table: {table_name}")
 
-        encoding_types = specs.get('encoding_types', ['PLAIN'])
-        iceberg_versions = []
-        for version_config in specs.get('iceberg_versions', [{'version': 2, 'namespace': 'v2'}]):
-            iceberg_versions.append(f"v{version_config['version']}")
+            if not delete_existing:
+                try:
+                    catalog = self._get_catalog()
+                    catalog.load_table(f"simple.{table_name}")
+                    print(f"Skipping existing table: {table_name}")
+                    return True
+                except Exception:
+                    pass  # Table doesn't exist, continue with creation
 
-        # Find matching table spec
-        for type_def in all_types:
-            for compression in compression_configs:
-                for encoding in encoding_types:
-                    for version in iceberg_versions:
-                        comp_str = f"{compression['codec']}"
-                        if compression['level'] is not None:
-                            comp_str += f"_lvl{compression['level']}"
+            if self._create_simple_table(spec):
+                print(f"✓ Successfully created table: {table_name}")
+                return True
 
-                        generated_name = f"unpart_{type_def['name']}_{comp_str}_{encoding.lower()}_{version}"
+            print(f"✗ Failed to create table: {table_name}")
+            return False
 
-                        if generated_name == table_name:
-                            # Found match - create the table
-                            spec = {
-                                'name': table_name,
-                                'field_name': type_def['name'],
-                                'iceberg_type': type_def['iceberg_type'],
-                                'compression': compression,
-                                'encoding': encoding,
-                                'version': version
-                            }
-
-                            print(f"Creating single table: {table_name}")
-
-                            # Check if table exists and skip if delete_existing is False
-                            if not delete_existing:
-                                try:
-                                    catalog = self._get_catalog()
-                                    catalog.load_table(f"simple.{table_name}")
-                                    print(f"Skipping existing table: {table_name}")
-                                    return True
-                                except Exception:
-                                    pass  # Table doesn't exist, continue with creation
-
-                            success = self._create_simple_table(spec)
-                            if success:
-                                print(f"✓ Successfully created table: {table_name}")
-                                return True
-                            else:
-                                print(f"✗ Failed to create table: {table_name}")
-                                return False
-
-        # Table not found - suggest alternatives
         print(f"❌ Table '{table_name}' not found in Polars specs")
-
-        suggestions = suggest_table_names(table_name)
-        if suggestions:
-            print(f"\n💡 Did you mean one of these?")
-            for i, suggestion in enumerate(suggestions, 1):
-                print(f"   {i}. {suggestion}")
-        else:
-            print(f"\n💡 Polars only supports simple tables (primitives + lists)")
+        print("\n💡 Polars only supports simple tables (primitives + lists)")
 
         return False
 
@@ -553,8 +516,14 @@ class PolarsGenerator(TableGenerator):
         """Evolution tables not supported in Polars"""
         raise NotImplementedError("Evolution tables only supported in PySpark backend")
 
-    def generate_minimal_tables(self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False):
-        """Generate minimal set of simple tables"""
+    def generate_minimal_tables(
+        self, num_parallel: int = 1, random_count: int = None, delete_existing: bool = False
+    ) -> bool:
+        """Generate minimal set of simple tables.
+
+        Returns:
+            True if every table in the set was created, False if any failed.
+        """
         return self.generate_simple_tables(num_parallel=num_parallel, minimal=True, random_count=random_count)
 
     def cleanup(self):
