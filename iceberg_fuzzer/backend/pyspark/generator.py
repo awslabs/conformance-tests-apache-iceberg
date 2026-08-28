@@ -34,6 +34,7 @@ import boto3
 from backend.pyspark.builders import (
     create_spark_session,
     is_s3_table_warehouse,
+    get_catalog_name,
     create_single_type_table,
     create_comprehensive_table,
     create_partitioned_table,
@@ -228,46 +229,44 @@ class PySparkGenerator(TableGenerator):
             print(f"S3 Tables namespace deletion failed: {e}, falling back to Spark...")
             return self._delete_spark_tables_by_namespace(namespace, num_parallel)
 
+    def _configured_catalog(self) -> str:
+        """Return the Iceberg catalog name this generator reads and writes.
+
+        `SHOW CATALOGS` cannot be used to discover it. Spark only lists catalogs
+        it has already initialised, and the Iceberg catalog is configured
+        lazily, so it is absent from that listing until some query touches it.
+        """
+        return get_catalog_name(self.warehouse_path)
+
     def _delete_spark_tables(self, num_parallel: int):
         """Original Spark-based deletion method"""
         self._ensure_spark()
 
         # Collect all table names first
         tables_to_delete = []
+        catalog_name = self._configured_catalog()
 
         try:
-            # Get all catalogs and namespaces
-            catalogs = self.spark.sql("SHOW CATALOGS").collect()
+            # Get all namespaces in the configured catalog
+            namespaces = self.spark.sql(f"SHOW NAMESPACES IN {catalog_name}").collect()
 
-            for catalog_row in catalogs:
-                catalog_name = catalog_row['catalog']
-                if catalog_name in ['spark_catalog', 'system']:
-                    continue  # Skip system catalogs
+            for namespace_row in namespaces:
+                namespace = namespace_row['namespace']
 
                 try:
-                    # Get all namespaces in this catalog
-                    namespaces = self.spark.sql(f"SHOW NAMESPACES IN {catalog_name}").collect()
+                    # Get all tables in this namespace
+                    tables = self.spark.sql(f"SHOW TABLES IN {catalog_name}.{namespace}").collect()
 
-                    for namespace_row in namespaces:
-                        namespace = namespace_row['namespace']
-
-                        try:
-                            # Get all tables in this namespace
-                            tables = self.spark.sql(f"SHOW TABLES IN {catalog_name}.{namespace}").collect()
-
-                            for table_row in tables:
-                                table_name = table_row['tableName']
-                                full_table_name = f"{catalog_name}.{namespace}.{table_name}"
-                                tables_to_delete.append(full_table_name)
-
-                        except Exception as e:
-                            print(f"Warning: Could not list tables in {catalog_name}.{namespace}: {e}")
+                    for table_row in tables:
+                        table_name = table_row['tableName']
+                        full_table_name = f"{catalog_name}.{namespace}.{table_name}"
+                        tables_to_delete.append(full_table_name)
 
                 except Exception as e:
-                    print(f"Warning: Could not list namespaces in {catalog_name}: {e}")
+                    print(f"Warning: Could not list tables in {catalog_name}.{namespace}: {e}")
 
         except Exception as e:
-            print(f"Warning: Could not list catalogs: {e}")
+            print(f"Warning: Could not list namespaces in {catalog_name}: {e}")
             return
 
         if not tables_to_delete:
@@ -347,34 +346,24 @@ class PySparkGenerator(TableGenerator):
         self._ensure_spark()
 
         tables_to_delete = []
+        catalog_name = self._configured_catalog()
 
         try:
-            catalogs = self.spark.sql("SHOW CATALOGS").collect()
+            # Check if namespace exists in the configured catalog
+            namespaces = self.spark.sql(f"SHOW NAMESPACES IN {catalog_name}").collect()
+            namespace_exists = any(ns['namespace'] == namespace for ns in namespaces)
 
-            for catalog_row in catalogs:
-                catalog_name = catalog_row['catalog']
-                if catalog_name in ['spark_catalog', 'system']:
-                    continue
+            if namespace_exists:
+                # Get tables in this specific namespace
+                tables = self.spark.sql(f"SHOW TABLES IN {catalog_name}.{namespace}").collect()
 
-                try:
-                    # Check if namespace exists in this catalog
-                    namespaces = self.spark.sql(f"SHOW NAMESPACES IN {catalog_name}").collect()
-                    namespace_exists = any(ns['namespace'] == namespace for ns in namespaces)
-
-                    if namespace_exists:
-                        # Get tables in this specific namespace
-                        tables = self.spark.sql(f"SHOW TABLES IN {catalog_name}.{namespace}").collect()
-
-                        for table_row in tables:
-                            table_name = table_row['tableName']
-                            full_table_name = f"{catalog_name}.{namespace}.{table_name}"
-                            tables_to_delete.append(full_table_name)
-
-                except Exception as e:
-                    print(f"Warning: Could not check namespace {namespace} in {catalog_name}: {e}")
+                for table_row in tables:
+                    table_name = table_row['tableName']
+                    full_table_name = f"{catalog_name}.{namespace}.{table_name}"
+                    tables_to_delete.append(full_table_name)
 
         except Exception as e:
-            print(f"Warning: Could not list catalogs: {e}")
+            print(f"Warning: Could not check namespace {namespace} in {catalog_name}: {e}")
             return
 
         if not tables_to_delete:
