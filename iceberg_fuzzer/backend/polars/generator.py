@@ -33,53 +33,19 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import polars as pl
-import pyarrow as pa
 import yaml
 from pyiceberg.catalog.sql import SqlCatalog
+from pyiceberg.io.pyarrow import schema_to_pyarrow
 from pyiceberg.schema import Schema
 from pyiceberg.types import (
     BooleanType, IntegerType, LongType, FloatType, DoubleType,
-    StringType, BinaryType, DateType, TimeType, TimestampType, UUIDType,
+    StringType, BinaryType, DateType, TimeType, TimestampType, TimestamptzType, UUIDType,
     DecimalType, FixedType, ListType, NestedField, MapType, StructType as IcebergStructType
 )
 
 from iceberg_fuzzer.generator import TableGenerator
 from iceberg_fuzzer.table_spec import load_table_specs
-from iceberg_fuzzer.common import row_id_from_index
-
-
-def _align_arrow_column(
-    arrow_table: pa.Table, field_name: str, iceberg_type: str
-) -> pa.Table:
-    """Coerce a Polars-produced column to the Arrow type PyIceberg requires.
-
-    Polars has no dtype for two of the Iceberg types this generator writes, so
-    the column arrives as the nearest Polars equivalent and is converted here:
-
-      - time:  Polars produces time64[ns]; Iceberg's time is microseconds.
-      - uuid:  Polars has no UUID dtype, so values arrive as variable-length
-               binary. Iceberg's uuid is 16 fixed bytes and not merely a
-               logical annotation, so the cast to binary(16) pins the width —
-               a value of any other length fails here — and the Arrow uuid
-               extension type supplies the annotation.
-    """
-    idx = arrow_table.schema.get_field_index(field_name)
-    column = arrow_table.column(idx)
-
-    if iceberg_type == 'time':
-        column = column.cast(pa.time64('us'))
-    elif iceberg_type == 'uuid':
-        column = pa.chunked_array(
-            [
-                pa.ExtensionArray.from_storage(pa.uuid(), chunk.cast(pa.binary(16)))
-                for chunk in column.chunks
-            ],
-            type=pa.uuid(),
-        )
-    else:
-        return arrow_table
-
-    return arrow_table.set_column(idx, field_name, column)
+from iceberg_fuzzer.common import iceberg_compression_codec, row_id_from_index
 
 
 class PolarsGenerator(TableGenerator):
@@ -91,7 +57,10 @@ class PolarsGenerator(TableGenerator):
 
     def _setup_warehouse(self):
         """Setup warehouse path and catalog"""
-        path = Path(self.warehouse_path)
+        # The path goes into a file:// URI that is stored as each table's
+        # location, so it has to be absolute: in `file://relative/path` the
+        # first segment parses as the authority and no reader resolves it.
+        path = Path(self.warehouse_path).resolve()
         path.mkdir(parents=True, exist_ok=True)
 
         self.catalog_config = {
@@ -130,7 +99,7 @@ class PolarsGenerator(TableGenerator):
             'date': DateType(),
             'time': TimeType(),
             'timestamp': TimestampType(),
-            'timestamptz': TimestampType(),
+            'timestamptz': TimestamptzType(),
             'decimal(10,2)': DecimalType(10, 2),
             'uuid': UUIDType(),
         }
@@ -170,113 +139,122 @@ class PolarsGenerator(TableGenerator):
 
         return type_map.get(iceberg_type_str, StringType())
 
-    def _generate_polars_data(self, field_name: str, iceberg_type: str, num_rows: int, row_offset: int = 0):
-        """Generate data using Polars to match PySpark/PyIceberg patterns"""
+    def _generate_polars_data(
+        self,
+        field_name: str,
+        iceberg_type: str,
+        num_rows: int,
+        first_row_id: int = 1,
+    ):
+        """Generate data using Polars to match PySpark/PyIceberg patterns.
+
+        `first_row_id` is the ID of the batch's first row. Values are derived
+        from the row ID rather than the batch index, so the validator can
+        predict a row's value from the ID it reads back.
+        """
 
         # Use iceberg_type instead of field_name for type determination
         if iceberg_type == 'boolean':
-            return [(i + row_offset) % 2 == 0 for i in range(num_rows)]
-        elif field_name == 'id':
-            return [row_id_from_index(i, row_offset) for i in range(num_rows)]
+            return [(i + first_row_id) % 2 == 0 for i in range(num_rows)]
         elif iceberg_type == 'int':
-            return list(range(row_offset, num_rows + row_offset))
+            return list(range(first_row_id, num_rows + first_row_id))
         elif iceberg_type == 'long':
-            return [(i + row_offset) * 1000 for i in range(num_rows)]
+            return [(i + first_row_id) * 1000 for i in range(num_rows)]
         elif iceberg_type == 'float':
-            return [float(i + row_offset) + 0.5 for i in range(num_rows)]
+            return [float(i + first_row_id) + 0.5 for i in range(num_rows)]
         elif iceberg_type == 'double':
-            return [float(i + row_offset) * 1.5 for i in range(num_rows)]
+            return [float(i + first_row_id) * 1.5 for i in range(num_rows)]
         elif iceberg_type.startswith('decimal'):
-            return [Decimal(f"{i + row_offset}.{(i + row_offset) % 100:02d}") for i in range(num_rows)]
+            return [Decimal(f"{i + first_row_id}.{(i + first_row_id) % 100:02d}") for i in range(num_rows)]
         elif iceberg_type == 'date':
-            return [date(2023, 1, ((i + row_offset) % 28) + 1) for i in range(num_rows)]
+            return [date(2023, 1, ((i + first_row_id) % 28) + 1) for i in range(num_rows)]
         elif iceberg_type == 'time':
             return [
-                time(hour=(i + row_offset) % 24, minute=(i + row_offset) % 60)
+                time(hour=(i + first_row_id) % 24, minute=(i + first_row_id) % 60)
                 for i in range(num_rows)
             ]
         elif iceberg_type in ['timestamp', 'timestamptz']:
-            return [datetime(2023, 1, 1, (i + row_offset) % 24, 0, 0) for i in range(num_rows)]
+            return [datetime(2023, 1, 1, (i + first_row_id) % 24, 0, 0) for i in range(num_rows)]
         elif iceberg_type == 'uuid':
-            return [uuid.UUID(int=i + row_offset).bytes for i in range(num_rows)]
+            return [uuid.UUID(int=i + first_row_id).bytes for i in range(num_rows)]
         elif iceberg_type == 'string':
-            return [f"value_{i + row_offset}" for i in range(num_rows)]
+            return [f"value_{i + first_row_id}" for i in range(num_rows)]
         elif iceberg_type == 'binary':
-            return [f"value_{i + row_offset}".encode() for i in range(num_rows)]
+            return [f"value_{i + first_row_id}".encode() for i in range(num_rows)]
         # List types
         elif iceberg_type.startswith('list<'):
             element_type = iceberg_type[5:-1]  # Extract element type from list<type>
             if element_type == 'boolean':
                 result = []
                 for i in range(num_rows):
-                    row_id = i + row_offset
+                    row_id = i + first_row_id
                     if row_id % 2 == 1:  # odd rows
                         result.append([True, False, False])
                     else:  # even rows
                         result.append([False, True, True])
                 return result
             elif element_type == 'int':
-                return [[i + row_offset, i + 1 + row_offset, i + 2 + row_offset]
+                return [[i + first_row_id, i + 1 + first_row_id, i + 2 + first_row_id]
                         for i in range(num_rows)]
             elif element_type == 'long':
                 return [
-                    [(i + row_offset) * 1000, (i + 1 + row_offset) * 1000,
-                     (i + 2 + row_offset) * 1000]
+                    [(i + first_row_id) * 1000, (i + 1 + first_row_id) * 1000,
+                     (i + 2 + first_row_id) * 1000]
                     for i in range(num_rows)
                 ]
             elif element_type == 'float':
                 return [
-                    [float(i + row_offset) + 0.5, float(i + 1 + row_offset) + 0.5,
-                     float(i + 2 + row_offset) + 0.5]
+                    [float(i + first_row_id) + 0.5, float(i + 1 + first_row_id) + 0.5,
+                     float(i + 2 + first_row_id) + 0.5]
                     for i in range(num_rows)
                 ]
             elif element_type == 'double':
                 return [
-                    [float(i + row_offset) * 1.5, float(i + 1 + row_offset) * 1.5,
-                     float(i + 2 + row_offset) * 1.5]
+                    [float(i + first_row_id) * 1.5, float(i + 1 + first_row_id) * 1.5,
+                     float(i + 2 + first_row_id) * 1.5]
                     for i in range(num_rows)
                 ]
             elif element_type.startswith('decimal'):
                 return [
                     [
-                        Decimal(f"{i + row_offset}.{(i + row_offset) % 100:02d}"),
-                        Decimal(f"{i + 1 + row_offset}.{(i + 1 + row_offset) % 100:02d}"),
-                        Decimal(f"{i + 2 + row_offset}.{(i + 2 + row_offset) % 100:02d}")
+                        Decimal(f"{i + first_row_id}.{(i + first_row_id) % 100:02d}"),
+                        Decimal(f"{i + 1 + first_row_id}.{(i + 1 + first_row_id) % 100:02d}"),
+                        Decimal(f"{i + 2 + first_row_id}.{(i + 2 + first_row_id) % 100:02d}")
                     ]
                     for i in range(num_rows)
                 ]
             elif element_type == 'date':
                 return [
-                    [date(2023, 1, ((i + row_offset) % 28) + 1),
-                     date(2023, 1, ((i + 1 + row_offset) % 28) + 1),
-                     date(2023, 1, ((i + 2 + row_offset) % 28) + 1)]
+                    [date(2023, 1, ((i + first_row_id) % 28) + 1),
+                     date(2023, 1, ((i + 1 + first_row_id) % 28) + 1),
+                     date(2023, 1, ((i + 2 + first_row_id) % 28) + 1)]
                     for i in range(num_rows)
                 ]
             elif element_type == 'uuid':
                 return [
-                    [f"uuid_{i + row_offset}".encode()[:16].ljust(16, b'\x00'),
-                     f"uuid_{i + 1 + row_offset}".encode()[:16].ljust(16, b'\x00'),
-                     f"uuid_{i + 2 + row_offset}".encode()[:16].ljust(16, b'\x00')]
+                    [f"uuid_{i + first_row_id}".encode()[:16].ljust(16, b'\x00'),
+                     f"uuid_{i + 1 + first_row_id}".encode()[:16].ljust(16, b'\x00'),
+                     f"uuid_{i + 2 + first_row_id}".encode()[:16].ljust(16, b'\x00')]
                     for i in range(num_rows)
                 ]
             elif element_type == 'string':
                 return [
-                    [f"item_{i + row_offset}_0", f"item_{i + row_offset}_1",
-                     f"item_{i + row_offset}_2"]
+                    [f"item_{i + first_row_id}_0", f"item_{i + first_row_id}_1",
+                     f"item_{i + first_row_id}_2"]
                     for i in range(num_rows)
                 ]
             elif element_type == 'binary':
                 return [
-                    [f"item_{i + row_offset}_0".encode(),
-                     f"item_{i + row_offset}_1".encode(),
-                     f"item_{i + row_offset}_2".encode()]
+                    [f"item_{i + first_row_id}_0".encode(),
+                     f"item_{i + first_row_id}_1".encode(),
+                     f"item_{i + first_row_id}_2".encode()]
                     for i in range(num_rows)
                 ]
             else:
                 return [["item1", "item2", "item3"] for i in range(num_rows)]
         else:
             # Default fallback
-            return [f"value_{i + 1 + row_offset}" for i in range(num_rows)]
+            return [f"value_{i + first_row_id}" for i in range(num_rows)]
 
     def _get_polars_dtype(self, field_name: str, iceberg_type: str):
         """Get appropriate Polars dtype for field"""
@@ -294,8 +272,12 @@ class PolarsGenerator(TableGenerator):
             return pl.Date
         elif iceberg_type == 'time':
             return pl.Time
-        elif iceberg_type in ['timestamp', 'timestamptz']:
+        elif iceberg_type == 'timestamp':
             return pl.Datetime('us')  # microseconds
+        elif iceberg_type == 'timestamptz':
+            # Iceberg's timestamptz is instants in UTC; a naive dtype would be
+            # written as the tz-free `timestamp` instead.
+            return pl.Datetime('us', time_zone='UTC')
         elif iceberg_type.startswith('decimal'):
             return pl.Decimal(precision=10, scale=2)
         elif iceberg_type in ['binary'] or iceberg_type.startswith('fixed'):
@@ -349,6 +331,7 @@ class PolarsGenerator(TableGenerator):
                 NestedField(1, "id", IntegerType(), required=False),
                 NestedField(2, field_name, iceberg_field_type, required=False)
             )
+            arrow_schema = schema_to_pyarrow(schema)
 
             table_identifier = f"simple.{table_name}"
 
@@ -358,18 +341,8 @@ class PolarsGenerator(TableGenerator):
             except Exception:
                 pass  # Ignore errors
 
-            # Map compression codec
-            compression_map = {
-                'gzip': 'gzip',
-                'snappy': 'snappy',
-                'zstd': 'zstd',
-                'lz4': 'lz4',
-                'none': 'uncompressed'
-            }
-
-            # Extract compression from table spec
-            compression_codec = table_spec.get('compression', {}).get('codec', 'snappy')
-            parquet_codec = compression_map.get(compression_codec, 'snappy')
+            compression = table_spec.get('compression', {})
+            level = compression.get('level')
 
             # Create table
             table = catalog.create_table(
@@ -377,15 +350,27 @@ class PolarsGenerator(TableGenerator):
                 schema=schema,
                 properties={
                     "format-version": str(version),
-                    "write.parquet.compression-codec": parquet_codec
+                    "write.parquet.compression-codec": iceberg_compression_codec(
+                        compression.get('codec', 'snappy')
+                    ),
+                    **({} if level is None else {
+                        "write.parquet.compression-level": str(level)
+                    }),
                 }
             )
 
             # Generate data in 10 commits using Polars
+            rows_per_commit = 100
             for commit in range(10):
-                start_id = commit * 100
-                ids = list(range(start_id, start_id + 100))
-                values = self._generate_polars_data(field_name, iceberg_type, 100, start_id)
+                row_offset = commit * rows_per_commit
+                ids = [
+                    row_id_from_index(i, row_offset) for i in range(rows_per_commit)
+                ]
+                # Values are derived from the row ID, not the index, so a row's
+                # value stays predictable from its ID across commits.
+                values = self._generate_polars_data(
+                    field_name, iceberg_type, rows_per_commit, ids[0]
+                )
 
                 # Get appropriate dtype
                 value_dtype = self._get_polars_dtype(field_name, iceberg_type)
@@ -402,10 +387,14 @@ class PolarsGenerator(TableGenerator):
                         field_name: values
                     })
 
-                arrow_table = _align_arrow_column(
-                    df.to_arrow(), field_name, iceberg_type
-                )
-                table.append(arrow_table)
+                # Polars has no dtype for every Iceberg type, so some columns
+                # arrive as the nearest equivalent (time64[ns] for time,
+                # variable-length binary for uuid). Casting to the Arrow schema
+                # PyIceberg derives from the table's own schema is what fixes
+                # the physical representation: the microsecond unit, and the
+                # 16-byte width behind uuid's logical annotation, so a value of
+                # any other length fails here.
+                table.append(df.to_arrow().cast(arrow_schema))
 
             catalog.close()
             return True

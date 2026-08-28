@@ -27,9 +27,9 @@ validation_queries:
     expected_min: 10
   
   - name: "id_range"
-    description: "Verify ID column ranges from 0 to 999"
+    description: "Verify ID column ranges from 1 to 1000"
     query: "SELECT MIN(id) as min_id, MAX(id) as max_id FROM {table}"
-    expected: {"min_id": 0, "max_id": 999}
+    expected: {"min_id": 1, "max_id": 1000}
   
   - name: "snapshot_count"
     description: "Verify number of commits/snapshots"
