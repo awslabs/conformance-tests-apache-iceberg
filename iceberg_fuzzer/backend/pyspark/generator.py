@@ -90,7 +90,7 @@ class PySparkGenerator(TableGenerator):
         try:
 
             # Parse S3 Tables ARN
-            # arn:aws:s3tables:us-west-2:438336019674:bucket/test-bucket
+            # arn:aws:s3tables:us-west-2:123456789012:bucket/test-bucket
             arn_parts = self.warehouse_path.split(':')
             region = arn_parts[3]
 

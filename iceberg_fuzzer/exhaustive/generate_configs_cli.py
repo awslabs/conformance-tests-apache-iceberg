@@ -3,9 +3,9 @@
 CLI Entry Point for Table Configuration Generator
 
 Usage:
-    python run_generator.py --output configs.jsonl
-    python run_generator.py --max-rows 3 --output test.jsonl --limit 100
-    python run_generator.py --progress --output all_configs.jsonl
+    %(prog)s --output configs.jsonl
+    %(prog)s --max-rows 3 --output test.jsonl --limit 100
+    %(prog)s --progress --output all_configs.jsonl
 """
 
 import argparse
@@ -23,16 +23,16 @@ def main():
         epilog="""
 Examples:
   # Default mode: Equivalence-based (recommended)
-  python run_generator.py --output configs.jsonl --progress
+  %(prog)s --output configs.jsonl --progress
 
   # Exhaustive mode with small limit (for testing)
-  python run_generator.py --exhaustive --limit 3 --output test.jsonl
+  %(prog)s --exhaustive --limit 3 --output test.jsonl
 
   # Generate for rows 1-3 only
-  python run_generator.py --max-rows 3 --output small.jsonl
+  %(prog)s --max-rows 3 --output small.jsonl
 
   # Custom random seed
-  python run_generator.py --seed 123 --output configs.jsonl
+  %(prog)s --seed 123 --output configs.jsonl
 
 Modes:
   Default (equivalence-based):

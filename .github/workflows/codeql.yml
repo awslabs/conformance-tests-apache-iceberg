@@ -5,7 +5,7 @@ on:
   pull_request:
   merge_group:
   schedule:
-    - cron: '28 2 * * 5'  # Weekly on Monday at 5:00 UTC
+    - cron: '28 2 * * 5'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
