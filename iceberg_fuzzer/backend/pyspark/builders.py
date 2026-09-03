@@ -42,6 +42,12 @@ from pyspark.sql.types import (
 
 from iceberg_fuzzer.table_spec import load_table_specs
 from iceberg_fuzzer.common import row_id_from_index
+from iceberg_fuzzer.common.mixed_chaos import (
+    MIXED_CHAOS_TOTAL_ROWS_FINAL,
+    POSDELETE_MODULUS,
+    mixed_chaos_append_batches,
+    mixed_chaos_delete_chunks,
+)
 
 
 @contextmanager
@@ -1467,6 +1473,50 @@ def generate_partitioned_data(spark, schema_spec, num_rows=100, row_offset=0):
 
     return spark.createDataFrame(data, schema)
 
+def build_create_table_sql(qualified_name, schema_fields, partition_clause, props_sql):
+    """The CREATE TABLE statement for a partitioned table."""
+    sql = f"CREATE TABLE {qualified_name} ({schema_fields}) USING iceberg"
+    if partition_clause:
+        sql += f" {partition_clause}"
+    if props_sql:
+        sql += f" TBLPROPERTIES ({props_sql})"
+    return sql
+
+
+def build_partition_clause(partition_specs):
+    """The `PARTITIONED BY (...)` clause for a parsed partition spec, or ''.
+
+    Spark's own transform names, which are not the spec's: `year` is written
+    `years`, and `bucket`/`truncate` take the parameter first.
+    """
+    fields = []
+    for transform, col_name, param in partition_specs:
+        match transform:
+            case 'identity':
+                fields.append(col_name)
+            case 'bucket':
+                fields.append(f"bucket({param}, {col_name})")
+            case 'truncate':
+                fields.append(f"truncate({param}, {col_name})")
+            case 'date':
+                fields.append(f"date({col_name})")
+            case 'year':
+                fields.append(f"years({col_name})")
+            case 'month':
+                fields.append(f"months({col_name})")
+            case 'day':
+                fields.append(f"days({col_name})")
+            case 'hour':
+                fields.append(f"hours({col_name})")
+            case 'void':
+                fields.append(f"void({col_name})")
+            case _:
+                raise ValueError(f"Unrecognised partition transform: {transform!r}")
+    if not fields:
+        return ''
+    return f"PARTITIONED BY ({', '.join(fields)})"
+
+
 def parse_partition_spec(spec_str):
     """Parse partition spec string into list of (transform, column, param) tuples"""
     # Smart split that respects parentheses
@@ -1601,28 +1651,6 @@ def create_partitioned_table(
         partition_specs = parse_partition_spec(partition_spec)
         sort_cols = get_sort_columns(partition_specs)
 
-        # Build SQL partition spec
-        partition_spec_sql = []
-        for transform, col_name, param in partition_specs:
-            if transform == 'identity':
-                partition_spec_sql.append(col_name)
-            elif transform == 'bucket':
-                partition_spec_sql.append(f"bucket({param}, {col_name})")
-            elif transform == 'truncate':
-                partition_spec_sql.append(f"truncate({param}, {col_name})")
-            elif transform == 'date':
-                partition_spec_sql.append(f"date({col_name})")
-            elif transform == 'year':
-                partition_spec_sql.append(f"years({col_name})")
-            elif transform == 'month':
-                partition_spec_sql.append(f"months({col_name})")
-            elif transform == 'day':
-                partition_spec_sql.append(f"days({col_name})")
-            elif transform == 'hour':
-                partition_spec_sql.append(f"hours({col_name})")
-            elif transform == 'void':
-                partition_spec_sql.append(f"void({col_name})")
-
         # Build table properties - use snappy compression and plain encoding for partitioned tables
         props = get_table_properties(table_name)
 
@@ -1641,9 +1669,12 @@ def create_partitioned_table(
         schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in schema_df.schema.fields])
 
         # Build CREATE TABLE statement with properties
-        create_sql = f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg"
-        if props_sql:
-            create_sql += f" TBLPROPERTIES ({props_sql})"
+        create_sql = build_create_table_sql(
+            f"{catalog}.{namespace}.{table_name}",
+            schema_fields,
+            build_partition_clause(partition_specs),
+            props_sql,
+        )
 
         spark.sql(create_sql)
 
@@ -1691,36 +1722,33 @@ def create_partitioned_table(
                 spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name} WHERE id > 100000")
 
         elif pattern_name == "mixed_chaos":
-            # Create 150K rows, delete 1/3, add back to reach 100K
-            for i in range(15):
-                batch_df = generate_partitioned_data(spark, schema_spec, 10000, i * 10000)
+            for batch_rows, row_offset in mixed_chaos_append_batches():
+                batch_df = generate_partitioned_data(
+                    spark, schema_spec, batch_rows, row_offset
+                )
                 batch_df = prepare_partitioned_df(batch_df, sort_cols, 3)
                 batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
 
             if "cow" in table_name:
                 # COW: Use overwrite
-                final_df = generate_partitioned_data(spark, schema_spec, 100000, 0)
+                final_df = generate_partitioned_data(
+                    spark, schema_spec, MIXED_CHAOS_TOTAL_ROWS_FINAL, 0
+                )
                 final_df = prepare_partitioned_df(final_df, sort_cols, 3)
                 final_df.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
             else:
-                # Posdelete: Force position deletes with multiple DELETE operations
-                # Delete in smaller chunks to force position delete files
-                for chunk in range(5):
-                    start_id = 100000 + (chunk * 10000) + 1
-                    end_id = 100000 + ((chunk + 1) * 10000)
-                    try:
-                        spark.sql(
-                            f"DELETE FROM {catalog}.{namespace}.{table_name} "
-                            f"WHERE id >= {start_id} AND id < {end_id}"
-                        )
-                        print(f"✓ DELETE chunk {chunk+1}/5 for {table_name}")
-                    except Exception as e:
-                        print(f"✗ DELETE failed for {table_name}: {e}")
-                        # Fallback to overwrite if DELETE fails
-                        final_df = generate_partitioned_data(spark, schema_spec, 100000, 0)
-                        final_df = prepare_partitioned_df(final_df, sort_cols, 3)
-                        final_df.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
-                        break
+                # Delete every POSDELETE_MODULUS-th row so each data file is
+                # left partly deleted. A contiguous range lines up with the append
+                # batches and is satisfied by dropping whole files, leaving no
+                # position delete.
+                chunks = mixed_chaos_delete_chunks()
+                for number, (start_id, end_id) in enumerate(chunks, start=1):
+                    spark.sql(
+                        f"DELETE FROM {catalog}.{namespace}.{table_name} "
+                        f"WHERE id % {POSDELETE_MODULUS} = 0 "
+                        f"AND id >= {start_id} AND id <= {end_id}"
+                    )
+                    print(f"✓ DELETE chunk {number}/{len(chunks)} for {table_name}")
 
         else:
             # Default: append-only pattern (100K rows)
