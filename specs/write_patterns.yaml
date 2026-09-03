@@ -3,64 +3,13 @@
 metadata:
   description: "Comprehensive multi-column tables with different write patterns for compaction testing"
   total_columns: 24
-  final_rows: 10000  # Updated to match actual PySpark implementation
+  final_rows: 10000
   deterministic_data: true
-  
-# Schema definition for all write-pattern tables
-schema:
-  - name: id
-    type: int
-    description: "Primary key, sequential integers 1-1000"
-    
-  # 20 primitive type columns
-  - name: boolean_col
-    type: boolean
-  - name: int_col
-    type: int
-  - name: long_col
-    type: long
-  - name: float_col
-    type: float
-  - name: double_col
-    type: double
-  - name: string_col
-    type: string
-  - name: binary_col
-    type: binary
-  - name: date_col
-    type: date
-  - name: time_col
-    type: time
-  - name: timestamp_col
-    type: timestamp
-  - name: timestamptz_col
-    type: timestamptz
-  - name: decimal_col
-    type: decimal(10,2)
-  - name: uuid_col
-    type: uuid
-  - name: fixed_col
-    type: fixed(16)
-  - name: string_small_col
-    type: string
-  - name: string_medium_col
-    type: string
-  - name: string_long_col
-    type: string
-  - name: binary_small_col
-    type: binary
-  - name: binary_medium_col
-    type: binary
-  - name: binary_long_col
-    type: binary
-    
-  # 3 list type columns
-  - name: list_boolean_col
-    type: list<boolean>
-  - name: list_int_col
-    type: list<int>
-  - name: list_string_col
-    type: list<string>
+
+# The 24-column schema these tables use is declared in
+# iceberg_fuzzer/backend/pyspark/builders.py, and the pattern list `generate`
+# writes is declared in iceberg_fuzzer/backend/pyspark/generator.py. The DuckDB
+# validator reads `patterns`, `table_config` and `metadata` from here.
 
 # Write patterns for different compaction scenarios
 patterns:

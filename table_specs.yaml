@@ -589,14 +589,6 @@ partitioned_tables:
     - gradual_growth
     - burst_ops
     - truncate_cycles
-  
-  # Table count calculation
-  table_count:
-    partition_transforms: 16  # Removed void (unsupported in Spark 3.4)
-    write_patterns: 8
-    versions: 1  # v2 only
-    delete_modes: 2  # cow, posdelete
-    total_tables: 256  # 16 × 8 × 1 × 2 = 256
 
 # Naming convention for generated tables
 naming_convention:

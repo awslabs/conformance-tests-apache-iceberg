@@ -628,9 +628,7 @@ class PySparkGenerator(TableGenerator):
             self.delete_tables_by_namespace("partitioned")
 
         if minimal:
-            # Minimal set: 8 key transforms with mixed_chaos + 2 delete modes
             partition_transforms = [
-                # Essential transforms (4)
                 ["identity(category)"],
                 ["bucket[4](id)"],
                 ["month(timestamp)"],
@@ -639,7 +637,6 @@ class PySparkGenerator(TableGenerator):
             write_patterns = ["mixed_chaos"]
             delete_modes = ["cow", "posdelete"]
         else:
-            # Full set: all 37 transforms with 4 patterns
             partition_transforms = [
                 # Original single-column transforms (10)
                 ["identity(category)"],
@@ -744,12 +741,8 @@ class PySparkGenerator(TableGenerator):
         # Apply random selection if specified
         table_specs = self._random_select_tables(table_specs, random_count)
 
-        mode_str = (
-            "minimal (16 transforms, mixed_chaos, posdelete)" if minimal
-            else "full (37 transforms, 4 patterns, 2 modes)"
-        )
         print(
-            f"Generating {len(table_specs)} partitioned tables ({mode_str}) "
+            f"Generating {len(table_specs)} partitioned tables "
             f"with {num_parallel} parallel workers..."
         )
 
