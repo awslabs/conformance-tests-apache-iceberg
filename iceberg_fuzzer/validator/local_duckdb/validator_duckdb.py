@@ -35,6 +35,7 @@ import duckdb
 import pyarrow.parquet as pq
 import yaml
 
+from iceberg_fuzzer.common import row_id_from_index
 from iceberg_fuzzer.table_spec import select_primitive_types
 from iceberg_fuzzer.validator import TableValidator
 
@@ -650,11 +651,15 @@ def _validate_table_contents(conn, table_path, expected_spec):
                     content_errors.append(f"Row {row_id}: Expected 2 columns, got {len(actual_row)}")
                     continue
 
-                expected_id = row_id
+                # Rows are ordered by id and a single-type table holds one
+                # contiguous 1-based run, so the nth row's id must be n.
+                expected_id = row_id_from_index(i, 0)
                 expected_value = _generate_expected_single_type_data(expected_spec['data_type'], row_id)
 
-                if actual_row[0] != expected_id:
-                    content_errors.append(f"Row {row_id}: ID mismatch - expected {expected_id}, got {actual_row[0]}")
+                if row_id != expected_id:
+                    content_errors.append(
+                        f"Row {i}: ID mismatch - expected {expected_id}, got {row_id}"
+                    )
 
                 # For some types, we need approximate comparison
                 if expected_spec['data_type'] in ['float', 'double']:

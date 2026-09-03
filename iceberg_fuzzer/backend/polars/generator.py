@@ -173,113 +173,122 @@ class PolarsGenerator(TableGenerator):
 
         return type_map.get(iceberg_type_str, StringType())
 
-    def _generate_polars_data(self, field_name: str, iceberg_type: str, num_rows: int, row_offset: int = 0):
-        """Generate data using Polars to match PySpark/PyIceberg patterns"""
+    def _generate_polars_data(
+        self,
+        field_name: str,
+        iceberg_type: str,
+        num_rows: int,
+        start_id: int = 1,
+    ):
+        """Generate data using Polars to match PySpark/PyIceberg patterns.
+
+        `start_id` is the ID of the batch's first row. Values are derived
+        from the row ID rather than the batch index, so the validator can
+        predict a row's value from the ID it reads back.
+        """
 
         # Use iceberg_type instead of field_name for type determination
         if iceberg_type == 'boolean':
-            return [(i + row_offset) % 2 == 0 for i in range(num_rows)]
-        elif field_name == 'id':
-            return [row_id_from_index(i, row_offset) for i in range(num_rows)]
+            return [(i + start_id) % 2 == 0 for i in range(num_rows)]
         elif iceberg_type == 'int':
-            return list(range(row_offset, num_rows + row_offset))
+            return list(range(start_id, num_rows + start_id))
         elif iceberg_type == 'long':
-            return [(i + row_offset) * 1000 for i in range(num_rows)]
+            return [(i + start_id) * 1000 for i in range(num_rows)]
         elif iceberg_type == 'float':
-            return [float(i + row_offset) + 0.5 for i in range(num_rows)]
+            return [float(i + start_id) + 0.5 for i in range(num_rows)]
         elif iceberg_type == 'double':
-            return [float(i + row_offset) * 1.5 for i in range(num_rows)]
+            return [float(i + start_id) * 1.5 for i in range(num_rows)]
         elif iceberg_type.startswith('decimal'):
-            return [Decimal(f"{i + row_offset}.{(i + row_offset) % 100:02d}") for i in range(num_rows)]
+            return [Decimal(f"{i + start_id}.{(i + start_id) % 100:02d}") for i in range(num_rows)]
         elif iceberg_type == 'date':
-            return [date(2023, 1, ((i + row_offset) % 28) + 1) for i in range(num_rows)]
+            return [date(2023, 1, ((i + start_id) % 28) + 1) for i in range(num_rows)]
         elif iceberg_type == 'time':
             return [
-                time(hour=(i + row_offset) % 24, minute=(i + row_offset) % 60)
+                time(hour=(i + start_id) % 24, minute=(i + start_id) % 60)
                 for i in range(num_rows)
             ]
         elif iceberg_type in ['timestamp', 'timestamptz']:
-            return [datetime(2023, 1, 1, (i + row_offset) % 24, 0, 0) for i in range(num_rows)]
+            return [datetime(2023, 1, 1, (i + start_id) % 24, 0, 0) for i in range(num_rows)]
         elif iceberg_type == 'uuid':
-            return [uuid.UUID(int=i + row_offset).bytes for i in range(num_rows)]
+            return [uuid.UUID(int=i + start_id).bytes for i in range(num_rows)]
         elif iceberg_type == 'string':
-            return [f"value_{i + row_offset}" for i in range(num_rows)]
+            return [f"value_{i + start_id}" for i in range(num_rows)]
         elif iceberg_type == 'binary':
-            return [f"value_{i + row_offset}".encode() for i in range(num_rows)]
+            return [f"value_{i + start_id}".encode() for i in range(num_rows)]
         # List types
         elif iceberg_type.startswith('list<'):
             element_type = iceberg_type[5:-1]  # Extract element type from list<type>
             if element_type == 'boolean':
                 result = []
                 for i in range(num_rows):
-                    row_id = i + row_offset
+                    row_id = i + start_id
                     if row_id % 2 == 1:  # odd rows
                         result.append([True, False, False])
                     else:  # even rows
                         result.append([False, True, True])
                 return result
             elif element_type == 'int':
-                return [[i + row_offset, i + 1 + row_offset, i + 2 + row_offset]
+                return [[i + start_id, i + 1 + start_id, i + 2 + start_id]
                         for i in range(num_rows)]
             elif element_type == 'long':
                 return [
-                    [(i + row_offset) * 1000, (i + 1 + row_offset) * 1000,
-                     (i + 2 + row_offset) * 1000]
+                    [(i + start_id) * 1000, (i + 1 + start_id) * 1000,
+                     (i + 2 + start_id) * 1000]
                     for i in range(num_rows)
                 ]
             elif element_type == 'float':
                 return [
-                    [float(i + row_offset) + 0.5, float(i + 1 + row_offset) + 0.5,
-                     float(i + 2 + row_offset) + 0.5]
+                    [float(i + start_id) + 0.5, float(i + 1 + start_id) + 0.5,
+                     float(i + 2 + start_id) + 0.5]
                     for i in range(num_rows)
                 ]
             elif element_type == 'double':
                 return [
-                    [float(i + row_offset) * 1.5, float(i + 1 + row_offset) * 1.5,
-                     float(i + 2 + row_offset) * 1.5]
+                    [float(i + start_id) * 1.5, float(i + 1 + start_id) * 1.5,
+                     float(i + 2 + start_id) * 1.5]
                     for i in range(num_rows)
                 ]
             elif element_type.startswith('decimal'):
                 return [
                     [
-                        Decimal(f"{i + row_offset}.{(i + row_offset) % 100:02d}"),
-                        Decimal(f"{i + 1 + row_offset}.{(i + 1 + row_offset) % 100:02d}"),
-                        Decimal(f"{i + 2 + row_offset}.{(i + 2 + row_offset) % 100:02d}")
+                        Decimal(f"{i + start_id}.{(i + start_id) % 100:02d}"),
+                        Decimal(f"{i + 1 + start_id}.{(i + 1 + start_id) % 100:02d}"),
+                        Decimal(f"{i + 2 + start_id}.{(i + 2 + start_id) % 100:02d}")
                     ]
                     for i in range(num_rows)
                 ]
             elif element_type == 'date':
                 return [
-                    [date(2023, 1, ((i + row_offset) % 28) + 1),
-                     date(2023, 1, ((i + 1 + row_offset) % 28) + 1),
-                     date(2023, 1, ((i + 2 + row_offset) % 28) + 1)]
+                    [date(2023, 1, ((i + start_id) % 28) + 1),
+                     date(2023, 1, ((i + 1 + start_id) % 28) + 1),
+                     date(2023, 1, ((i + 2 + start_id) % 28) + 1)]
                     for i in range(num_rows)
                 ]
             elif element_type == 'uuid':
                 return [
-                    [f"uuid_{i + row_offset}".encode()[:16].ljust(16, b'\x00'),
-                     f"uuid_{i + 1 + row_offset}".encode()[:16].ljust(16, b'\x00'),
-                     f"uuid_{i + 2 + row_offset}".encode()[:16].ljust(16, b'\x00')]
+                    [f"uuid_{i + start_id}".encode()[:16].ljust(16, b'\x00'),
+                     f"uuid_{i + 1 + start_id}".encode()[:16].ljust(16, b'\x00'),
+                     f"uuid_{i + 2 + start_id}".encode()[:16].ljust(16, b'\x00')]
                     for i in range(num_rows)
                 ]
             elif element_type == 'string':
                 return [
-                    [f"item_{i + row_offset}_0", f"item_{i + row_offset}_1",
-                     f"item_{i + row_offset}_2"]
+                    [f"item_{i + start_id}_0", f"item_{i + start_id}_1",
+                     f"item_{i + start_id}_2"]
                     for i in range(num_rows)
                 ]
             elif element_type == 'binary':
                 return [
-                    [f"item_{i + row_offset}_0".encode(),
-                     f"item_{i + row_offset}_1".encode(),
-                     f"item_{i + row_offset}_2".encode()]
+                    [f"item_{i + start_id}_0".encode(),
+                     f"item_{i + start_id}_1".encode(),
+                     f"item_{i + start_id}_2".encode()]
                     for i in range(num_rows)
                 ]
             else:
                 return [["item1", "item2", "item3"] for i in range(num_rows)]
         else:
             # Default fallback
-            return [f"value_{i + 1 + row_offset}" for i in range(num_rows)]
+            return [f"value_{i + start_id}" for i in range(num_rows)]
 
     def _get_polars_dtype(self, field_name: str, iceberg_type: str):
         """Get appropriate Polars dtype for field"""
@@ -379,10 +388,17 @@ class PolarsGenerator(TableGenerator):
             )
 
             # Generate data in 10 commits using Polars
+            rows_per_commit = 100
             for commit in range(10):
-                start_id = commit * 100
-                ids = list(range(start_id, start_id + 100))
-                values = self._generate_polars_data(field_name, iceberg_type, 100, start_id)
+                row_offset = commit * rows_per_commit
+                ids = [
+                    row_id_from_index(i, row_offset) for i in range(rows_per_commit)
+                ]
+                # Values are derived from the row ID, not the index, so a row's
+                # value stays predictable from its ID across commits.
+                values = self._generate_polars_data(
+                    field_name, iceberg_type, rows_per_commit, ids[0]
+                )
 
                 # Get appropriate dtype
                 value_dtype = self._get_polars_dtype(field_name, iceberg_type)
