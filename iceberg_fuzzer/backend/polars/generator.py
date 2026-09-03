@@ -361,27 +361,21 @@ class PolarsGenerator(TableGenerator):
             except Exception:
                 pass  # Ignore errors
 
-            # Map compression codec
-            compression_map = {
-                'gzip': 'gzip',
-                'snappy': 'snappy',
-                'zstd': 'zstd',
-                'lz4': 'lz4',
-                'none': 'uncompressed'
-            }
+            compression = table_spec.get('compression', {})
+            codec = compression.get('codec')
+            level = compression.get('level')
 
-            # Extract compression from table spec
-            compression_codec = table_spec.get('compression', {}).get('codec', 'snappy')
-            parquet_codec = compression_map.get(compression_codec, 'snappy')
+            properties = {"format-version": str(version)}
+            if codec is not None:
+                properties["write.parquet.compression-codec"] = codec
+            if level is not None:
+                properties["write.parquet.compression-level"] = str(level)
 
             # Create table
             table = catalog.create_table(
                 identifier=table_identifier,
                 schema=schema,
-                properties={
-                    "format-version": str(version),
-                    "write.parquet.compression-codec": parquet_codec
-                }
+                properties=properties,
             )
 
             # Generate data in 10 commits using Polars

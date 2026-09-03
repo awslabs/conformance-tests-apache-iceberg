@@ -222,26 +222,20 @@ def create_table_with_commits(
         except Exception:
             pass  # Ignore errors
 
+        compression = table_spec.get("compression", {})
+        codec = compression.get("codec")
+        level = compression.get("level")
+
+        properties = dict(table_spec.get("properties", {}))
+        if codec is not None:
+            properties["write.parquet.compression-codec"] = codec
+        if level is not None:
+            properties["write.parquet.compression-level"] = str(level)
+
         table = catalog.create_table(
             identifier=table_identifier,
             schema=iceberg_schema,
-            properties={
-                "format-version": table_spec.get("iceberg_version", "v2").replace(
-                    "v", ""
-                ),
-                "write.parquet.compression-codec": table_spec.get(
-                    "compression", {}
-                ).get("codec", "gzip"),
-                **(
-                    {}
-                    if table_spec.get("compression", {}).get("level") is None
-                    else {
-                        "write.parquet.compression-level": str(
-                            table_spec["compression"]["level"]
-                        )
-                    }
-                ),
-            },
+            properties=properties,
         )
 
         for _ in range(num_commits):
