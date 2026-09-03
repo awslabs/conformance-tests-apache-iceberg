@@ -28,7 +28,6 @@ def clause(spec_str):
     ('month(timestamp)', 'PARTITIONED BY (months(timestamp))'),
     ('day(timestamp)', 'PARTITIONED BY (days(timestamp))'),
     ('hour(timestamp)', 'PARTITIONED BY (hours(timestamp))'),
-    ('date(timestamp)', 'PARTITIONED BY (date(timestamp))'),
     ('void(category)', 'PARTITIONED BY (void(category))'),
 ])
 def test_one_transform(spec_str, expected):

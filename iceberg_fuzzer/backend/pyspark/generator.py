@@ -43,6 +43,7 @@ from backend.pyspark.builders import (
     create_single_table,
     generate_evolution_tables
 )
+from iceberg_fuzzer.common.partition_transforms import partitioned_table_specs
 from iceberg_fuzzer.generator import TableGenerator
 from iceberg_fuzzer.table_spec import load_table_specs
 
@@ -628,116 +629,7 @@ class PySparkGenerator(TableGenerator):
             print("Deleting existing partitioned tables before generation...")
             self.delete_tables_by_namespace("partitioned")
 
-        if minimal:
-            partition_transforms = [
-                ["identity(category)"],
-                ["bucket[4](id)"],
-                ["month(timestamp)"],
-                ["identity(category)", "bucket[4](id)"]
-            ]
-            write_patterns = ["mixed_chaos"]
-            delete_modes = ["cow", "posdelete"]
-        else:
-            partition_transforms = [
-                # Original single-column transforms (10)
-                ["identity(category)"],
-                ["bucket[4](id)"],
-                ["bucket[8](id)"],
-                ["truncate[2](name)"],
-                ["truncate[5](name)"],
-                ["year(timestamp)"],
-                ["month(timestamp)"],
-                ["day(timestamp)"],
-                ["hour(timestamp)"],
-                ["bucket[10](value)"],
-
-                # Additional single-column transforms (12)
-                ["date(timestamp)"],  # Date-level partitioning
-                ["bucket[2](id)"],    # Minimal buckets
-                ["bucket[16](id)"],   # Higher bucket count
-                ["bucket[32](id)"],   # Very high bucket count
-                ["bucket[4](value)"], # Different numeric field
-                ["bucket[8](value)"], # Different field, different size
-                ["truncate[1](name)"], # Single character (high cardinality)
-                ["truncate[3](name)"], # 3-character prefixes
-                ["truncate[10](name)"], # Longer prefixes
-                ["identity(boolean_col)"], # Boolean partitioning
-                ["identity(int_col)"],     # High cardinality numeric
-                ["identity(date_col)"],    # Date-based identity
-
-                # Original multi-column transforms (5)
-                ["identity(category)", "year(timestamp)"],
-                ["identity(category)", "bucket[8](id)"],
-                ["bucket[4](id)", "day(timestamp)"],
-                ["year(timestamp)", "bucket[4](id)"],
-                ["identity(category)", "month(timestamp)", "bucket[4](id)"],
-
-                # Additional multi-column transforms (8)
-                ["hour(timestamp)", "identity(category)"],        # Temporal + categorical
-                ["day(timestamp)", "bucket[8](id)"],             # Daily + hash
-                ["truncate[2](name)", "year(timestamp)"],        # String + temporal
-                ["bucket[4](id)", "bucket[8](value)"],           # Multiple hash fields
-                ["identity(category)", "day(timestamp)", "bucket[4](id)"], # Four-way partition
-                ["date(timestamp)", "identity(category)"],       # Date + categorical
-                ["truncate[3](name)", "bucket[4](id)"],         # String + hash
-                ["month(timestamp)", "bucket[2](id)"],          # Monthly + minimal hash
-
-                # Edge cases (1)
-                ["identity(single_value_field)"]   # Single partition
-            ]
-            write_patterns = ["insert_heavy", "update_heavy", "delete_heavy", "mixed_chaos"]
-            delete_modes = ["cow", "posdelete"]
-
-        # Build table specs
-        table_specs = []
-        for transform in partition_transforms:
-            # Generate clean table name from transform spec
-            transform_parts = []
-            for t in transform:
-                if t.startswith('identity('):
-                    col = t[9:-1]
-                    transform_parts.append(f"identity_{col}")
-                elif t.startswith('bucket['):
-                    size = t.split('[')[1].split(']')[0]
-                    col = t.split('(')[1].rstrip(')')
-                    transform_parts.append(f"bucket{size}_{col}")
-                elif t.startswith('truncate['):
-                    width = t.split('[')[1].split(']')[0]
-                    col = t.split('(')[1].rstrip(')')
-                    transform_parts.append(f"truncate{width}_{col}")
-                elif t.startswith('date('):
-                    col = t[5:-1]
-                    transform_parts.append(f"date_{col}")
-                elif t.startswith('year('):
-                    col = t[5:-1]
-                    transform_parts.append(f"year_{col}")
-                elif t.startswith('month('):
-                    col = t[6:-1]
-                    transform_parts.append(f"month_{col}")
-                elif t.startswith('day('):
-                    col = t[4:-1]
-                    transform_parts.append(f"day_{col}")
-                elif t.startswith('hour('):
-                    col = t[5:-1]
-                    transform_parts.append(f"hour_{col}")
-                else:
-                    transform_parts.append(t.replace('(', '_').replace(')', '').replace('[', '').replace(']', ''))
-
-            transform_name = "_".join(transform_parts)
-
-            for pattern in write_patterns:
-                for mode in delete_modes:
-                    # Skip invalid combinations: v1 only supports cow
-                    if mode == "posdelete" and "_v1_" in transform_name:
-                        continue
-
-                    table_name = f"part_{transform_name}_{pattern}_{mode}"
-                    table_specs.append({
-                        'name': table_name,
-                        'transform': transform,
-                        'pattern': pattern,
-                        'mode': mode
-                    })
+        table_specs = partitioned_table_specs(minimal=minimal)
 
         # Apply random selection if specified
         table_specs = self._random_select_tables(table_specs, random_count)
