@@ -33,53 +33,19 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import polars as pl
-import pyarrow as pa
 import yaml
 from pyiceberg.catalog.sql import SqlCatalog
+from pyiceberg.io.pyarrow import schema_to_pyarrow
 from pyiceberg.schema import Schema
 from pyiceberg.types import (
     BooleanType, IntegerType, LongType, FloatType, DoubleType,
-    StringType, BinaryType, DateType, TimeType, TimestampType, UUIDType,
+    StringType, BinaryType, DateType, TimeType, TimestampType, TimestamptzType, UUIDType,
     DecimalType, FixedType, ListType, NestedField, MapType, StructType as IcebergStructType
 )
 
 from iceberg_fuzzer.generator import TableGenerator
 from iceberg_fuzzer.table_spec import load_table_specs
 from iceberg_fuzzer.common import row_id_from_index
-
-
-def _align_arrow_column(
-    arrow_table: pa.Table, field_name: str, iceberg_type: str
-) -> pa.Table:
-    """Coerce a Polars-produced column to the Arrow type PyIceberg requires.
-
-    Polars has no dtype for two of the Iceberg types this generator writes, so
-    the column arrives as the nearest Polars equivalent and is converted here:
-
-      - time:  Polars produces time64[ns]; Iceberg's time is microseconds.
-      - uuid:  Polars has no UUID dtype, so values arrive as variable-length
-               binary. Iceberg's uuid is 16 fixed bytes and not merely a
-               logical annotation, so the cast to binary(16) pins the width —
-               a value of any other length fails here — and the Arrow uuid
-               extension type supplies the annotation.
-    """
-    idx = arrow_table.schema.get_field_index(field_name)
-    column = arrow_table.column(idx)
-
-    if iceberg_type == 'time':
-        column = column.cast(pa.time64('us'))
-    elif iceberg_type == 'uuid':
-        column = pa.chunked_array(
-            [
-                pa.ExtensionArray.from_storage(pa.uuid(), chunk.cast(pa.binary(16)))
-                for chunk in column.chunks
-            ],
-            type=pa.uuid(),
-        )
-    else:
-        return arrow_table
-
-    return arrow_table.set_column(idx, field_name, column)
 
 
 class PolarsGenerator(TableGenerator):
@@ -133,7 +99,7 @@ class PolarsGenerator(TableGenerator):
             'date': DateType(),
             'time': TimeType(),
             'timestamp': TimestampType(),
-            'timestamptz': TimestampType(),
+            'timestamptz': TimestamptzType(),
             'decimal(10,2)': DecimalType(10, 2),
             'uuid': UUIDType(),
         }
@@ -306,8 +272,12 @@ class PolarsGenerator(TableGenerator):
             return pl.Date
         elif iceberg_type == 'time':
             return pl.Time
-        elif iceberg_type in ['timestamp', 'timestamptz']:
+        elif iceberg_type == 'timestamp':
             return pl.Datetime('us')  # microseconds
+        elif iceberg_type == 'timestamptz':
+            # Iceberg's timestamptz is instants in UTC; a naive dtype would be
+            # written as the tz-free `timestamp` instead.
+            return pl.Datetime('us', time_zone='UTC')
         elif iceberg_type.startswith('decimal'):
             return pl.Decimal(precision=10, scale=2)
         elif iceberg_type in ['binary'] or iceberg_type.startswith('fixed'):
@@ -361,6 +331,7 @@ class PolarsGenerator(TableGenerator):
                 NestedField(1, "id", IntegerType(), required=False),
                 NestedField(2, field_name, iceberg_field_type, required=False)
             )
+            arrow_schema = schema_to_pyarrow(schema)
 
             table_identifier = f"simple.{table_name}"
 
@@ -415,10 +386,14 @@ class PolarsGenerator(TableGenerator):
                         field_name: values
                     })
 
-                arrow_table = _align_arrow_column(
-                    df.to_arrow(), field_name, iceberg_type
-                )
-                table.append(arrow_table)
+                # Polars has no dtype for every Iceberg type, so some columns
+                # arrive as the nearest equivalent (time64[ns] for time,
+                # variable-length binary for uuid). Casting to the Arrow schema
+                # PyIceberg derives from the table's own schema is what fixes
+                # the physical representation: the microsecond unit, and the
+                # 16-byte width behind uuid's logical annotation, so a value of
+                # any other length fails here.
+                table.append(df.to_arrow().cast(arrow_schema))
 
             catalog.close()
             return True

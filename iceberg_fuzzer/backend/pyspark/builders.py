@@ -39,7 +39,7 @@ from pyspark.sql.functions import col, lit, date_add
 from pyspark.sql.types import (
     StructType, StructField, BooleanType, IntegerType, LongType,
     FloatType, DoubleType, DecimalType, DateType, TimestampType,
-    StringType, BinaryType, ArrayType, MapType
+    StringType, BinaryType, ArrayType, MapType, TimestampNTZType
 )
 
 from iceberg_fuzzer.table_spec import load_table_specs
@@ -439,7 +439,9 @@ def create_spark_schema(table_spec):
         elif field_type_str == 'date':
             spark_type = DateType()
         elif field_type_str == 'timestamp':
-            spark_type = TimestampType()
+            # Spark's TimestampType is zone-aware and Iceberg records it as
+            # timestamptz; the zone-free type is TimestampNTZType.
+            spark_type = TimestampNTZType()
         elif field_type_str == 'timestamptz':
             spark_type = TimestampType()
         elif field_type_str.startswith('decimal('):
@@ -470,7 +472,9 @@ def create_spark_schema(table_spec):
                 element_type = BinaryType()
             elif element_type_str == 'date':
                 element_type = DateType()
-            elif element_type_str == 'timestamp' or element_type_str == 'timestamptz':
+            elif element_type_str == 'timestamp':
+                element_type = TimestampNTZType()
+            elif element_type_str == 'timestamptz':
                 element_type = TimestampType()
             elif element_type_str.startswith('decimal('):
                 parts = element_type_str[8:-1].split(',')
@@ -516,7 +520,7 @@ def create_spark_schema(table_spec):
             elif value_type_str == 'date':
                 value_type = DateType()
             elif value_type_str == 'timestamp':
-                value_type = TimestampType()
+                value_type = TimestampNTZType()
             elif value_type_str == 'timestamptz':
                 value_type = TimestampType()
             elif value_type_str.startswith('decimal('):
