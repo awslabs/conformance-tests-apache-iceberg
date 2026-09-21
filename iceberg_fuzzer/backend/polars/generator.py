@@ -24,26 +24,62 @@ Uses Polars for fast data generation + PyIceberg for writing
 """
 
 import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import polars as pl
+import pyarrow as pa
 import yaml
 from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import (
     BooleanType, IntegerType, LongType, FloatType, DoubleType,
-    StringType, BinaryType, DateType, TimestampType,
+    StringType, BinaryType, DateType, TimeType, TimestampType, UUIDType,
     DecimalType, FixedType, ListType, NestedField, MapType, StructType as IcebergStructType
 )
 
 from iceberg_fuzzer.generator import TableGenerator
 from iceberg_fuzzer.table_spec import load_table_specs
 from iceberg_fuzzer.common import row_id_from_index
+
+
+def _align_arrow_column(
+    arrow_table: pa.Table, field_name: str, iceberg_type: str
+) -> pa.Table:
+    """Coerce a Polars-produced column to the Arrow type PyIceberg requires.
+
+    Polars has no dtype for two of the Iceberg types this generator writes, so
+    the column arrives as the nearest Polars equivalent and is converted here:
+
+      - time:  Polars produces time64[ns]; Iceberg's time is microseconds.
+      - uuid:  Polars has no UUID dtype, so values arrive as variable-length
+               binary. Iceberg's uuid is 16 fixed bytes and not merely a
+               logical annotation, so the cast to binary(16) pins the width —
+               a value of any other length fails here — and the Arrow uuid
+               extension type supplies the annotation.
+    """
+    idx = arrow_table.schema.get_field_index(field_name)
+    column = arrow_table.column(idx)
+
+    if iceberg_type == 'time':
+        column = column.cast(pa.time64('us'))
+    elif iceberg_type == 'uuid':
+        column = pa.chunked_array(
+            [
+                pa.ExtensionArray.from_storage(pa.uuid(), chunk.cast(pa.binary(16)))
+                for chunk in column.chunks
+            ],
+            type=pa.uuid(),
+        )
+    else:
+        return arrow_table
+
+    return arrow_table.set_column(idx, field_name, column)
 
 
 class PolarsGenerator(TableGenerator):
@@ -92,11 +128,11 @@ class PolarsGenerator(TableGenerator):
             'string': StringType(),
             'binary': BinaryType(),
             'date': DateType(),
-            'time': LongType(),  # Time stored as microseconds (long)
+            'time': TimeType(),
             'timestamp': TimestampType(),
             'timestamptz': TimestampType(),
             'decimal(10,2)': DecimalType(10, 2),
-            'uuid': StringType(),  # UUID stored as string
+            'uuid': UUIDType(),
         }
 
         # Handle fixed types
@@ -155,21 +191,18 @@ class PolarsGenerator(TableGenerator):
         elif iceberg_type == 'date':
             return [date(2023, 1, ((i + row_offset) % 28) + 1) for i in range(num_rows)]
         elif iceberg_type == 'time':
-            # Time as string format HH:MM:SS
-            return [f"{((i + row_offset) % 24):02d}:00:00" for i in range(num_rows)]
+            return [
+                time(hour=(i + row_offset) % 24, minute=(i + row_offset) % 60)
+                for i in range(num_rows)
+            ]
         elif iceberg_type in ['timestamp', 'timestamptz']:
             return [datetime(2023, 1, 1, (i + row_offset) % 24, 0, 0) for i in range(num_rows)]
         elif iceberg_type == 'uuid':
-            # Skip UUID generation for now - it's causing table creation to fail
-            return [f"uuid_{i + row_offset}".encode()[:16].ljust(16, b'\x00') for i in range(num_rows)]
+            return [uuid.UUID(int=i + row_offset).bytes for i in range(num_rows)]
         elif iceberg_type == 'string':
             return [f"value_{i + row_offset}" for i in range(num_rows)]
-        elif iceberg_type in ['binary', 'fixed']:
-            if 'fixed' in iceberg_type:
-                # Fixed-length binary data
-                return [f"fixed_{i + row_offset:010d}".encode()[:16].ljust(16, b'0') for i in range(num_rows)]
-            else:
-                return [f"value_{i + row_offset}".encode() for i in range(num_rows)]
+        elif iceberg_type == 'binary':
+            return [f"value_{i + row_offset}".encode() for i in range(num_rows)]
         # List types
         elif iceberg_type.startswith('list<'):
             element_type = iceberg_type[5:-1]  # Extract element type from list<type>
@@ -232,21 +265,13 @@ class PolarsGenerator(TableGenerator):
                      f"item_{i + row_offset}_2"]
                     for i in range(num_rows)
                 ]
-            elif element_type in ['binary', 'fixed']:
-                if 'fixed' in field_name:
-                    return [
-                        [f"fixed_{i + row_offset:010d}".encode()[:16].ljust(16, b'0'),
-                         f"fixed_{i + 1000 + row_offset:010d}".encode()[:16].ljust(16, b'0'),
-                         f"fixed_{i + 2000 + row_offset:010d}".encode()[:16].ljust(16, b'0')]
-                        for i in range(num_rows)
-                    ]
-                else:
-                    return [
-                        [f"item_{i + row_offset}_0".encode(),
-                         f"item_{i + row_offset}_1".encode(),
-                         f"item_{i + row_offset}_2".encode()]
-                        for i in range(num_rows)
-                    ]
+            elif element_type == 'binary':
+                return [
+                    [f"item_{i + row_offset}_0".encode(),
+                     f"item_{i + row_offset}_1".encode(),
+                     f"item_{i + row_offset}_2".encode()]
+                    for i in range(num_rows)
+                ]
             else:
                 return [["item1", "item2", "item3"] for i in range(num_rows)]
         else:
@@ -268,7 +293,7 @@ class PolarsGenerator(TableGenerator):
         elif iceberg_type == 'date':
             return pl.Date
         elif iceberg_type == 'time':
-            return pl.Int64  # Time as microseconds
+            return pl.Time
         elif iceberg_type in ['timestamp', 'timestamptz']:
             return pl.Datetime('us')  # microseconds
         elif iceberg_type.startswith('decimal'):
@@ -276,7 +301,9 @@ class PolarsGenerator(TableGenerator):
         elif iceberg_type in ['binary'] or iceberg_type.startswith('fixed'):
             return pl.Binary
         elif iceberg_type == 'uuid':
-            return pl.String
+            # Polars has no UUID dtype. On append the column is cast to
+            # 16-byte binary and given Arrow's uuid extension type.
+            return pl.Binary
         elif iceberg_type.startswith('list<'):
             element_type = iceberg_type[5:-1]
             element_dtype = self._get_polars_dtype('', element_type)
@@ -375,15 +402,16 @@ class PolarsGenerator(TableGenerator):
                         field_name: values
                     })
 
-                # Convert to PyArrow and append
-                arrow_table = df.to_arrow()
+                arrow_table = _align_arrow_column(
+                    df.to_arrow(), field_name, iceberg_type
+                )
                 table.append(arrow_table)
 
             catalog.close()
             return True
 
         except Exception as e:
-            # Silently fail - expected for unsupported types (map, struct)
+            print(f"    → Failed to create table {table_name}: {e}")
             return False
 
     def generate_simple_tables(
@@ -419,7 +447,6 @@ class PolarsGenerator(TableGenerator):
                 if success:
                     success_count += 1
                     print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
-                # Silently skip failures to reduce noise
         else:
             with ThreadPoolExecutor(max_workers=num_parallel) as executor:
                 futures = {executor.submit(self._create_simple_table, spec): spec for spec in table_specs}
@@ -430,9 +457,8 @@ class PolarsGenerator(TableGenerator):
                         if success:
                             success_count += 1
                             print(f"✓ Created table {spec['name']} ({success_count}/{total_count})")
-                        # Silently skip failures to reduce noise
                     except Exception as e:
-                        pass  # Silently skip exceptions
+                        print(f"    → Failed to create table {spec['name']}: {e}")
 
         print(f"\nCompleted simple tables: {success_count}/{total_count} tables created successfully")
 

@@ -447,12 +447,11 @@ def create_spark_schema(table_spec):
             precision = int(parts[0])
             scale = int(parts[1]) if len(parts) > 1 else 0
             spark_type = DecimalType(precision, scale)
-        elif field_type_str == 'uuid':
-            spark_type = BinaryType()
-        elif field_type_str == 'fixed':
-            spark_type = BinaryType()
-        elif field_type_str == 'time':
-            spark_type = StringType()
+        elif field_type_str in ('uuid', 'time') or field_type_str.startswith('fixed('):
+            raise ValueError(
+                f"Spark cannot express Iceberg type '{field_type_str}' "
+                f"(column '{field_name}')"
+            )
         elif field_type_str.startswith('list<'):
             element_type_str = field_type_str[5:-1]
             if element_type_str == 'boolean':
@@ -478,10 +477,11 @@ def create_spark_schema(table_spec):
                 precision = int(parts[0])
                 scale = int(parts[1]) if len(parts) > 1 else 0
                 element_type = DecimalType(precision, scale)
-            elif element_type_str == 'uuid' or element_type_str == 'fixed' or element_type_str.startswith('fixed('):
-                element_type = BinaryType()
-            elif element_type_str == 'time':
-                element_type = StringType()
+            elif element_type_str in ('uuid', 'time') or element_type_str.startswith('fixed('):
+                raise ValueError(
+                    f"Spark cannot express Iceberg type '{element_type_str}' as a "
+                    f"list element (column '{field_name}')"
+                )
             else:
                 element_type = StringType()
             spark_type = ArrayType(element_type)
@@ -524,10 +524,11 @@ def create_spark_schema(table_spec):
                 precision = int(parts[0])
                 scale = int(parts[1]) if len(parts) > 1 else 0
                 value_type = DecimalType(precision, scale)
-            elif value_type_str == 'uuid' or value_type_str == 'fixed' or value_type_str.startswith('fixed('):
-                value_type = BinaryType()
-            elif value_type_str == 'time':
-                value_type = StringType()
+            elif value_type_str in ('uuid', 'time') or value_type_str.startswith('fixed('):
+                raise ValueError(
+                    f"Spark cannot express Iceberg type '{value_type_str}' as a "
+                    f"map value (column '{field_name}')"
+                )
             else:
                 value_type = StringType()
 
@@ -591,12 +592,6 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
                 row_data[field_name] = float(row_id) + 0.5
             elif field_type == 'double':
                 row_data[field_name] = float(row_id) * 1.5
-            elif field_type == 'time':
-                row_data[field_name] = f"{(row_id % 24):02d}:{(row_id % 60):02d}:00"
-            elif field_type == 'uuid':
-                row_data[field_name] = uuid.UUID(int=row_id).bytes
-            elif field_type == 'fixed' or field_type == 'fixed_16':
-                row_data[field_name] = f"fixed_{row_id}".ljust(16, '0')[:16].encode()
             elif field_type == 'string':
                 row_data[field_name] = f"value_{row_id}"
             elif field_type == 'binary':
@@ -623,16 +618,16 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
                     row_data[field_name] = [f"item_{row_id}_{j}" for j in range(3)]
                 elif element_type == 'date':
                     row_data[field_name] = [date(2023, 1, min(28, ((row_id + j) % 28) + 1)) for j in range(3)]
-                elif element_type == 'time':
-                    row_data[field_name] = [f"{((row_id + j) % 24):02d}:00:00" for j in range(3)]
                 elif element_type == 'timestamp' or element_type == 'timestamptz':
                     row_data[field_name] = [datetime(2023, 1, 1, hour=((row_id + j) % 24)) for j in range(3)]
                 elif element_type.startswith('decimal('):
                     row_data[field_name] = [Decimal(f"{row_id + j}.{(row_id + j) % 100:02d}") for j in range(3)]
-                elif element_type == 'uuid':
-                    row_data[field_name] = [uuid.UUID(int=row_id + j).bytes for j in range(3)]
-                elif element_type == 'fixed' or element_type.startswith('fixed('):
-                    row_data[field_name] = [f"fixed_{row_id + j}".ljust(16, '0')[:16].encode() for j in range(3)]
+                elif element_type.startswith('fixed('):
+                    length = int(element_type[6:-1])
+                    row_data[field_name] = [
+                        f"fixed_{row_id + j}".ljust(length, '0')[:length].encode()
+                        for j in range(3)
+                    ]
                 elif element_type.startswith('binary'):
                     row_data[field_name] = [f"item_{row_id}_{j}".encode() for j in range(3)]
                 else:
@@ -675,20 +670,11 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
                         row_id: Decimal(f"{row_id}.{row_id % 100:02d}"),
                         row_id + 1: Decimal(f"{row_id + 1}.{(row_id + 1) % 100:02d}")
                     }
-                elif value_type_str == 'uuid':
+                elif value_type_str.startswith('fixed('):
+                    length = int(value_type_str[6:-1])
                     row_data[field_name] = {
-                        row_id: uuid.UUID(int=row_id).bytes,
-                        row_id + 1: uuid.UUID(int=row_id + 1).bytes
-                    }
-                elif value_type_str == 'fixed' or value_type_str.startswith('fixed('):
-                    row_data[field_name] = {
-                        row_id: f"fixed_{row_id}".ljust(16, '0')[:16].encode(),
-                        row_id + 1: f"fixed_{row_id + 1}".ljust(16, '0')[:16].encode()
-                    }
-                elif value_type_str == 'time':
-                    row_data[field_name] = {
-                        row_id: f"{(row_id % 24):02d}:00:00",
-                        row_id + 1: f"{((row_id + 1) % 24):02d}:00:00"
+                        row_id: f"fixed_{row_id}".ljust(length, '0')[:length].encode(),
+                        row_id + 1: f"fixed_{row_id + 1}".ljust(length, '0')[:length].encode()
                     }
                 else:
                     row_data[field_name] = {row_id: f"value_{row_id}", row_id + 1: f"value_{row_id + 1}"}
