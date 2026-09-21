@@ -869,44 +869,26 @@ def create_single_type_table(spark, warehouse_path, table_name, table_spec, coun
         if delete_existing:
             drop_table_if_exists(spark, catalog, namespace, table_name)
 
-        # Extract compression codec from table name
-        # Format: unpart_{type}_{compression}_{encoding}_{version}
-        # Compression can be: gzip_lvl1, gzip_lvl2, gzip_lvl3, zstd_lvl1, zstd_lvl2, zstd_lvl3, snappy, lz4
-        parts = table_name.split('_')
-
-        # Find compression part (comes after datatype, before encoding)
-        # Datatype can be multi-part (e.g., binary_long), so we need to find where compression starts
-        compression_keywords = ['gzip', 'zstd', 'snappy', 'lz4', 'none']
-        compression = 'snappy'  # default
-
-        for i, part in enumerate(parts):
-            if part in compression_keywords:
-                # Check if next part is lvl1/lvl2/lvl3
-                if i + 1 < len(parts) and parts[i + 1].startswith('lvl'):
-                    compression = f"{part}_{parts[i + 1]}"
-                else:
-                    compression = part
-                break
-
-        # Map compression names to Parquet codec names (strip level suffixes)
-        compression_map = {
-            'gzip': 'gzip',
-            'snappy': 'snappy',
-            'zstd': 'zstd',
-            'lz4': 'lz4_raw',
-            'none': 'uncompressed'
-        }
-
-        # Extract base compression (remove lvl1, lvl2, lvl3 suffixes)
-        base_compression = compression.split('_')[0]
-        codec = compression_map.get(base_compression, 'snappy')
+        compression = table_spec.get('compression', {})
+        codec = compression.get('codec')
+        if codec == 'lz4':
+            # PyArrow maps `lz4` to Parquet's LZ4_RAW codec; Spark maps it to the
+            # deprecated LZ4 codec, so name LZ4_RAW to match the other backends.
+            # TODO: `lz4_raw` is not in Iceberg's documented codec list, and no
+            # backend can now write the deprecated codec. Cover both deliberately.
+            codec = 'lz4_raw'
+        level = compression.get('level')
 
         # Write 10 commits of 100 rows each
         for i in range(10):
             batch_df = generate_spark_data(spark, table_spec, 100, row_offset=i * 100)
 
             if i == 0:
-                props = {'write.parquet.compression-codec': codec}
+                props = dict(table_spec.get('properties', {}))
+                if codec is not None:
+                    props['write.parquet.compression-codec'] = codec
+                if level is not None:
+                    props['write.parquet.compression-level'] = str(level)
                 # Create table with SQL first
                 batch_df.createOrReplaceTempView("temp_create_data")
                 schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in batch_df.schema.fields])

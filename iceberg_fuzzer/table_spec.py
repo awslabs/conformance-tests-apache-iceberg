@@ -51,7 +51,7 @@ def load_table_specs(yaml_path, minimal=False):
 
     # Generate table specs
     tables = []
-    compression_configs = [{'codec': 'none', 'level': None}] if minimal else []
+    compression_configs = [{'codec': 'uncompressed', 'level': None}] if minimal else []
     encoding_types = ['PLAIN'] if minimal else specs.get('encoding_types', ['PLAIN'])
 
     if not minimal:
@@ -79,7 +79,11 @@ def load_table_specs(yaml_path, minimal=False):
                             {'name': 'id', 'type': 'int'},
                             {'name': 'value', 'type': data_type['iceberg_type']}
                         ],
-                        'properties': {'format-version': str(version)}
+                        'properties': {'format-version': str(version)},
+                        # The name encodes these too, but a backend should not have
+                        # to parse the name to find out what it is writing.
+                        'compression': dict(compression),
+                        'encoding': encoding,
                     })
 
     return tables

@@ -162,7 +162,7 @@ class PyIcebergGenerator(TableGenerator):
         # Apply random selection if specified
         table_specs = self._random_select_tables(table_specs, random_count)
 
-        mode_str = "minimal (none compression, plain encoding)" if minimal else "full"
+        mode_str = "minimal (uncompressed, plain encoding)" if minimal else "full"
         print(f"Generating {len(table_specs)} single-type tables ({mode_str}) with {num_parallel} parallel workers...")
         print("\n📊 PyIceberg Backend Support Status:")
         print("  ✅ Supported: All primitive types (20 types)")

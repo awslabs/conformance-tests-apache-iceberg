@@ -68,7 +68,7 @@ compression_configs:
     levels: [null]
   - codec: lz4
     levels: [null]
-  - codec: none
+  - codec: uncompressed
     levels: [null]
 
 # Parquet column encoding options

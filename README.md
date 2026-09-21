@@ -241,7 +241,7 @@ python3 cli.py generate --backend pyspark --warehouse-path /path/to/warehouse --
 # Generate only single-type tables (2,560 tables)
 python3 cli.py generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/simple.yaml --num-parallel 16
 
-# Generate minimal set for testing (152 tables: none compression+plain encoding+v1&v2, excluding time types)
+# Generate minimal set for testing (152 tables: uncompressed+plain encoding+v1&v2, excluding time types)
 python3 cli.py generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/simple.yaml --minimal --num-parallel 16
 
 # Generate only write-pattern tables (48 tables)

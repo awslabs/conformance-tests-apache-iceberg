@@ -447,7 +447,7 @@ class PySparkGenerator(TableGenerator):
             self.delete_tables_by_namespace("simple")
 
         table_specs = load_table_specs(self.specs_path, minimal=minimal)
-        mode_str = "minimal (none compression, plain encoding)" if minimal else "full"
+        mode_str = "minimal (uncompressed, plain encoding)" if minimal else "full"
 
         # Apply random selection if specified
         table_specs = self._random_select_tables(table_specs, random_count)

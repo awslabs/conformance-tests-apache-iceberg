@@ -54,7 +54,7 @@ def _extract_expected_single_type_tables(specs, minimal=False):
 
     # Get configurations
     if minimal:
-        compression_configs = [{'codec': 'none', 'level': None}]
+        compression_configs = [{'codec': 'uncompressed', 'level': None}]
         encoding_types = ['PLAIN']
     else:
         compression_configs = []
@@ -588,12 +588,7 @@ def _validate_parquet_properties(table_path, expected_spec):
                     expected_compression = 'zstd'
 
                 # Validate compression
-                if expected_compression == 'none':
-                    compression_valid = actual_compression in ['none', 'uncompressed']
-                elif actual_compression == 'uncompressed':
-                    compression_valid = expected_compression in ['none', 'uncompressed']
-                else:
-                    compression_valid = actual_compression == expected_compression
+                compression_valid = actual_compression == expected_compression
 
                 # Validate encoding
                 actual_encoding = column.encodings
@@ -1934,7 +1929,7 @@ def main():
                        help='Validate all rows (slow) instead of just sampling 10 rows')
     parser.add_argument('--num-parallel', type=int, default=1, help='Number of parallel validation workers')
     parser.add_argument('--minimal', action='store_true',
-                       help='Validate minimal set (none compression, plain encoding only)')
+                       help='Validate minimal set (uncompressed, plain encoding only)')
 
     args = parser.parse_args()
 
