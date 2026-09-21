@@ -35,6 +35,7 @@ import duckdb
 import pyarrow.parquet as pq
 import yaml
 
+from iceberg_fuzzer.table_spec import select_primitive_types
 from iceberg_fuzzer.validator import TableValidator
 
 def _load_table_specs(yaml_path):
@@ -42,19 +43,14 @@ def _load_table_specs(yaml_path):
     with open(yaml_path, 'r') as f:
         return yaml.safe_load(f)
 
-def _extract_expected_single_type_tables(specs, minimal=False, primitives_only=False):
-    """Extract expected single-type table specifications"""
+def _extract_expected_single_type_tables(specs, minimal=False):
+    """Extract expected single-type table specifications.
+
+    Complex types are not supported and raise ValueError.
+    """
     tables = []
 
-    # Get all type definitions
-    all_types = []
-    all_types.extend(specs.get('primitive_types', []))
-
-    # Skip complex types if primitives_only
-    if not primitives_only:
-        all_types.extend(specs.get('complex_types_list', []))
-        all_types.extend(specs.get('complex_types_map', []))
-        all_types.extend(specs.get('complex_types_struct', []))
+    all_types = select_primitive_types(specs, minimal=minimal)
 
     # Get configurations
     if minimal:
@@ -1053,12 +1049,18 @@ def _validate_basic_table_properties(conn, table_path, expected_spec):
     column_count = len(schema_result)
 
     # Validate row count
-    print(f"    ✓ Validating row count: {row_count} (expected: {expected_spec['expected_rows']})")
     row_count_valid = row_count == expected_spec['expected_rows']
+    print(
+        f"    {'✓' if row_count_valid else '✗'} Validating row count: "
+        f"{row_count} (expected: {expected_spec['expected_rows']})"
+    )
 
     # Validate column count
-    print(f"    ✓ Validating column count: {column_count} (expected: {expected_spec['schema_columns']})")
     column_count_valid = column_count == expected_spec['schema_columns']
+    print(
+        f"    {'✓' if column_count_valid else '✗'} Validating column count: "
+        f"{column_count} (expected: {expected_spec['schema_columns']})"
+    )
 
     return {
         'row_count': row_count,
@@ -1564,7 +1566,7 @@ def _validate_table_worker(table_path, expected_spec, full_content_validation):
 
 def _validate_tables(
     warehouse_path, specs_path, full_content_validation=False,
-    num_parallel=1, minimal=False, primitives_only=False
+    num_parallel=1, minimal=False
 ):
     """Validate all tables in warehouse against specifications"""
     specs = _load_table_specs(specs_path)
@@ -1600,7 +1602,7 @@ def _validate_tables(
 
     if include_simple:
         expected_single_type = _extract_expected_single_type_tables(
-            specs, minimal=minimal, primitives_only=primitives_only
+            specs, minimal=minimal
         )
         all_expected.extend(expected_single_type)
         print(f"  Single-type tables: {len(expected_single_type)}")
@@ -1902,10 +1904,9 @@ class DuckDBValidator(TableValidator):
     """DuckDB-based validator for local Iceberg tables"""
 
     def __init__(self, warehouse_path: str, specs_path: str,
-                 minimal: bool = False, primitives_only: bool = False):
+                 minimal: bool = False):
         super().__init__(warehouse_path, specs_path)
         self.minimal = minimal
-        self.primitives_only = primitives_only
 
     def supports_s3_tables(self) -> bool:
         return False
@@ -1917,7 +1918,7 @@ class DuckDBValidator(TableValidator):
         """Validate all tables using DuckDB"""
         success = _validate_tables(
             self.warehouse_path, self.specs_path, full_content_validation,
-            num_parallel, self.minimal, self.primitives_only
+            num_parallel, self.minimal
         )
         return {'success_rate': 100.0 if success else 0.0}
 
@@ -1934,14 +1935,12 @@ def main():
     parser.add_argument('--num-parallel', type=int, default=1, help='Number of parallel validation workers')
     parser.add_argument('--minimal', action='store_true',
                        help='Validate minimal set (none compression, plain encoding only)')
-    parser.add_argument('--primitives-only', action='store_true',
-                       help='Validate only primitive types (skip lists, maps, structs)')
 
     args = parser.parse_args()
 
     validator = DuckDBValidator(
         args.warehouse_path, args.specs,
-        minimal=args.minimal, primitives_only=args.primitives_only
+        minimal=args.minimal
     )
     result = validator.validate_tables(args.num_parallel, args.full_content_validation)
     success = result.get('success_rate', 0) == 100.0

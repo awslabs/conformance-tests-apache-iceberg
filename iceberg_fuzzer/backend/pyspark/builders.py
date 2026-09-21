@@ -534,13 +534,9 @@ def create_spark_schema(table_spec):
 
             spark_type = MapType(key_type, value_type)
         else:
-            # Default for unknown types including time_col, uuid_col, fixed_col
-            if 'time' in field_name:
-                spark_type = StringType()
-            elif 'uuid' in field_name or 'fixed' in field_name:
-                spark_type = BinaryType()
-            else:
-                spark_type = StringType()
+            raise ValueError(
+                f"Unknown Iceberg type '{field_type_str}' (column '{field_name}')"
+            )
 
         fields.append(StructField(field_name, spark_type, True))
 
