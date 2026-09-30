@@ -195,13 +195,9 @@ jobs:
     - name: Install dependencies
       run: uv sync
     - name: Generate PySpark evolution tables
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --random 3
-    # Counting only: validate expects every evolution table, not 3 random ones.
-    - name: Verify PySpark evolution tables
-      run: |
-        EVOLUTION_COUNT=$(find ./test-warehouse-pyspark-evolution -name "metadata" -type d 2>/dev/null | wc -l)
-        echo "PySpark evolution: $EVOLUTION_COUNT"
-        [ $EVOLUTION_COUNT -eq 3 ] || exit 1
+      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --num-parallel 4
+    - name: Validate PySpark evolution tables
+      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --full-content-validation --num-parallel 4
     - name: Upload PySpark evolution artifacts
       uses: actions/upload-artifact@v7
       if: always()

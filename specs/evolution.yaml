@@ -425,6 +425,12 @@ evolution_tables:
       - "row_count"
       - "partition_count"
     expected_snapshots: 3
+    # `day` partition fields are typed date while `month` and `year` are int, and
+    # DuckDB's Iceberg extension reads every manifest with the current spec's type.
+    # It raises this on the older manifests, and from iceberg_scan the error escapes
+    # a scan thread and aborts the process rather than surfacing as a query error.
+    unreadable_by:
+      duckdb: "Unimplemented type for cast (DATE -> INTEGER)"
   # 4. SORT ORDER EVOLUTION
   # Tests changing sort order specifications
   

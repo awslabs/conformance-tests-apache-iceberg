@@ -282,8 +282,17 @@ def _extract_expected_evolution_tables(specs_path):
     evolution_tables = evolution_specs.get('evolution_tables', [])
     base_schema = evolution_specs.get('base_schema', [])
 
+    skipped = []
+
     for table_spec in evolution_tables:
         table_name = table_spec['name']
+
+        # Tables this validator's reader cannot open are excluded from the expected
+        # set rather than reported missing, and named below so the gap stays visible.
+        unreadable = table_spec.get('unreadable_by', {}).get('duckdb')
+        if unreadable:
+            skipped.append((table_name, unreadable))
+            continue
 
         # Build expected schema based on evolution operations
         expected_schema = base_schema.copy()
@@ -292,13 +301,7 @@ def _extract_expected_evolution_tables(specs_path):
         schema_evolutions = table_spec.get('schema_evolution', [])
         evolution_sequence = table_spec.get('evolution_sequence', [])
 
-        # Process all evolution operations that affect schema
-        all_operations = schema_evolutions + [
-            op for op in evolution_sequence
-            if op.get('operation') not in ['add_column', 'drop_column', 'rename_column']
-        ]
-
-        for op in all_operations:
+        for op in schema_evolutions + evolution_sequence:
             if op['operation'] == 'add_column':
                 expected_schema.append({
                     'name': op['column'],
@@ -334,6 +337,9 @@ def _extract_expected_evolution_tables(specs_path):
             'initial_format_version': table_spec.get('initial_format_version', 2),
             'final_format_version': final_version
         })
+
+    for name, reason in skipped:
+        print(f"  Skipped (DuckDB cannot read): {name}: {reason}")
 
     return tables
 
@@ -1405,6 +1411,17 @@ def _types_compatible(expected_type, actual_type):
 
     return expected_type == actual_type
 
+def _failed_evolution_checks(result):
+    """Yield (check name, description) for each evolution check that failed"""
+    checks = result.get('evolution_validation', {}).get('evolution_checks', {})
+    for name, info in checks.items():
+        if info.get('valid', True):
+            continue
+        detail = info.get('error') or info.get('errors')
+        if not detail:
+            detail = f"expected {info.get('expected')}, got {info.get('actual')}"
+        yield name, detail
+
 def _validate_evolution_table(conn, table_path, expected_spec):
     """Validate evolution-specific properties of a table"""
     validation_results = {}
@@ -1421,7 +1438,7 @@ def _validate_evolution_table(conn, table_path, expected_spec):
                         # Try to get format version from table properties
                         result = conn.execute(
                             f"SELECT value FROM iceberg_metadata('{table_path}', 'snapshots')"
-                        )
+                        ).fetchone()
                         if not result:
                             # Fallback: assume v2 if no explicit version (v1 tables don't have this property)
                             actual_version = 1
@@ -1452,7 +1469,7 @@ def _validate_evolution_table(conn, table_path, expected_spec):
                         # For partitioned tables, check if files are in partition directories
                         result = conn.execute(
                             f"SELECT file_path FROM iceberg_metadata('{table_path}', 'entries')"
-                        )
+                        ).fetchall()
                         partition_paths = set()
 
                         for row in result:
@@ -1496,7 +1513,7 @@ def _validate_evolution_table(conn, table_path, expected_spec):
                     # Get actual schema details
                     result = conn.execute(
                         f"DESCRIBE SELECT * FROM iceberg_scan('{table_path}')"
-                    )
+                    ).fetchall()
                     actual_schema = [(row[0], row[1]) for row in result]  # (column_name, column_type)
                     actual_columns = len(actual_schema)
 
@@ -1582,7 +1599,7 @@ def _validate_evolution_table(conn, table_path, expected_spec):
                     try:
                         result = conn.execute(
                             f"SELECT COUNT(*) FROM iceberg_scan('{table_path}')"
-                        )
+                        ).fetchone()
                         has_data = result[0] > 0 if result else False
                         actual_snapshots = 1 if has_data else 0  # Simplified: just check if evolution succeeded
                     except Exception:
@@ -1840,6 +1857,10 @@ def _validate_tables(
                                     f"got {pq_val.get('actual_encoding')}"
                                 )
 
+                    if not result.get('evolution_valid', True):
+                        for check, info in _failed_evolution_checks(result):
+                            print(f"    Evolution {check}: {info}")
+
                     # If no specific errors were found, print full result for debugging
                     if (result.get('row_count_valid', True) and
                         result.get('column_count_valid', True) and
@@ -1850,6 +1871,7 @@ def _validate_tables(
                         result.get('partition_valid', True) and
                         result.get('path_style_valid', True) and
                         result.get('parquet_valid', True) and
+                        result.get('evolution_valid', True) and
                         not result.get('error')):
                         print(
                             f"    DEBUG: Marked invalid but no specific errors. "
@@ -1933,6 +1955,10 @@ def _validate_tables(
                                 f"got {pq_val.get('actual_encoding')}"
                             )
 
+                if not result.get('evolution_valid', True):
+                    for check, info in _failed_evolution_checks(result):
+                        print(f"    Evolution {check}: {info}")
+
                 # If no specific errors were found, print full result for debugging
                 if (result.get('row_count_valid', True) and
                     result.get('column_count_valid', True) and
@@ -1943,6 +1969,7 @@ def _validate_tables(
                     result.get('partition_valid', True) and
                     result.get('path_style_valid', True) and
                     result.get('parquet_valid', True) and
+                    result.get('evolution_valid', True) and
                     not result.get('error')):
                     print(f"    DEBUG: Marked invalid but no specific errors. Full result keys: {list(result.keys())}")
 
