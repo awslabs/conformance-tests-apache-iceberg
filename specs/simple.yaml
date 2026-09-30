@@ -277,7 +277,8 @@ primitive_types:
 
 # Naming convention
 naming_convention:
-  pattern: "unpart_{datatype}_{codec}_lvl{level}_{encoding}"
+  pattern: "unpart_{datatype}_{codec}[_lvl{level}]_{encoding}_v{version}"
   examples:
-    - "unpart_int_gzip_lvl1_plain"
-    - "unpart_string_small_zstd_lvl3_dictionary"
+    - "unpart_int_gzip_lvl1_plain_v1"
+    - "unpart_string_small_zstd_lvl3_dictionary_v2"
+    - "unpart_boolean_uncompressed_plain_v2"  # codecs without levels omit the lvl segment

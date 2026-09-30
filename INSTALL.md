@@ -2,8 +2,13 @@
 
 ## Prerequisites
 
-- **Python 3.9+** (tested up to 3.13)
-- **Java 21+** (tested up to 23)
+- **Python 3.12+** (tested up to 3.13)
+- **Java 21, 22, or 23** — not 24 or later. PySpark 3.5.3 relies on the Java
+  Security Manager, which was permanently disabled in Java 24, so Spark aborts
+  while starting its session with
+  `java.lang.UnsupportedOperationException: getSubject is not supported`. The
+  error does not mention the Java version. If you have a newer JDK installed,
+  install Java 21 alongside it and point `JAVA_HOME` at that.
 - **Build tools** (gcc, build-essential) for compiling native dependencies
 
 ## Quick Setup with uv (Recommended)
@@ -106,21 +111,9 @@ python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/wa
 
 ## Dependencies
 
-All dependencies are managed through `pyproject.toml`:
-
-**Core dependencies:**
-- `pyspark==3.5.3` - Apache Spark for Python
-- `pyiceberg>=0.5.0` - Python implementation of Apache Iceberg
-- `polars>=0.20.0` - Fast DataFrame library
-- `pyarrow>=12.0.0` - Columnar in-memory analytics
-- `pyyaml>=6.0` - YAML parser
-- `boto3>=1.26.0` - AWS SDK for Python
-- `sqlalchemy>=1.4.0` - SQL toolkit
-
-**Development dependencies (optional):**
-- `pytest>=7.0.0` - Testing framework
-- `black>=22.0.0` - Code formatter
-- `flake8>=4.0.0` - Linter
+All dependencies and their versions are declared in `pyproject.toml`, which is
+the authoritative list; `uv sync` installs them. The test and lint dependencies
+are in the `dev` extra: `uv sync --extra dev`.
 
 ## Troubleshooting
 
@@ -134,6 +127,18 @@ echo $JAVA_HOME
 sudo apt install -y openjdk-21-jdk
 ```
 
+**`UnsupportedOperationException: getSubject is not supported`** during any
+PySpark command means `JAVA_HOME` points to Java 24 or later. Point it at a
+Java 21–23 installation:
+
+```bash
+java -version                  # what's on PATH
+"$JAVA_HOME/bin/java" -version # what Spark will actually use
+```
+
+On macOS, `/usr/libexec/java_home -V` lists every installed JDK so you can pick
+the right one.
+
 ### Build Issues
 ```bash
 # Install build tools (Ubuntu)
@@ -145,7 +150,7 @@ sudo yum groupinstall -y "Development Tools"
 
 ### Python Issues
 ```bash
-# Check Python version (must be 3.9+)
+# Check Python version (must be 3.12+)
 python --version
 
 # Check virtual environment
