@@ -67,88 +67,101 @@ def _validate_backend_constraints(backend, warehouse_path):
             print(f"Error: {backend} backend does not support S3 Tables ARNs")
             sys.exit(1)
 
-def _generate_tables_for_specs(generator, args):
-    """Generate tables based on specs file type."""
+def _generate_tables_for_specs(generator, args) -> bool:
+    """Generate tables based on specs file type.
+
+    Returns:
+        True if every table generated, False if any failed.
+    """
     specs_file = os.path.basename(args.specs).lower()
 
     if 'simple' in specs_file:
-        generator.generate_simple_tables(
+        return generator.generate_simple_tables(
             args.num_parallel,
             minimal=args.minimal,
             random_count=args.random,
             delete_existing=args.delete_existing
         )
     elif 'write_pattern' in specs_file:
-        generator.generate_write_pattern_tables(
+        return generator.generate_write_pattern_tables(
             args.num_parallel,
             random_count=args.random,
             delete_existing=args.delete_existing
         )
     elif 'partitioned' in specs_file:
-        generator.generate_partitioned_tables(
+        return generator.generate_partitioned_tables(
             args.num_parallel,
             random_count=args.random,
             minimal=args.minimal,
             delete_existing=args.delete_existing
         )
     elif 'evolution' in specs_file:
-        generator.generate_evolution_tables(
+        return generator.generate_evolution_tables(
             args.num_parallel,
             random_count=args.random,
             delete_existing=args.delete_existing
         )
     elif 'table_specs.yaml' in specs_file:
-        _generate_all_table_types(generator, args)
+        return _generate_all_table_types(generator, args)
     else:
         # Default to simple tables for backward compatibility
-        generator.generate_simple_tables(
+        return generator.generate_simple_tables(
             args.num_parallel,
             minimal=args.minimal,
             random_count=args.random,
             delete_existing=args.delete_existing
         )
 
-def _generate_all_table_types(generator, args):
-    """Generate all table types when using main table_specs.yaml."""
+def _generate_all_table_types(generator, args) -> bool:
+    """Generate all table types when using main table_specs.yaml.
+
+    Returns:
+        True if every table type generated completely, False if any failed.
+    """
     print("Generating all table types (simple + write-pattern + partitioned)...")
+
+    results = []
 
     # Generate simple tables
     print("\n" + "="*60)
     print("GENERATING SIMPLE TABLES")
     print("="*60)
-    generator.generate_simple_tables(
+    results.append(generator.generate_simple_tables(
         args.num_parallel,
         minimal=args.minimal,
         random_count=args.random,
         delete_existing=args.delete_existing
-    )
+    ))
 
     # Generate write-pattern tables
     print("\n" + "="*60)
     print("GENERATING WRITE-PATTERN TABLES")
     print("="*60)
-    generator.generate_write_pattern_tables(
+    results.append(generator.generate_write_pattern_tables(
         args.num_parallel,
         random_count=args.random,
         delete_existing=False  # Don't delete again
-    )
+    ))
 
     # Generate partitioned tables (PySpark only)
     if args.backend == 'pyspark':
         print("\n" + "="*60)
         print("GENERATING PARTITIONED TABLES")
         print("="*60)
-        generator.generate_partitioned_tables(
+        results.append(generator.generate_partitioned_tables(
             args.num_parallel,
             random_count=args.random,
             minimal=args.minimal,
             delete_existing=False  # Don't delete again
-        )
+        ))
+
     else:
         print(
             f"\nSkipping partitioned tables - {args.backend} backend "
             "does not support partitioned tables"
         )
+
+    return all(results)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -555,12 +568,17 @@ Examples:
         from iceberg_fuzzer.backend.polars.generator import PolarsGenerator
         generator = PolarsGenerator(args.warehouse_path, args.specs)
 
+    failed = False
+
     try:
         # Handle single table generation
         if args.table_name:
-            generator.generate_single_table(args.table_name, delete_existing=args.delete_existing)
-        else:
-            _generate_tables_for_specs(generator, args)
+            if not generator.generate_single_table(
+                args.table_name, delete_existing=args.delete_existing
+            ):
+                failed = True
+        elif not _generate_tables_for_specs(generator, args):
+            failed = True
 
         # Validate tables if requested
         if args.validate:
@@ -583,14 +601,17 @@ Examples:
                 )
                 if result.returncode != 0:
                     print(f"\n⚠️  Validation completed with errors (exit code: {result.returncode})")
+                    failed = True
                 else:
                     print("\n✅ Validation completed successfully")
             except FileNotFoundError:
                 print(
                     f"\n❌ Error: Validator script not found at {_VALIDATOR_SCRIPT}"
                 )
+                failed = True
             except Exception as e:
                 print(f"\n❌ Error running validator: {e}")
+                failed = True
 
     except Exception as e:
         print(f"Error generating tables: {e}")
@@ -598,6 +619,9 @@ Examples:
 
     finally:
         generator.cleanup()
+
+    if failed:
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
