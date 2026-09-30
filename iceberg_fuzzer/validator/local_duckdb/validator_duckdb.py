@@ -86,8 +86,12 @@ def _extract_expected_single_type_tables(specs, minimal=False):
                         'name': table_name,
                         'type': 'single_type',
                         'data_type': type_def['name'],
+                        'iceberg_type': type_def['iceberg_type'],
                         'compression': comp_str,
                         'encoding': encoding.lower(),
+                        # Without this the format-version check is skipped, so a
+                        # table named v1 could be written as v2 unnoticed.
+                        'version': version,
                         'expected_rows': 1000,
                         'expected_commits': 10,
                         'schema_columns': 2  # id + value
@@ -102,7 +106,7 @@ def _extract_expected_write_pattern_tables(specs):
 
     # Load write_patterns.yaml - get path relative to this file
     current_file = Path(__file__).resolve()
-    project_root = current_file.parent.parent.parent
+    project_root = current_file.parent.parent.parent.parent
     write_patterns_path = project_root / 'specs' / 'write_patterns.yaml'
 
     if not write_patterns_path.exists():
@@ -155,7 +159,7 @@ def _extract_expected_partitioned_tables(specs):
 
     # Load partitioned.yaml - get path relative to this file
     current_file = Path(__file__).resolve()
-    project_root = current_file.parent.parent.parent
+    project_root = current_file.parent.parent.parent.parent
     partitioned_path = project_root / 'specs' / 'partitioned.yaml'
 
     if not partitioned_path.exists():
@@ -1034,6 +1038,58 @@ def _validate_iceberg_metadata(conn, table_path, expected_spec):
             'metadata_accessible': False,
             'error': str(e)
         }
+
+def _expected_duckdb_type(iceberg_type) -> str | None:
+    """Map an Iceberg type to the type DuckDB reports for it.
+
+    Returns None for types with no single expected spelling, which skips the
+    check rather than inventing one.
+    """
+    simple = {
+        'boolean': 'BOOLEAN',
+        'int': 'INTEGER',
+        'long': 'BIGINT',
+        'float': 'FLOAT',
+        'double': 'DOUBLE',
+        'date': 'DATE',
+        'time': 'TIME',
+        'timestamp': 'TIMESTAMP',
+        'timestamptz': 'TIMESTAMP WITH TIME ZONE',
+        'string': 'VARCHAR',
+        'binary': 'BLOB',
+        'uuid': 'UUID',
+    }
+    if iceberg_type in simple:
+        return simple[iceberg_type]
+    if iceberg_type.startswith('decimal('):
+        return f"DECIMAL({iceberg_type[8:-1].replace(' ', '')})"
+    if iceberg_type.startswith('fixed('):
+        return 'BLOB'
+    return None
+
+def _validate_value_column_type(
+    schema_result, expected_spec
+) -> tuple[bool, str | None]:
+    """Check that the value column carries the Iceberg type its name claims.
+
+    Column *count* alone cannot tell a `time` column from the `string` some
+    backends substitute for it, so a table named for a type it does not
+    contain would otherwise validate clean.
+    """
+    iceberg_type = expected_spec.get('iceberg_type')
+    if expected_spec.get('type') != 'single_type' or not iceberg_type:
+        return True, None
+
+    expected_type = _expected_duckdb_type(iceberg_type)
+    if expected_type is None or len(schema_result) < 2:
+        return True, None
+
+    actual_type = schema_result[1][1].upper()
+    if actual_type == expected_type:
+        return True, None
+    return False, f"value is {actual_type}, expected {expected_type} for {iceberg_type}"
+
+
 def _validate_basic_table_properties(conn, table_path, expected_spec):
     """Validate basic table properties: row count, column count, and schema."""
     # Try to scan the table
@@ -1062,11 +1118,22 @@ def _validate_basic_table_properties(conn, table_path, expected_spec):
         f"{column_count} (expected: {expected_spec['schema_columns']})"
     )
 
+    # Validate the value column's type
+    column_type_valid, column_type_error = _validate_value_column_type(
+        schema_result, expected_spec
+    )
+    if column_type_error:
+        print(f"    ✗ Validating column type: {column_type_error}")
+    else:
+        print("    ✓ Validating column type")
+
     return {
         'row_count': row_count,
         'column_count': column_count,
         'row_count_valid': row_count_valid,
-        'column_count_valid': column_count_valid
+        'column_count_valid': column_count_valid,
+        'column_type_valid': column_type_valid,
+        'column_type_error': column_type_error
     }
 
 def _validate_evolution_properties(conn, table_path, expected_spec):
@@ -1262,6 +1329,7 @@ def _validate_iceberg_table(conn, table_path, expected_spec):
         overall_valid = (
             basic_props['row_count_valid'] and
             basic_props['column_count_valid'] and
+            basic_props['column_type_valid'] and
             content_valid and
             metadata_valid and
             delete_result['valid'] and
@@ -1279,6 +1347,8 @@ def _validate_iceberg_table(conn, table_path, expected_spec):
             'column_count': basic_props['column_count'],
             'row_count_valid': basic_props['row_count_valid'],
             'column_count_valid': basic_props['column_count_valid'],
+            'column_type_valid': basic_props['column_type_valid'],
+            'column_type_error': basic_props['column_type_error'],
             'content_valid': content_valid,
             'content_validation': content_validation,
             'metadata_valid': metadata_valid,
@@ -1303,6 +1373,8 @@ def _validate_iceberg_table(conn, table_path, expected_spec):
             'column_count': 0,
             'row_count_valid': False,
             'column_count_valid': False,
+            'column_type_valid': False,
+            'column_type_error': None,
             'content_valid': False,
             'content_validation': {'valid': False, 'error': str(e)},
             'metadata_valid': False,
@@ -1709,6 +1781,8 @@ def _validate_tables(
                             f"    Column count: expected {expected.get('schema_columns', '?')}, "
                             f"got {result.get('column_count', 0)}"
                         )
+                    if not result.get('column_type_valid', True):
+                        print(f"    Column type: {result.get('column_type_error')}")
                     if not result.get('content_valid', True):
                         content_val = result.get('content_validation', {})
                         if 'error' in content_val:
@@ -1760,6 +1834,7 @@ def _validate_tables(
                     # If no specific errors were found, print full result for debugging
                     if (result.get('row_count_valid', True) and
                         result.get('column_count_valid', True) and
+                        result.get('column_type_valid', True) and
                         result.get('content_valid', True) and
                         result.get('metadata_valid', True) and
                         result.get('delete_valid', True) and
@@ -1799,6 +1874,8 @@ def _validate_tables(
                         f"    Column count: expected {expected.get('schema_columns', '?')}, "
                         f"got {result.get('column_count', 0)}"
                     )
+                if not result.get('column_type_valid', True):
+                    print(f"    Column type: {result.get('column_type_error')}")
                 if not result.get('content_valid', True):
                     content_val = result.get('content_validation', {})
                     if 'error' in content_val:
@@ -1850,6 +1927,7 @@ def _validate_tables(
                 # If no specific errors were found, print full result for debugging
                 if (result.get('row_count_valid', True) and
                     result.get('column_count_valid', True) and
+                    result.get('column_type_valid', True) and
                     result.get('content_valid', True) and
                     result.get('metadata_valid', True) and
                     result.get('delete_valid', True) and
