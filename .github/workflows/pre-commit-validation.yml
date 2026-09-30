@@ -241,13 +241,13 @@ jobs:
       run: uv sync
     # Use int table: fast to generate, exercises point query validation (int is a supported type)
     - name: Generate a table
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-workflow --specs specs/simple.yaml --minimal --table-name unpart_int_none_plain_v2
+      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-workflow --specs specs/simple.yaml --minimal --table-name unpart_int_uncompressed_plain_v2
     - name: Run workflow
       run: |
         uv run python -m iceberg_fuzzer.cli workflow run \
           --workflow ${{ matrix.workflow-file }} \
           --warehouse-path $PWD/test-warehouse-workflow \
-          --table-name unpart_int_none_plain_v2 \
+          --table-name unpart_int_uncompressed_plain_v2 \
           --namespace simple
 
   pytest:

@@ -447,12 +447,11 @@ def create_spark_schema(table_spec):
             precision = int(parts[0])
             scale = int(parts[1]) if len(parts) > 1 else 0
             spark_type = DecimalType(precision, scale)
-        elif field_type_str == 'uuid':
-            spark_type = BinaryType()
-        elif field_type_str == 'fixed':
-            spark_type = BinaryType()
-        elif field_type_str == 'time':
-            spark_type = StringType()
+        elif field_type_str in ('uuid', 'time') or field_type_str.startswith('fixed('):
+            raise ValueError(
+                f"Spark cannot express Iceberg type '{field_type_str}' "
+                f"(column '{field_name}')"
+            )
         elif field_type_str.startswith('list<'):
             element_type_str = field_type_str[5:-1]
             if element_type_str == 'boolean':
@@ -478,10 +477,11 @@ def create_spark_schema(table_spec):
                 precision = int(parts[0])
                 scale = int(parts[1]) if len(parts) > 1 else 0
                 element_type = DecimalType(precision, scale)
-            elif element_type_str == 'uuid' or element_type_str == 'fixed' or element_type_str.startswith('fixed('):
-                element_type = BinaryType()
-            elif element_type_str == 'time':
-                element_type = StringType()
+            elif element_type_str in ('uuid', 'time') or element_type_str.startswith('fixed('):
+                raise ValueError(
+                    f"Spark cannot express Iceberg type '{element_type_str}' as a "
+                    f"list element (column '{field_name}')"
+                )
             else:
                 element_type = StringType()
             spark_type = ArrayType(element_type)
@@ -524,22 +524,19 @@ def create_spark_schema(table_spec):
                 precision = int(parts[0])
                 scale = int(parts[1]) if len(parts) > 1 else 0
                 value_type = DecimalType(precision, scale)
-            elif value_type_str == 'uuid' or value_type_str == 'fixed' or value_type_str.startswith('fixed('):
-                value_type = BinaryType()
-            elif value_type_str == 'time':
-                value_type = StringType()
+            elif value_type_str in ('uuid', 'time') or value_type_str.startswith('fixed('):
+                raise ValueError(
+                    f"Spark cannot express Iceberg type '{value_type_str}' as a "
+                    f"map value (column '{field_name}')"
+                )
             else:
                 value_type = StringType()
 
             spark_type = MapType(key_type, value_type)
         else:
-            # Default for unknown types including time_col, uuid_col, fixed_col
-            if 'time' in field_name:
-                spark_type = StringType()
-            elif 'uuid' in field_name or 'fixed' in field_name:
-                spark_type = BinaryType()
-            else:
-                spark_type = StringType()
+            raise ValueError(
+                f"Unknown Iceberg type '{field_type_str}' (column '{field_name}')"
+            )
 
         fields.append(StructField(field_name, spark_type, True))
 
@@ -591,12 +588,6 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
                 row_data[field_name] = float(row_id) + 0.5
             elif field_type == 'double':
                 row_data[field_name] = float(row_id) * 1.5
-            elif field_type == 'time':
-                row_data[field_name] = f"{(row_id % 24):02d}:{(row_id % 60):02d}:00"
-            elif field_type == 'uuid':
-                row_data[field_name] = uuid.UUID(int=row_id).bytes
-            elif field_type == 'fixed' or field_type == 'fixed_16':
-                row_data[field_name] = f"fixed_{row_id}".ljust(16, '0')[:16].encode()
             elif field_type == 'string':
                 row_data[field_name] = f"value_{row_id}"
             elif field_type == 'binary':
@@ -623,16 +614,16 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
                     row_data[field_name] = [f"item_{row_id}_{j}" for j in range(3)]
                 elif element_type == 'date':
                     row_data[field_name] = [date(2023, 1, min(28, ((row_id + j) % 28) + 1)) for j in range(3)]
-                elif element_type == 'time':
-                    row_data[field_name] = [f"{((row_id + j) % 24):02d}:00:00" for j in range(3)]
                 elif element_type == 'timestamp' or element_type == 'timestamptz':
                     row_data[field_name] = [datetime(2023, 1, 1, hour=((row_id + j) % 24)) for j in range(3)]
                 elif element_type.startswith('decimal('):
                     row_data[field_name] = [Decimal(f"{row_id + j}.{(row_id + j) % 100:02d}") for j in range(3)]
-                elif element_type == 'uuid':
-                    row_data[field_name] = [uuid.UUID(int=row_id + j).bytes for j in range(3)]
-                elif element_type == 'fixed' or element_type.startswith('fixed('):
-                    row_data[field_name] = [f"fixed_{row_id + j}".ljust(16, '0')[:16].encode() for j in range(3)]
+                elif element_type.startswith('fixed('):
+                    length = int(element_type[6:-1])
+                    row_data[field_name] = [
+                        f"fixed_{row_id + j}".ljust(length, '0')[:length].encode()
+                        for j in range(3)
+                    ]
                 elif element_type.startswith('binary'):
                     row_data[field_name] = [f"item_{row_id}_{j}".encode() for j in range(3)]
                 else:
@@ -675,20 +666,11 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
                         row_id: Decimal(f"{row_id}.{row_id % 100:02d}"),
                         row_id + 1: Decimal(f"{row_id + 1}.{(row_id + 1) % 100:02d}")
                     }
-                elif value_type_str == 'uuid':
+                elif value_type_str.startswith('fixed('):
+                    length = int(value_type_str[6:-1])
                     row_data[field_name] = {
-                        row_id: uuid.UUID(int=row_id).bytes,
-                        row_id + 1: uuid.UUID(int=row_id + 1).bytes
-                    }
-                elif value_type_str == 'fixed' or value_type_str.startswith('fixed('):
-                    row_data[field_name] = {
-                        row_id: f"fixed_{row_id}".ljust(16, '0')[:16].encode(),
-                        row_id + 1: f"fixed_{row_id + 1}".ljust(16, '0')[:16].encode()
-                    }
-                elif value_type_str == 'time':
-                    row_data[field_name] = {
-                        row_id: f"{(row_id % 24):02d}:00:00",
-                        row_id + 1: f"{((row_id + 1) % 24):02d}:00:00"
+                        row_id: f"fixed_{row_id}".ljust(length, '0')[:length].encode(),
+                        row_id + 1: f"fixed_{row_id + 1}".ljust(length, '0')[:length].encode()
                     }
                 else:
                     row_data[field_name] = {row_id: f"value_{row_id}", row_id + 1: f"value_{row_id + 1}"}
@@ -887,44 +869,26 @@ def create_single_type_table(spark, warehouse_path, table_name, table_spec, coun
         if delete_existing:
             drop_table_if_exists(spark, catalog, namespace, table_name)
 
-        # Extract compression codec from table name
-        # Format: unpart_{type}_{compression}_{encoding}_{version}
-        # Compression can be: gzip_lvl1, gzip_lvl2, gzip_lvl3, zstd_lvl1, zstd_lvl2, zstd_lvl3, snappy, lz4
-        parts = table_name.split('_')
-
-        # Find compression part (comes after datatype, before encoding)
-        # Datatype can be multi-part (e.g., binary_long), so we need to find where compression starts
-        compression_keywords = ['gzip', 'zstd', 'snappy', 'lz4', 'none']
-        compression = 'snappy'  # default
-
-        for i, part in enumerate(parts):
-            if part in compression_keywords:
-                # Check if next part is lvl1/lvl2/lvl3
-                if i + 1 < len(parts) and parts[i + 1].startswith('lvl'):
-                    compression = f"{part}_{parts[i + 1]}"
-                else:
-                    compression = part
-                break
-
-        # Map compression names to Parquet codec names (strip level suffixes)
-        compression_map = {
-            'gzip': 'gzip',
-            'snappy': 'snappy',
-            'zstd': 'zstd',
-            'lz4': 'lz4_raw',
-            'none': 'uncompressed'
-        }
-
-        # Extract base compression (remove lvl1, lvl2, lvl3 suffixes)
-        base_compression = compression.split('_')[0]
-        codec = compression_map.get(base_compression, 'snappy')
+        compression = table_spec.get('compression', {})
+        codec = compression.get('codec')
+        if codec == 'lz4':
+            # PyArrow maps `lz4` to Parquet's LZ4_RAW codec; Spark maps it to the
+            # deprecated LZ4 codec, so name LZ4_RAW to match the other backends.
+            # TODO: `lz4_raw` is not in Iceberg's documented codec list, and no
+            # backend can now write the deprecated codec. Cover both deliberately.
+            codec = 'lz4_raw'
+        level = compression.get('level')
 
         # Write 10 commits of 100 rows each
         for i in range(10):
             batch_df = generate_spark_data(spark, table_spec, 100, row_offset=i * 100)
 
             if i == 0:
-                props = {'write.parquet.compression-codec': codec}
+                props = dict(table_spec.get('properties', {}))
+                if codec is not None:
+                    props['write.parquet.compression-codec'] = codec
+                if level is not None:
+                    props['write.parquet.compression-level'] = str(level)
                 # Create table with SQL first
                 batch_df.createOrReplaceTempView("temp_create_data")
                 schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in batch_df.schema.fields])

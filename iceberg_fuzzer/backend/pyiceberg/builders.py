@@ -102,57 +102,66 @@ def create_iceberg_schema(table_spec):
     return Schema(*fields)
 
 
-def generate_sample_data(table_spec, num_rows=100):
-    """Generate sample data for a table"""
+def generate_sample_data(table_spec, num_rows=100, row_offset=0):
+    """Generate sample data for a table.
+
+    Every column is derived from the same row ID so that a row's value can be
+    predicted from its ID, which is what the DuckDB validator checks.
+    `row_offset` is the count of rows already committed, so IDs keep advancing
+    across commits instead of restarting at 1.
+    """
     data = {}
+    row_ids = [row_id_from_index(i, row_offset) for i in range(num_rows)]
 
     for field_spec in table_spec["schema"]:
         field_name = field_spec["name"]
         field_type = field_spec["type"]
 
         if field_name == "id":
-            data[field_name] = pa.array(
-                [row_id_from_index(i, 0) for i in range(num_rows)], type=pa.int32()
-            )
+            data[field_name] = pa.array(row_ids, type=pa.int32())
         elif field_type == "boolean":
-            data[field_name] = pa.array([i % 2 == 0 for i in range(num_rows)])
+            data[field_name] = pa.array([i % 2 == 0 for i in row_ids])
         elif field_type == "int":
-            data[field_name] = pa.array(list(range(num_rows)), type=pa.int32())
+            data[field_name] = pa.array(row_ids, type=pa.int32())
         elif field_type == "long":
             data[field_name] = pa.array(
-                [i * 1000 for i in range(num_rows)], type=pa.int64()
+                [i * 1000 for i in row_ids], type=pa.int64()
             )
         elif field_type == "float":
             data[field_name] = pa.array(
-                [float(i) + 0.5 for i in range(num_rows)], type=pa.float32()
+                [float(i) + 0.5 for i in row_ids], type=pa.float32()
             )
         elif field_type == "double":
             data[field_name] = pa.array(
-                [float(i) * 1.5 for i in range(num_rows)], type=pa.float64()
+                [float(i) * 1.5 for i in row_ids], type=pa.float64()
             )
         elif field_type == "string":
-            data[field_name] = pa.array([f"value_{i}" for i in range(num_rows)])
+            data[field_name] = pa.array([f"value_{i}" for i in row_ids])
+        elif field_type == "binary":
+            data[field_name] = pa.array(
+                [f"value_{i}".encode() for i in row_ids], type=pa.large_binary()
+            )
         elif field_type == "date":
             base_date = date(2023, 1, 1)
             data[field_name] = pa.array(
-                [base_date.replace(day=min(28, (i % 28) + 1)) for i in range(num_rows)],
+                [base_date.replace(day=min(28, (i % 28) + 1)) for i in row_ids],
                 type=pa.date32(),
             )
         elif field_type == "time":
             data[field_name] = pa.array(
-                [time(hour=(i % 24), minute=(i % 60)) for i in range(num_rows)],
+                [time(hour=(i % 24), minute=(i % 60)) for i in row_ids],
                 type=pa.time64("us"),
             )
         elif field_type == "timestamp":
             base_ts = datetime(2023, 1, 1)
             data[field_name] = pa.array(
-                [base_ts.replace(hour=(i % 24)) for i in range(num_rows)],
+                [base_ts.replace(hour=(i % 24)) for i in row_ids],
                 type=pa.timestamp("us"),
             )
         elif field_type == "timestamptz":
             base_ts = datetime(2023, 1, 1)
             data[field_name] = pa.array(
-                [base_ts.replace(hour=(i % 24)) for i in range(num_rows)],
+                [base_ts.replace(hour=(i % 24)) for i in row_ids],
                 type=pa.timestamp("us", tz="UTC"),
             )
         elif field_type.startswith("decimal("):
@@ -160,20 +169,19 @@ def generate_sample_data(table_spec, num_rows=100):
             precision = int(parts[0])
             scale = int(parts[1]) if len(parts) > 1 else 0
             data[field_name] = pa.array(
-                [Decimal(f"{i}.{i % 100:02d}") for i in range(num_rows)],
+                [Decimal(f"{i}.{i % 100:02d}") for i in row_ids],
                 type=pa.decimal128(precision, scale),
             )
         elif field_type == "uuid":
-            # Generate deterministic UUIDs based on row index
             data[field_name] = pa.array(
-                [uuid.UUID(int=i).bytes for i in range(num_rows)], type=pa.binary(16)
+                [uuid.UUID(int=i).bytes for i in row_ids], type=pa.binary(16)
             )
         elif field_type.startswith("fixed("):
             length = int(field_type[6:-1])
             data[field_name] = pa.array(
                 [
                     f"fixed_{i}".ljust(length, "0")[:length].encode()
-                    for i in range(num_rows)
+                    for i in row_ids
                 ],
                 type=pa.binary(length),
             )
@@ -183,9 +191,9 @@ def generate_sample_data(table_spec, num_rows=100):
             or field_type.startswith("struct<")
         ):
             # Complex types not fully supported in PyIceberg - use string placeholder
-            data[field_name] = pa.array([f"value_{i}" for i in range(num_rows)])
+            data[field_name] = pa.array([f"value_{i}" for i in row_ids])
         else:
-            data[field_name] = pa.array([f"value_{i}" for i in range(num_rows)])
+            data[field_name] = pa.array([f"value_{i}" for i in row_ids])
 
     return pa.Table.from_arrays(list(data.values()), names=list(data.keys()))
 
@@ -222,30 +230,26 @@ def create_table_with_commits(
         except Exception:
             pass  # Ignore errors
 
+        compression = table_spec.get("compression", {})
+        codec = compression.get("codec")
+        level = compression.get("level")
+
+        properties = dict(table_spec.get("properties", {}))
+        if codec is not None:
+            properties["write.parquet.compression-codec"] = codec
+        if level is not None:
+            properties["write.parquet.compression-level"] = str(level)
+
         table = catalog.create_table(
             identifier=table_identifier,
             schema=iceberg_schema,
-            properties={
-                "format-version": table_spec.get("iceberg_version", "v2").replace(
-                    "v", ""
-                ),
-                "write.parquet.compression-codec": table_spec.get(
-                    "compression", {}
-                ).get("codec", "gzip"),
-                **(
-                    {}
-                    if table_spec.get("compression", {}).get("level") is None
-                    else {
-                        "write.parquet.compression-level": str(
-                            table_spec["compression"]["level"]
-                        )
-                    }
-                ),
-            },
+            properties=properties,
         )
 
-        for _ in range(num_commits):
-            data = generate_sample_data(table_spec, rows_per_commit)
+        for commit in range(num_commits):
+            data = generate_sample_data(
+                table_spec, rows_per_commit, row_offset=commit * rows_per_commit
+            )
             table.append(data)
 
         catalog.close()

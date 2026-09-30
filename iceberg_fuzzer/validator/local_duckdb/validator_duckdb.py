@@ -35,6 +35,8 @@ import duckdb
 import pyarrow.parquet as pq
 import yaml
 
+from iceberg_fuzzer.common import row_id_from_index
+from iceberg_fuzzer.table_spec import select_primitive_types
 from iceberg_fuzzer.validator import TableValidator
 
 def _load_table_specs(yaml_path):
@@ -42,23 +44,18 @@ def _load_table_specs(yaml_path):
     with open(yaml_path, 'r') as f:
         return yaml.safe_load(f)
 
-def _extract_expected_single_type_tables(specs, minimal=False, primitives_only=False):
-    """Extract expected single-type table specifications"""
+def _extract_expected_single_type_tables(specs, minimal=False):
+    """Extract expected single-type table specifications.
+
+    Complex types are not supported and raise ValueError.
+    """
     tables = []
 
-    # Get all type definitions
-    all_types = []
-    all_types.extend(specs.get('primitive_types', []))
-
-    # Skip complex types if primitives_only
-    if not primitives_only:
-        all_types.extend(specs.get('complex_types_list', []))
-        all_types.extend(specs.get('complex_types_map', []))
-        all_types.extend(specs.get('complex_types_struct', []))
+    all_types = select_primitive_types(specs, minimal=minimal)
 
     # Get configurations
     if minimal:
-        compression_configs = [{'codec': 'none', 'level': None}]
+        compression_configs = [{'codec': 'uncompressed', 'level': None}]
         encoding_types = ['PLAIN']
     else:
         compression_configs = []
@@ -412,8 +409,6 @@ def _generate_primitive_data(data_type, row_id):
         return datetime(2023, 1, 1).replace(hour=(row_id % 24))
     elif data_type == 'uuid':
         return uuid_lib.UUID(int=row_id).bytes
-    elif data_type == 'fixed' or data_type == 'fixed_16':
-        return f"fixed_{row_id}".ljust(16, '0')[:16].encode()
     elif data_type == 'time':
         return time(hour=(row_id % 24), minute=(row_id % 60))
     return f"value_{row_id}"
@@ -442,8 +437,9 @@ def _generate_list_element(element_type, row_id, offset):
         return Decimal(f"{row_id + offset}.{(row_id + offset)%100:02d}")
     elif element_type == 'uuid':
         return uuid_lib.UUID(int=row_id + offset).bytes
-    elif element_type == 'fixed' or element_type.startswith('fixed('):
-        return f"fixed_{row_id + offset}".ljust(16, '0')[:16].encode()
+    elif element_type.startswith('fixed('):
+        length = int(element_type[6:-1])
+        return f"fixed_{row_id + offset}".ljust(length, '0')[:length].encode()
     elif element_type == 'time':
         return f"{((row_id + offset) % 24):02d}:00:00"
     return f"item_{row_id}_{offset}"
@@ -476,8 +472,9 @@ def _generate_map_value(value_type, key):
         return Decimal(f"{key}.{key % 100:02d}")
     elif value_type == 'uuid':
         return uuid_lib.UUID(int=key).bytes
-    elif value_type == 'fixed' or value_type.startswith('fixed('):
-        return f"fixed_{key}".ljust(16, '0')[:16].encode()
+    elif value_type.startswith('fixed('):
+        length = int(value_type[6:-1])
+        return f"fixed_{key}".ljust(length, '0')[:length].encode()
     elif value_type == 'time':
         return f"{(key % 24):02d}:00:00"
     return f"value_{key}"
@@ -592,12 +589,7 @@ def _validate_parquet_properties(table_path, expected_spec):
                     expected_compression = 'zstd'
 
                 # Validate compression
-                if expected_compression == 'none':
-                    compression_valid = actual_compression in ['none', 'uncompressed']
-                elif actual_compression == 'uncompressed':
-                    compression_valid = expected_compression in ['none', 'uncompressed']
-                else:
-                    compression_valid = actual_compression == expected_compression
+                compression_valid = actual_compression == expected_compression
 
                 # Validate encoding
                 actual_encoding = column.encodings
@@ -659,11 +651,15 @@ def _validate_table_contents(conn, table_path, expected_spec):
                     content_errors.append(f"Row {row_id}: Expected 2 columns, got {len(actual_row)}")
                     continue
 
-                expected_id = row_id
+                # Rows are ordered by id and a single-type table holds one
+                # contiguous 1-based run, so the nth row's id must be n.
+                expected_id = row_id_from_index(i, 0)
                 expected_value = _generate_expected_single_type_data(expected_spec['data_type'], row_id)
 
-                if actual_row[0] != expected_id:
-                    content_errors.append(f"Row {row_id}: ID mismatch - expected {expected_id}, got {actual_row[0]}")
+                if row_id != expected_id:
+                    content_errors.append(
+                        f"Row {i}: ID mismatch - expected {expected_id}, got {row_id}"
+                    )
 
                 # For some types, we need approximate comparison
                 if expected_spec['data_type'] in ['float', 'double']:
@@ -1053,12 +1049,18 @@ def _validate_basic_table_properties(conn, table_path, expected_spec):
     column_count = len(schema_result)
 
     # Validate row count
-    print(f"    ✓ Validating row count: {row_count} (expected: {expected_spec['expected_rows']})")
     row_count_valid = row_count == expected_spec['expected_rows']
+    print(
+        f"    {'✓' if row_count_valid else '✗'} Validating row count: "
+        f"{row_count} (expected: {expected_spec['expected_rows']})"
+    )
 
     # Validate column count
-    print(f"    ✓ Validating column count: {column_count} (expected: {expected_spec['schema_columns']})")
     column_count_valid = column_count == expected_spec['schema_columns']
+    print(
+        f"    {'✓' if column_count_valid else '✗'} Validating column count: "
+        f"{column_count} (expected: {expected_spec['schema_columns']})"
+    )
 
     return {
         'row_count': row_count,
@@ -1564,7 +1566,7 @@ def _validate_table_worker(table_path, expected_spec, full_content_validation):
 
 def _validate_tables(
     warehouse_path, specs_path, full_content_validation=False,
-    num_parallel=1, minimal=False, primitives_only=False
+    num_parallel=1, minimal=False
 ):
     """Validate all tables in warehouse against specifications"""
     specs = _load_table_specs(specs_path)
@@ -1600,7 +1602,7 @@ def _validate_tables(
 
     if include_simple:
         expected_single_type = _extract_expected_single_type_tables(
-            specs, minimal=minimal, primitives_only=primitives_only
+            specs, minimal=minimal
         )
         all_expected.extend(expected_single_type)
         print(f"  Single-type tables: {len(expected_single_type)}")
@@ -1902,10 +1904,9 @@ class DuckDBValidator(TableValidator):
     """DuckDB-based validator for local Iceberg tables"""
 
     def __init__(self, warehouse_path: str, specs_path: str,
-                 minimal: bool = False, primitives_only: bool = False):
+                 minimal: bool = False):
         super().__init__(warehouse_path, specs_path)
         self.minimal = minimal
-        self.primitives_only = primitives_only
 
     def supports_s3_tables(self) -> bool:
         return False
@@ -1917,7 +1918,7 @@ class DuckDBValidator(TableValidator):
         """Validate all tables using DuckDB"""
         success = _validate_tables(
             self.warehouse_path, self.specs_path, full_content_validation,
-            num_parallel, self.minimal, self.primitives_only
+            num_parallel, self.minimal
         )
         return {'success_rate': 100.0 if success else 0.0}
 
@@ -1933,15 +1934,13 @@ def main():
                        help='Validate all rows (slow) instead of just sampling 10 rows')
     parser.add_argument('--num-parallel', type=int, default=1, help='Number of parallel validation workers')
     parser.add_argument('--minimal', action='store_true',
-                       help='Validate minimal set (none compression, plain encoding only)')
-    parser.add_argument('--primitives-only', action='store_true',
-                       help='Validate only primitive types (skip lists, maps, structs)')
+                       help='Validate minimal set (uncompressed, plain encoding only)')
 
     args = parser.parse_args()
 
     validator = DuckDBValidator(
         args.warehouse_path, args.specs,
-        minimal=args.minimal, primitives_only=args.primitives_only
+        minimal=args.minimal
     )
     result = validator.validate_tables(args.num_parallel, args.full_content_validation)
     success = result.get('success_rate', 0) == 100.0

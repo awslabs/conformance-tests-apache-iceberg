@@ -161,11 +161,15 @@ The project uses an object-oriented design with a unified CLI:
 
 ### Known Limitations
 
-**Time Data Type Issues**:
-- ❌ `time` data type has precision/timezone handling issues in PySpark
-- ❌ Excluded from minimal mode: `time`, `list<time>`, `map<int,time>`, `struct<field:time>`
-- ✅ `timestamp` and `timestamptz` work correctly
-- **Reason**: Spark lacks native TIME type, uses TIMESTAMP internally causing value shifts
+**Types Spark cannot express**:
+
+Spark SQL has no TIME, UUID or fixed-length binary type, so the PySpark backend
+cannot declare those columns in the DDL it generates. It rejects `time`, `uuid`
+and `fixed(L)` rather than substituting another type, so a run covering them
+reports those tables as failures and generates the rest.
+
+`--minimal` restricts a run to the types every backend can write, so it covers
+none of the three.
 
 ### Table Organization
 
@@ -237,7 +241,7 @@ python3 cli.py generate --backend pyspark --warehouse-path /path/to/warehouse --
 # Generate only single-type tables (2,560 tables)
 python3 cli.py generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/simple.yaml --num-parallel 16
 
-# Generate minimal set for testing (152 tables: none compression+plain encoding+v1&v2, excluding time types)
+# Generate minimal set for testing (152 tables: uncompressed+plain encoding+v1&v2, excluding time types)
 python3 cli.py generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/simple.yaml --minimal --num-parallel 16
 
 # Generate only write-pattern tables (48 tables)

@@ -46,7 +46,10 @@ class PyIcebergGenerator(TableGenerator):
 
     def _setup_warehouse(self):
         """Setup warehouse path and catalog"""
-        path = Path(self.warehouse_path)
+        # This path is interpolated into a file:// URI that is stored verbatim
+        # as each table's location and inside its manifests, so it has to be
+        # absolute.
+        path = Path(self.warehouse_path).resolve()
         path.mkdir(parents=True, exist_ok=True)
 
         self.catalog_config = {
@@ -159,7 +162,7 @@ class PyIcebergGenerator(TableGenerator):
         # Apply random selection if specified
         table_specs = self._random_select_tables(table_specs, random_count)
 
-        mode_str = "minimal (none compression, plain encoding)" if minimal else "full"
+        mode_str = "minimal (uncompressed, plain encoding)" if minimal else "full"
         print(f"Generating {len(table_specs)} single-type tables ({mode_str}) with {num_parallel} parallel workers...")
         print("\n📊 PyIceberg Backend Support Status:")
         print("  ✅ Supported: All primitive types (20 types)")

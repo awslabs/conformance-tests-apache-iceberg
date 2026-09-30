@@ -198,7 +198,7 @@ Examples:
                        help='Number of parallel workers (default: 1)')
     generate_parser.add_argument('--minimal',
                        action='store_true',
-                       help='Generate minimal set (none compression, plain encoding only)')
+                       help='Generate minimal set (uncompressed, plain encoding only)')
     generate_parser.add_argument('--random',
                        type=int,
                        metavar='N',
@@ -240,10 +240,7 @@ Examples:
                        help='Validate all rows (slower)')
     validate_parser.add_argument('--minimal',
                        action='store_true',
-                       help='Validate minimal set (none compression, plain encoding only)')
-    validate_parser.add_argument('--primitives-only',
-                       action='store_true',
-                       help='Validate only primitive types (skip lists, maps, structs)')
+                       help='Validate minimal set (uncompressed, plain encoding only)')
 
     # Delete subcommand
     delete_parser = subparsers.add_parser('delete',
@@ -532,8 +529,6 @@ Examples:
             validator_cmd.append('--full-content-validation')
         if args.minimal:
             validator_cmd.append('--minimal')
-        if args.primitives_only:
-            validator_cmd.append('--primitives-only')
 
         try:
             result = subprocess.run(validator_cmd)
@@ -581,9 +576,6 @@ Examples:
             ]
             if args.minimal:
                 validator_cmd.append('--minimal')
-            # PyIceberg only supports primitives
-            if args.backend == 'pyiceberg':
-                validator_cmd.append('--primitives-only')
 
             try:
                 result = subprocess.run(
