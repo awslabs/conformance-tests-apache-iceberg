@@ -26,7 +26,7 @@ Uses Polars for fast data generation + PyIceberg for writing
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, time
+from datetime import date, time
 from decimal import Decimal
 from pathlib import Path
 
@@ -45,6 +45,7 @@ from pyiceberg.types import (
 from iceberg_fuzzer.generator import TableGenerator
 from iceberg_fuzzer.table_spec import load_table_specs
 from iceberg_fuzzer.common import row_id_from_index
+from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
 
 
 class PolarsGenerator(TableGenerator):
@@ -172,8 +173,10 @@ class PolarsGenerator(TableGenerator):
                 time(hour=(i + start_id) % 24, minute=(i + start_id) % 60)
                 for i in range(num_rows)
             ]
-        elif iceberg_type in ['timestamp', 'timestamptz']:
-            return [datetime(2023, 1, 1, (i + start_id) % 24, 0, 0) for i in range(num_rows)]
+        elif iceberg_type == 'timestamp':
+            return [timestamp_value(i + start_id) for i in range(num_rows)]
+        elif iceberg_type == 'timestamptz':
+            return [timestamptz_value(i + start_id) for i in range(num_rows)]
         elif iceberg_type == 'uuid':
             return [uuid.UUID(int=i + start_id).bytes for i in range(num_rows)]
         elif iceberg_type == 'string':

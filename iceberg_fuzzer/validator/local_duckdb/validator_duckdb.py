@@ -36,6 +36,7 @@ import pyarrow.parquet as pq
 import yaml
 
 from iceberg_fuzzer.common import row_id_from_index
+from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
 from iceberg_fuzzer.table_spec import select_primitive_types
 from iceberg_fuzzer.validator import TableValidator
 
@@ -415,8 +416,10 @@ def _generate_primitive_data(data_type, row_id):
         return Decimal(f"{row_id}.{row_id%100:02d}")
     elif data_type == 'date':
         return date(2023, 1, 1).replace(day=min(28, (row_id % 28) + 1))
-    elif data_type == 'timestamp' or data_type == 'timestamptz':
-        return datetime(2023, 1, 1).replace(hour=(row_id % 24))
+    elif data_type == 'timestamp':
+        return timestamp_value(row_id)
+    elif data_type == 'timestamptz':
+        return timestamptz_value(row_id)
     elif data_type == 'uuid':
         return uuid_lib.UUID(int=row_id).bytes
     elif data_type == 'time':
@@ -441,8 +444,10 @@ def _generate_list_element(element_type, row_id, offset):
         return f"item_{row_id}_{offset}".encode()
     elif element_type == 'date':
         return date(2023, 1, min(28, ((row_id + offset) % 28) + 1))
-    elif element_type in ['timestamp', 'timestamptz']:
-        return datetime(2023, 1, 1, hour=((row_id + offset) % 24))
+    elif element_type == 'timestamp':
+        return timestamp_value(row_id + offset)
+    elif element_type == 'timestamptz':
+        return timestamptz_value(row_id + offset)
     elif element_type == 'decimal':
         return Decimal(f"{row_id + offset}.{(row_id + offset)%100:02d}")
     elif element_type == 'uuid':
@@ -476,8 +481,10 @@ def _generate_map_value(value_type, key):
         return f"value_{key}".encode()
     elif value_type == 'date':
         return date(2023, 1, min(28, (key % 28) + 1))
-    elif value_type in ['timestamp', 'timestamptz']:
-        return datetime(2023, 1, 1, hour=(key % 24))
+    elif value_type == 'timestamp':
+        return timestamp_value(key)
+    elif value_type == 'timestamptz':
+        return timestamptz_value(key)
     elif value_type == 'decimal':
         return Decimal(f"{key}.{key % 100:02d}")
     elif value_type == 'uuid':
@@ -543,8 +550,8 @@ def _generate_expected_partitioned_data(row_id):
         'string_col': f'str_{row_id}',
         'date_col': date(2020, 1, 1),
         'time_col': '12:00:00',
-        'timestamp_col': datetime(2020, 1, 1, 12, 0, 0),
-        'timestamptz_col': datetime(2020, 1, 1, 12, 0, 0),
+        'timestamp_col': timestamp_value(row_id),
+        'timestamptz_col': timestamptz_value(row_id),
         'decimal_col': f'{row_id}.50',
         'string_small_col': f's{row_id}',
         'string_medium_col': f'medium_{row_id}' * 5,
@@ -708,32 +715,15 @@ def _validate_table_contents(conn, table_path, expected_spec):
                             f"expected {expected_value}, got {actual_row[1]}"
                         )
                 elif expected_spec['data_type'] in ['timestamp', 'timestamptz']:
-                    # Strip timezone info for comparison
-                    actual_ts = actual_row[1]
-                    if hasattr(actual_ts, 'replace'):
-                        actual_ts = actual_ts.replace(tzinfo=None)
-                    if actual_ts != expected_value:
+                    if actual_row[1] != expected_value:
                         content_errors.append(
                             f"Row {row_id}: Value mismatch - "
-                            f"expected {expected_value}, got {actual_ts}"
+                            f"expected {expected_value}, got {actual_row[1]}"
                         )
                 elif expected_spec['data_type'].startswith('list_') or expected_spec['data_type'].startswith('map_'):
-                    # For lists and maps, compare as collections, stripping timezone from timestamps
+                    # For lists and maps, compare as collections
                     actual_val = actual_row[1]
                     expected_val = expected_value
-
-                    # Handle lists with timestamps
-                    if expected_spec['data_type'].startswith('list_') and isinstance(actual_val, list):
-                        actual_val = [
-                            v.replace(tzinfo=None) if hasattr(v, 'replace') and hasattr(v, 'tzinfo') else v
-                            for v in actual_val
-                        ]
-                    # Handle maps with timestamps
-                    elif expected_spec['data_type'].startswith('map_') and isinstance(actual_val, dict):
-                        actual_val = {
-                            k: v.replace(tzinfo=None) if hasattr(v, 'replace') and hasattr(v, 'tzinfo') else v
-                            for k, v in actual_val.items()
-                        }
 
                     # Sort lists before comparison to handle order differences
                     if (
@@ -827,14 +817,7 @@ def _validate_table_contents(conn, table_path, expected_spec):
                                     f"Expected {expected_val}, got {actual_val}"
                                 )
                         elif col_name in ['timestamp', 'timestamp_col', 'timestamptz_col']:
-                            # Strip timezone for comparison
-                            actual_ts = (
-                                actual_val.replace(tzinfo=None) if hasattr(actual_val, 'replace') else actual_val
-                            )
-                            expected_ts = (
-                                expected_val.replace(tzinfo=None) if hasattr(expected_val, 'replace') else expected_val
-                            )
-                            if actual_ts != expected_ts:
+                            if actual_val != expected_val:
                                 content_errors.append(
                                     f"Row {row_id}, {col_name}: "
                                     f"Expected {expected_val}, got {actual_val}"

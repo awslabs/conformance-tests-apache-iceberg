@@ -26,11 +26,13 @@ import re
 import struct
 from collections import deque
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Dict, Iterator, List, Tuple, Union
 
 import pyarrow as pa
+
+from iceberg_fuzzer.common.timestamps import timestamptz_zone
 
 from . import Dimension
 
@@ -179,8 +181,8 @@ class TimestamptzType(IcebergType):
 
     def generate(self, row_id: int) -> Any:
         # Same seconds + microseconds spread as TimestampType (see there), with
-        # a UTC zone since Iceberg timestamptz is with-zone.
-        return (_EPOCH_DATETIME.replace(tzinfo=timezone.utc)
+        # a zone since Iceberg timestamptz is with-zone.
+        return (_EPOCH_DATETIME.replace(tzinfo=timestamptz_zone(row_id))
                 + timedelta(seconds=_bounded(row_id, _DATE_SPAN),
                             microseconds=_bounded(row_id, 1_000_000)))
 
