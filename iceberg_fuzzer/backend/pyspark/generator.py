@@ -30,6 +30,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 import boto3
+import yaml
 
 from backend.pyspark.builders import (
     create_spark_session,
@@ -49,8 +50,8 @@ from iceberg_fuzzer.table_spec import load_table_specs
 class PySparkGenerator(TableGenerator):
     """PySpark implementation of table generator"""
 
-    def __init__(self, warehouse_path: str, specs_path: str):
-        super().__init__(warehouse_path, specs_path)
+    def __init__(self, warehouse_path: str, specs_path: str, seed: int | None = None):
+        super().__init__(warehouse_path, specs_path, seed=seed)
         self.spark = None
         self._setup_warehouse()
 
@@ -853,16 +854,11 @@ class PySparkGenerator(TableGenerator):
             print("Deleting existing evolution tables before generation...")
             self.delete_tables_by_namespace("evolution")
 
+        with open(self.specs_path, 'r') as f:
+            specs = yaml.safe_load(f)
+        table_specs = self._random_select_tables(
+            specs.get('evolution_tables', []), random_count
+        )
 
         self._ensure_spark()
-
-        print("Generating evolution tables...")
-        return generate_evolution_tables(
-            type('Args', (), {
-                'specs': self.specs_path,
-                'num_parallel': num_parallel,
-                'random': random_count
-            })(),
-            self.spark,
-            self.warehouse_path
-        )
+        return generate_evolution_tables(self.spark, self.warehouse_path, table_specs)

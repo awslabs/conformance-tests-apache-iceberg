@@ -29,9 +29,11 @@ from abc import ABC, abstractmethod
 class TableGenerator(ABC):
     """Abstract base class for table generation backends"""
 
-    def __init__(self, warehouse_path: str, specs_path: str):
+    def __init__(self, warehouse_path: str, specs_path: str, seed: int | None = None):
         self.warehouse_path = warehouse_path
         self.specs_path = specs_path
+        self.seed = seed
+        self._random = random.Random(seed)
 
     @abstractmethod
     def supports_s3_tables(self) -> bool:
@@ -52,7 +54,7 @@ class TableGenerator(ABC):
         """Randomly select a subset of table specs"""
         if random_count is None or random_count >= len(table_specs):
             return table_specs
-        return random.sample(table_specs, random_count)
+        return self._random.sample(table_specs, random_count)
 
     @abstractmethod
     def generate_simple_tables(

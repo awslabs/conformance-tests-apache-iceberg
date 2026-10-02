@@ -50,8 +50,8 @@ from iceberg_fuzzer.common import row_id_from_index
 class PolarsGenerator(TableGenerator):
     """Polars implementation of table generator"""
 
-    def __init__(self, warehouse_path: str, specs_path: str):
-        super().__init__(warehouse_path, specs_path)
+    def __init__(self, warehouse_path: str, specs_path: str, seed: int | None = None):
+        super().__init__(warehouse_path, specs_path, seed=seed)
         self._setup_warehouse()
 
     def _setup_warehouse(self):

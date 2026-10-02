@@ -24,7 +24,6 @@ PySpark Iceberg table generation implementation
 
 import logging
 import os
-import random
 import time
 from contextlib import contextmanager
 import uuid
@@ -2215,21 +2214,12 @@ def execute_evolution_operation(spark, catalog, namespace, table_name, operation
     except Exception as e:
         print(f"    ✗ Evolution operation {op_type} failed: {e}")
 
-def generate_evolution_tables(args, spark, warehouse_path) -> bool:
-    """Generate evolution tables for testing Iceberg evolution features.
+def generate_evolution_tables(spark, warehouse_path, evolution_tables) -> bool:
+    """Build the selected evolution specs for testing Iceberg evolution features.
 
     Returns:
         True if every table in the set was created, False if any failed.
     """
-
-    with open(args.specs, 'r') as f:
-        specs = yaml.safe_load(f)
-
-    evolution_tables = specs.get('evolution_tables', [])
-
-    # Apply random selection if specified
-    if args.random and args.random < len(evolution_tables):
-        evolution_tables = random.sample(evolution_tables, args.random)
 
     total = len(evolution_tables)
     print(f"Generating {total} evolution tables...")
