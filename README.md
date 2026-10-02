@@ -24,6 +24,9 @@ python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/w
 # Generate evolution tables with PySpark (comprehensive evolution testing)
 python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/evolution.yaml --num-parallel 4
 
+# Generate a reproducible random subset of evolution tables
+python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/evolution.yaml --random 3 --seed 42
+
 # Generate tables in S3 Tables bucket (deletes existing tables first)
 python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path "arn:aws:s3tables:us-west-2:123456789012:bucket/my-bucket" --specs table_specs.yaml --delete-existing --num-parallel 4
 
@@ -51,6 +54,9 @@ flag. `specs/simple.yaml` produces single-type tables, `specs/write_patterns.yam
 write-pattern tables, `specs/partitioned.yaml` partitioned tables,
 `specs/evolution.yaml` evolution tables, and `table_specs.yaml` produces every
 type in sequence.
+
+Add `--seed S` to `generate --random N` to replay the selected table specs and
+their order when the spec files and fuzzer revision are unchanged.
 
 ## Commands
 

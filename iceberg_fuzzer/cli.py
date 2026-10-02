@@ -192,7 +192,7 @@ Examples:
   %(prog)s --backend polars --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal
 
   # Generate random subset
-  %(prog)s --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 50
+  %(prog)s --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 50 --seed 42
         """)
 
     generate_parser.add_argument('--backend',
@@ -216,6 +216,9 @@ Examples:
                        type=int,
                        metavar='N',
                        help='Generate N randomly chosen tables from the available set')
+    generate_parser.add_argument('--seed',
+                       type=int,
+                       help='Seed for reproducible --random table selection')
     generate_parser.add_argument('--validate',
                        action='store_true',
                        help='Validate tables after generation')
@@ -557,16 +560,22 @@ Examples:
     # Validate backend-specific constraints
     _validate_backend_constraints(args.backend, args.warehouse_path)
 
+    if args.seed is not None and args.random is None:
+        print(
+            "Warning: --seed affects table selection only when --random is set.",
+            file=sys.stderr,
+        )
+
     # Import and instantiate the appropriate generator
     if args.backend == 'pyspark':
         from iceberg_fuzzer.backend.pyspark.generator import PySparkGenerator
-        generator = PySparkGenerator(args.warehouse_path, args.specs)
+        generator = PySparkGenerator(args.warehouse_path, args.specs, seed=args.seed)
     elif args.backend == 'pyiceberg':
         from iceberg_fuzzer.backend.pyiceberg.generator import PyIcebergGenerator
-        generator = PyIcebergGenerator(args.warehouse_path, args.specs)
+        generator = PyIcebergGenerator(args.warehouse_path, args.specs, seed=args.seed)
     else:  # polars
         from iceberg_fuzzer.backend.polars.generator import PolarsGenerator
-        generator = PolarsGenerator(args.warehouse_path, args.specs)
+        generator = PolarsGenerator(args.warehouse_path, args.specs, seed=args.seed)
 
     failed = False
 
