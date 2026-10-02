@@ -83,6 +83,27 @@ python3 -m iceberg_fuzzer.cli validate --warehouse-path /path/to/warehouse --spe
 The set of tables `validate` expects is derived the same way `generate` derives
 the set it writes, so `--minimal` must be passed to both or neither.
 
+### Timezone handling
+
+`timestamptz` columns hold instants. The value written for row N is
+`2023-01-01 00:00` plus `N % 24` hours, so a reader sees those wall-clock times
+only when its session timezone is UTC:
+
+| Engine | Setting |
+|---|---|
+| DuckDB | `SET TimeZone = 'UTC'` |
+| Spark | `spark.sql.session.timeZone = 'UTC'` |
+| Trino | `SET TIME ZONE 'UTC'` |
+
+Row 1 of `unpart_timestamptz_uncompressed_plain_v2` reads as
+`2023-01-01 01:00+00` under `TimeZone = 'UTC'`, and as `2022-12-31 17:00-08`
+under `America/Los_Angeles`.
+
+Neither `generate` nor `validate` pins a session timezone: a PySpark run stores
+the instant its host timezone implies, and `validate` compares by discarding the
+zone the reader reports. The two agree wherever host and reader are both at
+UTC+0, which is the case in CI, and can disagree elsewhere.
+
 ### build-shapes
 
 `build-shapes` is a separate generation path from `generate`. Instead of a
