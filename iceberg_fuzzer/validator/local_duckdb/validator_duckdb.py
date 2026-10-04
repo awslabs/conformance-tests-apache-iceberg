@@ -90,6 +90,7 @@ def _extract_expected_single_type_tables(specs, minimal=False):
                         'data_type': type_def['name'],
                         'iceberg_type': type_def['iceberg_type'],
                         'compression': comp_str,
+                        'compression_level': compression['level'],
                         'encoding': encoding.lower(),
                         # Without this the format-version check is skipped, so a
                         # table named v1 could be written as v2 unnoticed.
@@ -556,6 +557,36 @@ def _generate_expected_partitioned_data(row_id):
         'list_int_col': [row_id, row_id + 1, row_id + 2],
         'list_string_col': [f'item_{row_id}', f'item_{row_id + 1}']
     }
+
+def _validate_compression_level(table_path: Path, expected_spec: dict) -> dict:
+    """Compare the declared compression level against the table metadata.
+
+    The Parquet footer records the codec but not the level it was given, so the
+    level cannot be recovered from the data files. Iceberg does persist it, as the
+    `write.parquet.compression-level` table property, which is what every backend
+    sets and what this reads back, from the table's current metadata file.
+
+    A spec whose codec takes no level (snappy, lz4, uncompressed) expects the
+    property to be absent.
+    """
+    expected_level = expected_spec.get('compression_level')
+    metadata = _read_table_metadata(table_path)
+    if metadata is None:
+        return {'valid': False, 'error': 'No table metadata found'}
+    properties = metadata.get('properties', {})
+
+    actual = properties.get('write.parquet.compression-level')
+    if expected_level is None:
+        valid = actual is None
+    else:
+        valid = actual is not None and str(actual) == str(expected_level)
+
+    return {
+        'valid': valid,
+        'expected_compression_level': expected_level,
+        'actual_compression_level': actual,
+    }
+
 
 def _validate_parquet_properties(table_path, expected_spec):
     """Validate Parquet file compression and encoding"""
@@ -1063,7 +1094,23 @@ def _validate_parquet_properties_for_table(table_path, expected_spec):
     parquet_validation = _validate_parquet_properties(table_path, expected_spec)
     parquet_valid = parquet_validation.get('valid', True)
 
-    return {'valid': parquet_valid, 'parquet_validation': parquet_validation}
+    # The codec above comes from the Parquet footer, which does not record the
+    # level it was given; that is read from the table metadata instead.
+    level_validation = _validate_compression_level(table_path, expected_spec)
+    parquet_validation['compression_level_valid'] = level_validation['valid']
+    parquet_validation['expected_compression_level'] = level_validation.get(
+        'expected_compression_level'
+    )
+    parquet_validation['actual_compression_level'] = level_validation.get(
+        'actual_compression_level'
+    )
+    if 'error' in level_validation and 'error' not in parquet_validation:
+        parquet_validation['error'] = level_validation['error']
+
+    return {
+        'valid': parquet_valid and level_validation['valid'],
+        'parquet_validation': parquet_validation,
+    }
 
 def _determine_delete_mode(expected_spec):
     """Determine delete mode from table name."""
@@ -1733,6 +1780,12 @@ def _validate_tables(warehouse_path, specs_path, num_parallel=1, minimal=False):
                                     f"    Compression: expected {pq_val.get('expected_compression')}, "
                                     f"got {pq_val.get('actual_compression')}"
                                 )
+                            if not pq_val.get('compression_level_valid', True):
+                                print(
+                                    f"    Compression level: expected "
+                                    f"{pq_val.get('expected_compression_level')}, "
+                                    f"got {pq_val.get('actual_compression_level')}"
+                                )
                             if not pq_val.get('encoding_valid', True):
                                 print(
                                     f"    Encoding: expected {pq_val.get('expected_encoding')}, "
@@ -1830,6 +1883,12 @@ def _validate_tables(warehouse_path, specs_path, num_parallel=1, minimal=False):
                             print(
                                 f"    Compression: expected {pq_val.get('expected_compression')}, "
                                 f"got {pq_val.get('actual_compression')}"
+                            )
+                        if not pq_val.get('compression_level_valid', True):
+                            print(
+                                f"    Compression level: expected "
+                                f"{pq_val.get('expected_compression_level')}, "
+                                f"got {pq_val.get('actual_compression_level')}"
                             )
                         if not pq_val.get('encoding_valid', True):
                             print(
