@@ -42,7 +42,7 @@ from pyspark.sql.types import (
 
 from iceberg_fuzzer.table_spec import load_table_specs
 from iceberg_fuzzer.common import row_id_from_index
-from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
+from iceberg_fuzzer.common.values import SUPPORTED_TYPES, primitive_value
 
 
 @contextmanager
@@ -581,28 +581,8 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
             elif 'time' in field_name and field_type not in ['timestamp', 'timestamptz']:
                 row_data[field_name] = f"{(row_id % 24):02d}:{(row_id % 60):02d}:00"
             # Then handle generic types
-            elif field_type == 'boolean':
-                row_data[field_name] = (row_id % 2) == 0
-            elif field_type == 'int':
-                row_data[field_name] = row_id
-            elif field_type == 'long':
-                row_data[field_name] = row_id * 1000
-            elif field_type == 'float':
-                row_data[field_name] = float(row_id) + 0.5
-            elif field_type == 'double':
-                row_data[field_name] = float(row_id) * 1.5
-            elif field_type == 'string':
-                row_data[field_name] = f"value_{row_id}"
-            elif field_type == 'binary':
-                row_data[field_name] = f"value_{row_id}".encode()
-            elif field_type == 'date':
-                row_data[field_name] = date(2023, 1, 1).replace(day=min(28, (row_id % 28) + 1))
-            elif field_type == 'timestamp':
-                row_data[field_name] = timestamp_value(row_id)
-            elif field_type == 'timestamptz':
-                row_data[field_name] = timestamptz_value(row_id)
-            elif field_type.startswith('decimal('):
-                row_data[field_name] = Decimal(f"{row_id}.{row_id % 100:02d}")
+            elif field_type in SUPPORTED_TYPES or field_type.startswith('decimal('):
+                row_data[field_name] = primitive_value(field_type, row_id)
             elif field_type.startswith('list<'):
                 element_type = field_type[5:-1]
                 if element_type == 'boolean':
@@ -620,9 +600,13 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
                 elif element_type == 'date':
                     row_data[field_name] = [date(2023, 1, min(28, ((row_id + j) % 28) + 1)) for j in range(3)]
                 elif element_type == 'timestamp':
-                    row_data[field_name] = [timestamp_value(row_id + j) for j in range(3)]
+                    row_data[field_name] = [
+                        primitive_value('timestamp', row_id + j) for j in range(3)
+                    ]
                 elif element_type == 'timestamptz':
-                    row_data[field_name] = [timestamptz_value(row_id + j) for j in range(3)]
+                    row_data[field_name] = [
+                        primitive_value('timestamptz', row_id + j) for j in range(3)
+                    ]
                 elif element_type.startswith('decimal('):
                     row_data[field_name] = [Decimal(f"{row_id + j}.{(row_id + j) % 100:02d}") for j in range(3)]
                 elif element_type.startswith('fixed('):
@@ -665,13 +649,13 @@ def generate_spark_data(spark, table_spec, num_rows=100, row_offset=0):
                     }
                 elif value_type_str == 'timestamp':
                     row_data[field_name] = {
-                        row_id: timestamp_value(row_id),
-                        row_id + 1: timestamp_value(row_id + 1)
+                        row_id: primitive_value('timestamp', row_id),
+                        row_id + 1: primitive_value('timestamp', row_id + 1)
                     }
                 elif value_type_str == 'timestamptz':
                     row_data[field_name] = {
-                        row_id: timestamptz_value(row_id),
-                        row_id + 1: timestamptz_value(row_id + 1)
+                        row_id: primitive_value('timestamptz', row_id),
+                        row_id + 1: primitive_value('timestamptz', row_id + 1)
                     }
                 elif value_type_str.startswith('decimal('):
                     row_data[field_name] = {
@@ -1458,8 +1442,8 @@ def generate_partitioned_data(spark, schema_spec, num_rows=100, row_offset=0):
             'binary_col': f'bin_{row_id}'.encode(),
             'date_col': date(2020, 1, 1),
             'time_col': '12:00:00',
-            'timestamp_col': timestamp_value(row_id),
-            'timestamptz_col': timestamptz_value(row_id),
+            'timestamp_col': primitive_value('timestamp', row_id),
+            'timestamptz_col': primitive_value('timestamptz', row_id),
             'decimal_col': Decimal(f'{row_id}.50'),
             'uuid_col': f'uuid_{row_id}'.encode()[:16].ljust(16, b'\x00'),
             'fixed_col': f'fix_{row_id}'.encode()[:10].ljust(10, b'\x00'),

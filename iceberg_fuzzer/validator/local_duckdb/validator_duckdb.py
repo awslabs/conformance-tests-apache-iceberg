@@ -23,7 +23,7 @@ Validates table structure and data against table_specs.yaml specifications
 """
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime, date, time
+from datetime import datetime, date
 from decimal import Decimal
 from pathlib import Path
 import argparse
@@ -36,7 +36,7 @@ import pyarrow.parquet as pq
 import yaml
 
 from iceberg_fuzzer.common import row_id_from_index
-from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
+from iceberg_fuzzer.common.values import primitive_value
 from iceberg_fuzzer.table_spec import select_primitive_types
 from iceberg_fuzzer.validator import TableValidator
 
@@ -397,34 +397,33 @@ def _validate_delete_file_types(table_path, delete_mode):
         return False, f"Error reading metadata: {e}"
 
 def _generate_primitive_data(data_type, row_id):
-    """Generate expected data for primitive types."""
-    if data_type == 'boolean':
-        return (row_id % 2) == 0
-    elif data_type == 'int':
-        return row_id
-    elif data_type == 'long':
-        return row_id * 1000
-    elif data_type == 'float':
-        return float(row_id) + 0.5
-    elif data_type == 'double':
-        return float(row_id) * 1.5
-    elif data_type == 'string':
-        return f"value_{row_id}"
-    elif data_type == 'binary' or data_type.startswith('binary_'):
-        return f"value_{row_id}".encode()
-    elif data_type == 'decimal_10_2':
-        return Decimal(f"{row_id}.{row_id%100:02d}")
-    elif data_type == 'date':
-        return date(2023, 1, 1).replace(day=min(28, (row_id % 28) + 1))
-    elif data_type == 'timestamp':
-        return timestamp_value(row_id)
-    elif data_type == 'timestamptz':
-        return timestamptz_value(row_id)
-    elif data_type == 'uuid':
-        return uuid_lib.UUID(int=row_id).bytes
-    elif data_type == 'time':
-        return time(hour=(row_id % 24), minute=(row_id % 60))
-    return f"value_{row_id}"
+    """Expected value for a primitive column, by row ID.
+
+    `data_type` is the spec's label for the column (binary_small, decimal_10_2),
+    which carries a length or precision suffix the formulas do not depend on, so
+    it is reduced to the Iceberg type before looking the value up.
+    """
+    return primitive_value(_iceberg_type_of(data_type), row_id)
+
+
+def _iceberg_type_of(data_type):
+    """The Iceberg type a spec label names.
+
+    A label carries a length or precision suffix with an underscore where the
+    type writes it in brackets, and most of them the formulas do not depend on.
+    `fixed_16` is the exception: the value has to be exactly that many bytes, so
+    the length is kept.
+    """
+    if data_type.startswith('binary'):
+        return 'binary'
+    if data_type.startswith('string'):
+        return 'string'
+    if data_type.startswith('decimal'):
+        return 'decimal'
+    if data_type.startswith('fixed_'):
+        return f"fixed({data_type[len('fixed_'):]})"
+    return data_type
+
 
 def _generate_list_element(element_type, row_id, offset):
     """Generate a single list element based on type."""
@@ -445,9 +444,9 @@ def _generate_list_element(element_type, row_id, offset):
     elif element_type == 'date':
         return date(2023, 1, min(28, ((row_id + offset) % 28) + 1))
     elif element_type == 'timestamp':
-        return timestamp_value(row_id + offset)
+        return primitive_value('timestamp', row_id + offset)
     elif element_type == 'timestamptz':
-        return timestamptz_value(row_id + offset)
+        return primitive_value('timestamptz', row_id + offset)
     elif element_type == 'decimal':
         return Decimal(f"{row_id + offset}.{(row_id + offset)%100:02d}")
     elif element_type == 'uuid':
@@ -482,9 +481,9 @@ def _generate_map_value(value_type, key):
     elif value_type == 'date':
         return date(2023, 1, min(28, (key % 28) + 1))
     elif value_type == 'timestamp':
-        return timestamp_value(key)
+        return primitive_value('timestamp', key)
     elif value_type == 'timestamptz':
-        return timestamptz_value(key)
+        return primitive_value('timestamptz', key)
     elif value_type == 'decimal':
         return Decimal(f"{key}.{key % 100:02d}")
     elif value_type == 'uuid':
@@ -550,8 +549,8 @@ def _generate_expected_partitioned_data(row_id):
         'string_col': f'str_{row_id}',
         'date_col': date(2020, 1, 1),
         'time_col': '12:00:00',
-        'timestamp_col': timestamp_value(row_id),
-        'timestamptz_col': timestamptz_value(row_id),
+        'timestamp_col': primitive_value('timestamp', row_id),
+        'timestamptz_col': primitive_value('timestamptz', row_id),
         'decimal_col': f'{row_id}.50',
         'string_small_col': f's{row_id}',
         'string_medium_col': f'medium_{row_id}' * 5,
@@ -715,13 +714,21 @@ def _validate_table_contents(conn, table_path, expected_spec):
                             f"expected {expected_value}, got {actual_row[1]}"
                         )
                 elif expected_spec['data_type'] in ['timestamp', 'timestamptz']:
+                    # timestamp is a wall clock and reads back naive; timestamptz
+                    # is an instant and reads back aware. Both compare directly
+                    # against an expectation of the same kind, and comparing two
+                    # aware datetimes compares the instants they name, so a
+                    # reader on any zone agrees on whether the value is right.
                     if actual_row[1] != expected_value:
                         content_errors.append(
                             f"Row {row_id}: Value mismatch - "
                             f"expected {expected_value}, got {actual_row[1]}"
                         )
                 elif expected_spec['data_type'].startswith('list_') or expected_spec['data_type'].startswith('map_'):
-                    # For lists and maps, compare as collections
+                    # For lists and maps, compare as collections. Elements are
+                    # compared as they are read: a timestamptz element reads back
+                    # aware and is expected aware, and the two compare as the
+                    # instants they name whatever zone the reader reports.
                     actual_val = actual_row[1]
                     expected_val = expected_value
 

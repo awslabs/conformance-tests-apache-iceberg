@@ -24,9 +24,8 @@ Uses Polars for fast data generation + PyIceberg for writing
 """
 
 import sys
-import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, time
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -45,7 +44,7 @@ from pyiceberg.types import (
 from iceberg_fuzzer.generator import TableGenerator
 from iceberg_fuzzer.table_spec import load_table_specs
 from iceberg_fuzzer.common import row_id_from_index
-from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
+from iceberg_fuzzer.common.values import SUPPORTED_TYPES, primitive_value
 
 
 class PolarsGenerator(TableGenerator):
@@ -104,8 +103,9 @@ class PolarsGenerator(TableGenerator):
             'uuid': UUIDType(),
         }
 
-        # Handle fixed types
-        if iceberg_type_str.startswith('fixed[') and iceberg_type_str.endswith(']'):
+        # Handle fixed types. The specs write `fixed(16)`; `fixed[16]` is the
+        # form the generator's own partition syntax uses, so both are accepted.
+        if iceberg_type_str.startswith(('fixed[', 'fixed(')) and iceberg_type_str[-1] in '])':
             length = int(iceberg_type_str[6:-1])
             return FixedType(length)
 
@@ -153,38 +153,13 @@ class PolarsGenerator(TableGenerator):
         predict a row's value from the ID it reads back.
         """
 
-        # Use iceberg_type instead of field_name for type determination
-        if iceberg_type == 'boolean':
-            return [(i + start_id) % 2 == 0 for i in range(num_rows)]
-        elif iceberg_type == 'int':
-            return list(range(start_id, num_rows + start_id))
-        elif iceberg_type == 'long':
-            return [(i + start_id) * 1000 for i in range(num_rows)]
-        elif iceberg_type == 'float':
-            return [float(i + start_id) + 0.5 for i in range(num_rows)]
-        elif iceberg_type == 'double':
-            return [float(i + start_id) * 1.5 for i in range(num_rows)]
-        elif iceberg_type.startswith('decimal'):
-            return [Decimal(f"{i + start_id}.{(i + start_id) % 100:02d}") for i in range(num_rows)]
-        elif iceberg_type == 'date':
-            return [date(2023, 1, ((i + start_id) % 28) + 1) for i in range(num_rows)]
-        elif iceberg_type == 'time':
-            return [
-                time(hour=(i + start_id) % 24, minute=(i + start_id) % 60)
-                for i in range(num_rows)
-            ]
-        elif iceberg_type == 'timestamp':
-            return [timestamp_value(i + start_id) for i in range(num_rows)]
-        elif iceberg_type == 'timestamptz':
-            return [timestamptz_value(i + start_id) for i in range(num_rows)]
-        elif iceberg_type == 'uuid':
-            return [uuid.UUID(int=i + start_id).bytes for i in range(num_rows)]
-        elif iceberg_type == 'string':
-            return [f"value_{i + start_id}" for i in range(num_rows)]
-        elif iceberg_type == 'binary':
-            return [f"value_{i + start_id}".encode() for i in range(num_rows)]
-        # List types
-        elif iceberg_type.startswith('list<'):
+        if (
+            iceberg_type in SUPPORTED_TYPES
+            or iceberg_type.startswith('decimal')
+            or iceberg_type.startswith('fixed(')
+        ):
+            return [primitive_value(iceberg_type, i + start_id) for i in range(num_rows)]
+        if iceberg_type.startswith('list<'):
             element_type = iceberg_type[5:-1]  # Extract element type from list<type>
             if element_type == 'boolean':
                 result = []
