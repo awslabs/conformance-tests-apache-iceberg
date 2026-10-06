@@ -50,7 +50,7 @@ jobs:
     - name: Generate PyIceberg tables
       run: uv run python -m iceberg_fuzzer.cli generate --backend pyiceberg --warehouse-path ./test-warehouse-pyiceberg --specs specs/simple.yaml --minimal
     - name: Validate PyIceberg tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path ./test-warehouse-pyiceberg --specs specs/simple.yaml --minimal --full-content-validation --num-parallel 4
+      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path ./test-warehouse-pyiceberg --specs specs/simple.yaml --minimal --num-parallel 4
     - name: Upload PyIceberg artifacts
       uses: actions/upload-artifact@v7
       if: always()
@@ -74,7 +74,7 @@ jobs:
     - name: Generate Polars tables
       run: uv run python -m iceberg_fuzzer.cli generate --backend polars --warehouse-path ./test-warehouse-polars --specs specs/simple.yaml --minimal
     - name: Validate Polars tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path ./test-warehouse-polars --specs specs/simple.yaml --minimal --full-content-validation --num-parallel 4
+      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path ./test-warehouse-polars --specs specs/simple.yaml --minimal --num-parallel 4
     - name: Upload Polars artifacts
       uses: actions/upload-artifact@v7
       if: always()
@@ -103,7 +103,7 @@ jobs:
     - name: Generate PySpark simple tables
       run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark --specs specs/simple.yaml --minimal
     - name: Validate PySpark simple tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark --specs specs/simple.yaml --minimal --full-content-validation --num-parallel 4
+      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark --specs specs/simple.yaml --minimal --num-parallel 4
     - name: Upload PySpark simple artifacts
       uses: actions/upload-artifact@v7
       if: always()
@@ -167,7 +167,7 @@ jobs:
     - name: Generate PySpark write-pattern tables
       run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-writepatterns --specs specs/write_patterns.yaml --num-parallel 4
     - name: Validate PySpark write-pattern tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark-writepatterns --specs specs/write_patterns.yaml --full-content-validation --num-parallel 4
+      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark-writepatterns --specs specs/write_patterns.yaml --num-parallel 4
     - name: Upload PySpark write-pattern artifacts
       uses: actions/upload-artifact@v7
       if: always()
@@ -196,7 +196,7 @@ jobs:
     - name: Generate PySpark evolution tables
       run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --num-parallel 4
     - name: Validate PySpark evolution tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --full-content-validation --num-parallel 4
+      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --num-parallel 4
     - name: Upload PySpark evolution artifacts
       uses: actions/upload-artifact@v7
       if: always()

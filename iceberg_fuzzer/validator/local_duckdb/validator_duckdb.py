@@ -1637,7 +1637,7 @@ def _validate_evolution_table(conn, table_path, expected_spec):
         'evolution_checks': validation_results
     }
 
-def _validate_table_worker(table_path, expected_spec, full_content_validation):
+def _validate_table_worker(table_path, expected_spec):
     """Worker function to validate a single table with its own DuckDB connection"""
     conn = duckdb.connect()
     try:
@@ -1653,10 +1653,7 @@ def _validate_table_worker(table_path, expected_spec, full_content_validation):
     finally:
         conn.close()
 
-def _validate_tables(
-    warehouse_path, specs_path, full_content_validation=False,
-    num_parallel=1, minimal=False
-):
+def _validate_tables(warehouse_path, specs_path, num_parallel=1, minimal=False):
     """Validate all tables in warehouse against specifications"""
     specs = _load_table_specs(specs_path)
     warehouse = Path(warehouse_path)
@@ -1778,7 +1775,7 @@ def _validate_tables(
     if num_parallel > 1:
         # Parallel validation
         with ProcessPoolExecutor(max_workers=num_parallel) as executor:
-            future_to_spec = {executor.submit(_validate_table_worker, path, spec, full_content_validation): spec
+            future_to_spec = {executor.submit(_validate_table_worker, path, spec): spec
                              for path, spec in tables_to_validate}
 
             for future in as_completed(future_to_spec):
@@ -2028,11 +2025,10 @@ class DuckDBValidator(TableValidator):
     def supports_remote_warehouses(self) -> bool:
         return False
 
-    def validate_tables(self, num_parallel: int = 1, full_content_validation: bool = False) -> dict:
+    def validate_tables(self, num_parallel: int = 1) -> dict:
         """Validate all tables using DuckDB"""
         success = _validate_tables(
-            self.warehouse_path, self.specs_path, full_content_validation,
-            num_parallel, self.minimal
+            self.warehouse_path, self.specs_path, num_parallel, self.minimal
         )
         return {'success_rate': 100.0 if success else 0.0}
 
@@ -2044,8 +2040,6 @@ def main():
     parser = argparse.ArgumentParser(description='Validate Iceberg tables using DuckDB')
     parser.add_argument('--warehouse-path', required=True, help='Path to Iceberg warehouse directory')
     parser.add_argument('--specs', required=True, help='Path to table_specs.yaml file')
-    parser.add_argument('--full-content-validation', action='store_true',
-                       help='Validate all rows (slow) instead of just sampling 10 rows')
     parser.add_argument('--num-parallel', type=int, default=1, help='Number of parallel validation workers')
     parser.add_argument('--minimal', action='store_true',
                        help='Validate minimal set (uncompressed, plain encoding only)')
@@ -2056,7 +2050,7 @@ def main():
         args.warehouse_path, args.specs,
         minimal=args.minimal
     )
-    result = validator.validate_tables(args.num_parallel, args.full_content_validation)
+    result = validator.validate_tables(args.num_parallel)
     success = result.get('success_rate', 0) == 100.0
     sys.exit(0 if success else 1)
 
