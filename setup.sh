@@ -82,4 +82,4 @@ uv sync
 echo ""
 echo "✅ Setup complete!"
 echo "Activate with: source .venv/bin/activate"
-echo "Test with: python -m iceberg_fuzzer.cli --help"
+echo "Test with: python -m iceberg_conformance.cli --help"

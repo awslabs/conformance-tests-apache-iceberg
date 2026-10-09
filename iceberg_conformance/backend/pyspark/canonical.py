@@ -9,7 +9,7 @@ from pyspark.sql.types import (
     ArrayType, MapType, StructType,
 )
 
-from iceberg_fuzzer.backend.canonical import CanonicalCast
+from iceberg_conformance.backend.canonical import CanonicalCast
 
 
 class PySparkCanonicalCast(CanonicalCast):

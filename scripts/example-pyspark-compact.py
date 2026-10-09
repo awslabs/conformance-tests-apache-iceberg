@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Example compaction operation for use with iceberg-fuzzer workflows.
+Example compaction operation for use with iceberg-conformance workflows.
 
 Invokes Spark's rewriteDataFiles action against a single Iceberg table.
 Works with both local filesystem and S3 Tables warehouses.
@@ -20,7 +20,7 @@ def create_spark_session(warehouse_path: str) -> SparkSession:
     is_s3_table = warehouse_path.startswith("arn:aws:s3tables:")
 
     builder = (
-        SparkSession.builder.appName("iceberg-fuzzer-compact")
+        SparkSession.builder.appName("iceberg-conformance-compact")
         .master("local[*]")
         .config("spark.ui.enabled", "false")
         .config(

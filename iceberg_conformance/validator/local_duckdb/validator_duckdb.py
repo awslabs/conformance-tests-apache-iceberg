@@ -35,9 +35,9 @@ import duckdb
 import pyarrow.parquet as pq
 import yaml
 
-from iceberg_fuzzer.common import row_id_from_index
-from iceberg_fuzzer.table_spec import select_primitive_types
-from iceberg_fuzzer.validator import TableValidator
+from iceberg_conformance.common import row_id_from_index
+from iceberg_conformance.table_spec import select_primitive_types
+from iceberg_conformance.validator import TableValidator
 
 def _load_table_specs(yaml_path):
     """Load table specifications from YAML file"""

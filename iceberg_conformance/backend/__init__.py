@@ -1,5 +1,5 @@
 """
-Backend abstractions for iceberg-fuzzer.
+Backend abstractions for iceberg-conformance.
 
 Each backend (duckdb, pyspark, polars, athena) lives in its own subpackage
 and implements one or more of: generation, validation, mutation.

@@ -40,8 +40,8 @@ from pyspark.sql.types import (
     StringType, BinaryType, ArrayType, MapType, TimestampNTZType
 )
 
-from iceberg_fuzzer.table_spec import load_table_specs
-from iceberg_fuzzer.common import row_id_from_index
+from iceberg_conformance.table_spec import load_table_specs
+from iceberg_conformance.common import row_id_from_index
 
 
 @contextmanager

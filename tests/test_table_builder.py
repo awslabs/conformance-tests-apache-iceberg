@@ -12,11 +12,11 @@ lazily, so construction does no disk I/O.
 import pytest
 from unittest.mock import patch
 
-from iceberg_fuzzer.exhaustive.table_builder import UnifiedTableBuilder
-from iceberg_fuzzer.exhaustive.dimensions.data_types import DataTypeChoice
-from iceberg_fuzzer.exhaustive.dimensions.interfaces import WriteOptions
-from iceberg_fuzzer.exhaustive.dimensions.encoding import EncodingChoice
-from iceberg_fuzzer.exhaustive.dimensions.compression import (
+from iceberg_conformance.exhaustive.table_builder import UnifiedTableBuilder
+from iceberg_conformance.exhaustive.dimensions.data_types import DataTypeChoice
+from iceberg_conformance.exhaustive.dimensions.interfaces import WriteOptions
+from iceberg_conformance.exhaustive.dimensions.encoding import EncodingChoice
+from iceberg_conformance.exhaustive.dimensions.compression import (
     CompressionChoice, CompressionCodec)
 
 
@@ -149,7 +149,7 @@ class TestHarvestFieldIds:
     shape as compute_field_ids, so the two compare with ==."""
 
     def test_primitive(self, builder, tmp_path):
-        from iceberg_fuzzer.exhaustive.dimensions.data_types import compute_field_ids
+        from iceberg_conformance.exhaustive.dimensions.data_types import compute_field_ids
         table_path = tmp_path / "t_prim"
         _write_metadata(table_path, [
             {"id": 1, "name": "value", "required": True, "type": "int"},
@@ -159,7 +159,7 @@ class TestHarvestFieldIds:
         assert harvested == compute_field_ids([("value", "int")])
 
     def test_list(self, builder, tmp_path):
-        from iceberg_fuzzer.exhaustive.dimensions.data_types import compute_field_ids
+        from iceberg_conformance.exhaustive.dimensions.data_types import compute_field_ids
         table_path = tmp_path / "t_list"
         _write_metadata(table_path, [
             {"id": 1, "name": "value", "required": False,
@@ -171,7 +171,7 @@ class TestHarvestFieldIds:
         assert harvested == compute_field_ids([("value", "list<int>")])
 
     def test_map(self, builder, tmp_path):
-        from iceberg_fuzzer.exhaustive.dimensions.data_types import compute_field_ids
+        from iceberg_conformance.exhaustive.dimensions.data_types import compute_field_ids
         table_path = tmp_path / "t_map"
         _write_metadata(table_path, [
             {"id": 1, "name": "value", "required": False,
@@ -183,7 +183,7 @@ class TestHarvestFieldIds:
         assert harvested == compute_field_ids([("value", "map<string,int>")])
 
     def test_struct(self, builder, tmp_path):
-        from iceberg_fuzzer.exhaustive.dimensions.data_types import compute_field_ids
+        from iceberg_conformance.exhaustive.dimensions.data_types import compute_field_ids
         table_path = tmp_path / "t_struct"
         _write_metadata(table_path, [
             {"id": 1, "name": "value", "required": False,
@@ -228,7 +228,7 @@ class TestValidateGate:
 
     def _run(self, builder, provider, write_options, validate):
         """Build with Spark/snapshot/metadata all mocked, returning the stats."""
-        from iceberg_fuzzer.exhaustive.table_builder import BuildStats
+        from iceberg_conformance.exhaustive.table_builder import BuildStats
         from unittest.mock import MagicMock
         mock_spark = MagicMock()
         stats = BuildStats(snapshot_count=1, data_file_count=1, delete_file_count=0,
@@ -256,7 +256,7 @@ class TestValidateGate:
 
     def test_validate_defaults_true(self, builder, provider, write_options):
         # Omitting the arg must behave like validate=True.
-        from iceberg_fuzzer.exhaustive.table_builder import BuildStats
+        from iceberg_conformance.exhaustive.table_builder import BuildStats
         from unittest.mock import MagicMock
         mock_spark = MagicMock()
         stats = BuildStats(snapshot_count=1, data_file_count=1, delete_file_count=0,

@@ -46,8 +46,8 @@ def _incompatibility_reason(col_type, encoding, compression, nullable, value_str
       2. encoding × type: the encoding must be valid for the column type.
       3. encoding × compression: the codec must be compatible with the encoding.
     """
-    from iceberg_fuzzer.exhaustive.dimensions.encoding import is_compatible as _enc_type_ok
-    from iceberg_fuzzer.exhaustive.dimensions.compression import (
+    from iceberg_conformance.exhaustive.dimensions.encoding import is_compatible as _enc_type_ok
+    from iceberg_conformance.exhaustive.dimensions.compression import (
         is_compression_compatible as _enc_comp_ok)
 
     if value_strategy == "nulls" and not nullable:
@@ -401,12 +401,12 @@ Examples:
 
     # Handle build-shapes command
     if args.command == 'build-shapes':
-        from iceberg_fuzzer.exhaustive import TableConfigGenerator, UnifiedTableBuilder
-        from iceberg_fuzzer.exhaustive.dimensions.data_types import (
+        from iceberg_conformance.exhaustive import TableConfigGenerator, UnifiedTableBuilder
+        from iceberg_conformance.exhaustive.dimensions.data_types import (
             DataTypeChoice, TypedValueFiller)
-        from iceberg_fuzzer.exhaustive.dimensions.interfaces import WriteOptions
-        from iceberg_fuzzer.exhaustive.dimensions.encoding import EncodingChoice
-        from iceberg_fuzzer.exhaustive.dimensions.compression import (
+        from iceberg_conformance.exhaustive.dimensions.interfaces import WriteOptions
+        from iceberg_conformance.exhaustive.dimensions.encoding import EncodingChoice
+        from iceberg_conformance.exhaustive.dimensions.compression import (
             CompressionChoice, CompressionCodec)
 
         # Build the dimension inputs from the CLI flags. Defaults are set on the
@@ -492,7 +492,7 @@ Examples:
 
     # Handle workflow command
     if args.command == 'workflow':
-        from iceberg_fuzzer.workflow import run_workflow
+        from iceberg_conformance.workflow import run_workflow
         result = run_workflow(
             workflow_file=args.workflow,
             warehouse_path=args.warehouse_path,
@@ -515,10 +515,10 @@ Examples:
 
         # Import and instantiate the appropriate generator for deletion
         if args.backend == 'pyspark':
-            from iceberg_fuzzer.backend.pyspark.generator import PySparkGenerator
+            from iceberg_conformance.backend.pyspark.generator import PySparkGenerator
             generator = PySparkGenerator(args.warehouse_path, None)
         elif args.backend == 'pyiceberg':
-            from iceberg_fuzzer.backend.pyiceberg.generator import PyIcebergGenerator
+            from iceberg_conformance.backend.pyiceberg.generator import PyIcebergGenerator
             generator = PyIcebergGenerator(args.warehouse_path, None)
         else:
             print(f"Error: Backend '{args.backend}' does not support delete operation")
@@ -568,13 +568,13 @@ Examples:
 
     # Import and instantiate the appropriate generator
     if args.backend == 'pyspark':
-        from iceberg_fuzzer.backend.pyspark.generator import PySparkGenerator
+        from iceberg_conformance.backend.pyspark.generator import PySparkGenerator
         generator = PySparkGenerator(args.warehouse_path, args.specs, seed=args.seed)
     elif args.backend == 'pyiceberg':
-        from iceberg_fuzzer.backend.pyiceberg.generator import PyIcebergGenerator
+        from iceberg_conformance.backend.pyiceberg.generator import PyIcebergGenerator
         generator = PyIcebergGenerator(args.warehouse_path, args.specs, seed=args.seed)
     else:  # polars
-        from iceberg_fuzzer.backend.polars.generator import PolarsGenerator
+        from iceberg_conformance.backend.polars.generator import PolarsGenerator
         generator = PolarsGenerator(args.warehouse_path, args.specs, seed=args.seed)
 
     failed = False

@@ -42,9 +42,9 @@ from pyiceberg.types import (
     DecimalType, FixedType, ListType, NestedField, MapType, StructType as IcebergStructType
 )
 
-from iceberg_fuzzer.generator import TableGenerator
-from iceberg_fuzzer.table_spec import load_table_specs
-from iceberg_fuzzer.common import row_id_from_index
+from iceberg_conformance.generator import TableGenerator
+from iceberg_conformance.table_spec import load_table_specs
+from iceberg_conformance.common import row_id_from_index
 
 
 class PolarsGenerator(TableGenerator):

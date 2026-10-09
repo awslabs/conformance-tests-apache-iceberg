@@ -7,9 +7,9 @@ metadata:
   deterministic_data: true
 
 # The 30-column schema these tables use is declared in
-# iceberg_fuzzer/backend/pyspark/builders.py, and the transform/pattern
+# iceberg_conformance/backend/pyspark/builders.py, and the transform/pattern
 # combinations `generate` writes are declared in
-# iceberg_fuzzer/backend/pyspark/generator.py. `partition_transforms` below is
+# iceberg_conformance/backend/pyspark/generator.py. `partition_transforms` below is
 # read only to resolve `generate --table-name`.
 
 # Partition transforms for comprehensive testing

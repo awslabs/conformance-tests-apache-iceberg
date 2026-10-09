@@ -48,7 +48,7 @@ from pyiceberg.types import (
     NestedField,
 )
 
-from iceberg_fuzzer.common import row_id_from_index
+from iceberg_conformance.common import row_id_from_index
 
 
 def create_iceberg_schema(table_spec):

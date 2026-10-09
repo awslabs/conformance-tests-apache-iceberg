@@ -7,8 +7,8 @@ metadata:
   deterministic_data: true
 
 # The 24-column schema these tables use is declared in
-# iceberg_fuzzer/backend/pyspark/builders.py, and the pattern list `generate`
-# writes is declared in iceberg_fuzzer/backend/pyspark/generator.py. The DuckDB
+# iceberg_conformance/backend/pyspark/builders.py, and the pattern list `generate`
+# writes is declared in iceberg_conformance/backend/pyspark/generator.py. The DuckDB
 # validator reads `patterns`, `table_config` and `metadata` from here.
 
 # Write patterns for different compaction scenarios

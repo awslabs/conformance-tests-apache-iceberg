@@ -1,6 +1,6 @@
 """DuckDB implementation of canonical type formatting."""
 
-from iceberg_fuzzer.backend.canonical import CanonicalCast
+from iceberg_conformance.backend.canonical import CanonicalCast
 
 
 class DuckDBCanonicalCast(CanonicalCast):
