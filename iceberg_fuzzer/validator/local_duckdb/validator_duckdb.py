@@ -284,7 +284,7 @@ def _extract_expected_evolution_tables(specs_path):
 
     return tables
 
-def _validate_delete_file_types(table_path, delete_mode):
+def _validate_delete_file_types(table_path, delete_mode, require_position_deletes=False):
     """Validate that the correct delete files are present for the delete mode"""
 
     table_path = Path(table_path)
@@ -319,10 +319,12 @@ def _validate_delete_file_types(table_path, delete_mode):
             # COW should have no delete files
             if total_delete_files > 0:
                 return False, f"COW mode should have no delete files, found {total_delete_files}"
-        elif delete_mode == 'posdelete':
-            # Position delete mode should have position deletes (for delete-heavy patterns)
-            # Note: Not all patterns will have deletes, so this is informational
-            pass
+        elif delete_mode == 'posdelete' and require_position_deletes:
+            if total_position_deletes == 0:
+                return False, (
+                    "posdelete mode should have position deletes, found none "
+                    f"({total_delete_files} delete files)"
+                )
         elif delete_mode == 'eqdelete':
             # Equality delete mode should have equality deletes (for delete-heavy patterns)
             # Note: Not all patterns will have deletes, so this is informational
@@ -1226,7 +1228,15 @@ def _validate_delete_files(table_path, expected_spec, delete_mode):
         print(f"      → {delete_info}")
         return {'valid': False, 'delete_info': delete_info}
 
-    delete_validation = _validate_delete_file_types(table_path, delete_mode)
+    # mixed_chaos is the only pattern whose deletes are chosen so that Iceberg
+    # cannot satisfy them by dropping whole data files, so it is the only one a
+    # position delete is guaranteed for. Four of the write patterns never issue a
+    # DELETE at all, and the rest delete contiguous id ranges that line up with
+    # the append batches.
+    delete_validation = _validate_delete_file_types(
+        table_path, delete_mode,
+        require_position_deletes=expected_spec.get('pattern') == 'mixed_chaos',
+    )
     if isinstance(delete_validation, tuple):
         delete_valid = delete_validation[0]
         delete_info = delete_validation[1]
