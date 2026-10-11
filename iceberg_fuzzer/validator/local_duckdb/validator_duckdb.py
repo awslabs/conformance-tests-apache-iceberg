@@ -36,7 +36,10 @@ import pyarrow.parquet as pq
 import yaml
 
 from iceberg_fuzzer.common import row_id_from_index
-from iceberg_fuzzer.common.partition_transforms import partitioned_table_specs
+from iceberg_fuzzer.common.partition_transforms import (
+    partitioned_row_id,
+    partitioned_table_specs,
+)
 from iceberg_fuzzer.table_spec import select_primitive_types
 from iceberg_fuzzer.validator import TableValidator
 
@@ -712,6 +715,17 @@ def _validate_table_contents(conn, table_path, expected_spec):
                         )
 
             elif expected_spec['type'] == 'write_pattern':
+                # A row is compared against the expectation for the id it
+                # carries, so a row that should not be in the table matches
+                # itself and every column check passes. Comparing its position
+                # against its id is what notices it is there at all, and what
+                # notices one missing.
+                expected_id = row_id_from_index(i, 0)
+                if row_id != expected_id:
+                    content_errors.append(
+                        f"Row {i}: ID mismatch - expected {expected_id}, got {row_id}"
+                    )
+
                 # Validate write-pattern table: comprehensive columns
                 expected_data = _generate_expected_write_pattern_data(row_id)
 
@@ -747,6 +761,17 @@ def _validate_table_contents(conn, table_path, expected_spec):
                                 )
 
             elif expected_spec['type'] == 'partitioned':
+                # As above, but which id belongs at a position depends on the
+                # pattern and the delete mode, so the expectation comes from the
+                # same module the table set does.
+                expected_id = partitioned_row_id(
+                    i, expected_spec.get('pattern'), expected_spec.get('delete_mode')
+                )
+                if row_id != expected_id:
+                    content_errors.append(
+                        f"Row {i}: ID mismatch - expected {expected_id}, got {row_id}"
+                    )
+
                 # Validate partitioned table: comprehensive columns with partition fields
                 expected_data = _generate_expected_partitioned_data(row_id)
 

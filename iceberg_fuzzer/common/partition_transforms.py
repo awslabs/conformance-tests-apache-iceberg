@@ -23,6 +23,8 @@ validate reports tables missing that generate never intended to write. Both
 derive the set from here.
 """
 
+from iceberg_fuzzer.common.mixed_chaos import posdelete_surviving_row_id
+
 # Transforms are written in the generator's own syntax, `bucket[N](col)` rather
 # than Iceberg's `bucket(N, col)`, because `create_partitioned_table` parses
 # this form.
@@ -143,3 +145,15 @@ def partitioned_table_specs(minimal: bool = False) -> list[dict]:
                     'delete_mode': delete_mode,
                 })
     return specs
+
+
+def partitioned_row_id(index: int, pattern: str, delete_mode: str) -> int:
+    """The id of the `index`-th row of a partitioned table, counting from 0.
+
+    Rows are taken in id order. Every pattern lands on a contiguous 1-based run
+    except mixed_chaos posdelete, whose deletes are scattered so that the data
+    files are left partially deleted rather than dropped whole.
+    """
+    if pattern == 'mixed_chaos' and delete_mode == 'posdelete':
+        return posdelete_surviving_row_id(index)
+    return index + 1

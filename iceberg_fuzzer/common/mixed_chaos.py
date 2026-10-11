@@ -41,3 +41,19 @@ def mixed_chaos_delete_chunks() -> list[tuple[int, int]]:
         (chunk * chunk_rows + 1, (chunk + 1) * chunk_rows)
         for chunk in range(MIXED_CHAOS_DELETE_CHUNK_COUNT)
     ]
+
+
+def posdelete_removes_row(row_id: int) -> bool:
+    """Whether a posdelete mixed_chaos table has this row deleted."""
+    return row_id % POSDELETE_MODULUS == 0
+
+
+def posdelete_surviving_row_id(index: int) -> int:
+    """The id of the `index`-th surviving row, counting from 0, ordered by id.
+
+    The ids kept are the ones that are not multiples of POSDELETE_MODULUS, so
+    each run of POSDELETE_MODULUS ids contributes POSDELETE_MODULUS - 1 of them.
+    """
+    kept_per_cycle = POSDELETE_MODULUS - 1
+    cycle, offset = divmod(index, kept_per_cycle)
+    return cycle * POSDELETE_MODULUS + offset + 1
