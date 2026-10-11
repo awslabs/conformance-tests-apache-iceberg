@@ -40,7 +40,14 @@ class PySparkCanonicalCast(CanonicalCast):
             return F.date_format(col, "yyyy-MM-dd")
 
         if isinstance(spark_type, TimestampType):
-            return F.date_format(col, "yyyy-MM-dd HH:mm:ss.SSSSSS")
+            # Spark's TimestampType is Iceberg's `timestamptz`, an instant, and
+            # `date_format` renders it in spark.sql.session.timeZone. The
+            # canonical form is UTC, so shift the wall clock before formatting;
+            # DuckDB's `AT TIME ZONE 'UTC'` arrives at the same string.
+            return F.date_format(
+                F.to_utc_timestamp(col, F.current_timezone()),
+                "yyyy-MM-dd HH:mm:ss.SSSSSS",
+            )
 
         if isinstance(spark_type, TimestampNTZType):
             return F.date_format(col, "yyyy-MM-dd HH:mm:ss.SSSSSS")
