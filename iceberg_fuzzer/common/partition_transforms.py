@@ -53,8 +53,9 @@ FULL_TRANSFORMS = [
     ["truncate[1](name)"],
     ["truncate[3](name)"],
     ["truncate[10](name)"],
+    # Only columns with repeating values: `identity` on a unique one gives a
+    # partition per row.
     ["identity(boolean_col)"],
-    ["identity(int_col)"],
     ["identity(date_col)"],
 
     # Multi-column, where the order of fields is itself part of the coverage

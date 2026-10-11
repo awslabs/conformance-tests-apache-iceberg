@@ -1173,10 +1173,7 @@ def _validate_partition_structure(table_path, expected_spec):
         avg_files = sum(files_per_partition) / len(files_per_partition) if files_per_partition else 0
 
         # Require 2+ files per partition for compaction testing
-        if 'identity_int_col' in expected_spec.get('name', ''):
-            partition_valid = partition_count > 0 and avg_files >= 1
-        else:
-            partition_valid = partition_count > 0 and avg_files >= 2
+        partition_valid = partition_count > 0 and avg_files >= 2
 
         partition_info = f"{partition_count} partitions, avg {avg_files:.1f} files/partition"
         print(f"      → Found {partition_count} partitions, avg {avg_files:.1f} files/partition")
