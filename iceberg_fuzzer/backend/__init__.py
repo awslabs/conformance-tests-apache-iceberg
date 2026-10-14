@@ -151,8 +151,13 @@ class ValidationEngine(ABC):
         """Return the set of all 'id' column values currently in the table."""
         pass
 
+    reports_snapshots = False
+
     def current_snapshot(self, warehouse: str, namespace: str, table_name: str) -> tuple[int | None, str | None]:
-        """Return the table's current snapshot ID and its operation, or (None, None)."""
+        """Return the table's current snapshot ID and its operation, or (None, None).
+
+        Implemented only by engines that set `reports_snapshots`.
+        """
         raise NotImplementedError(f"{type(self).__name__} does not report snapshots")
 
     def close(self):
@@ -179,6 +184,14 @@ class DeleteResult:
 
     snapshot_id: int
     deleted_ids: set[int] = field(default_factory=set)
+
+
+@dataclass
+class SqlResult:
+    """Result of running SQL statements, as the writer sees the table afterwards."""
+
+    snapshot_id: int | None
+    row_count: int
 
 
 class MutationEngine(ABC):
@@ -221,11 +234,11 @@ class MutationEngine(ABC):
         """
         pass
 
-    def run_sql(self, namespace: str, table_name: str, statements: list[str]) -> int | None:
-        """Run SQL statements in order, with ${table} standing for the table's qualified name.
+    def run_sql(self, namespace: str, table_name: str, statements: list[str]) -> SqlResult:
+        """Run SQL statements in order.
 
-        Returns:
-            The table's current snapshot ID afterwards, or None if it has no snapshot.
+        `${table}` stands for the table's qualified name, and `${namespace}` and `${table_name}`
+        for its parts. `$$` becomes `$`, and any other `$` is left as written.
         """
         raise NotImplementedError(f"{type(self).__name__} does not run SQL")
 

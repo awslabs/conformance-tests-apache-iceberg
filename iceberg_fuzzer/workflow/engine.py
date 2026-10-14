@@ -102,7 +102,7 @@ def _cross_engine_assertions(post_hashes: dict[str, int]) -> list[AssertionResul
 
 def _snapshot_engine(engines) -> ValidationEngine:
     for _, engine in engines:
-        if type(engine).current_snapshot is not ValidationEngine.current_snapshot:
+        if engine.reports_snapshots:
             return engine
     raise ValueError("A replace step with 'expect' needs a validation engine that reports snapshots")
 
@@ -145,6 +145,7 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
     stdout_path = out_dir / f"{namespace}.{name}.{step_id}.stdout"
     stderr_path = out_dir / f"{namespace}.{name}.{step_id}.stderr"
 
+    timeout = step_config.get('timeout', 300)
     with open(stdout_path, 'w') as out_f, open(stderr_path, 'w') as err_f:
         try:
             result = subprocess.run(
@@ -152,12 +153,12 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
                 shell=False,
                 stdout=out_f,
                 stderr=err_f,
-                timeout=step_config.get('timeout', 300),
+                timeout=timeout,
             )
             returncode = result.returncode
         except subprocess.TimeoutExpired:
-            err_f.write(f"\nOperation timed out after {step_config.get('timeout', 300)}s\n")
-            returncode = -1
+            err_f.write(f"\nOperation timed out after {timeout}s\n")
+            return OperationResult.failed(f"Step '{step_id}' timed out after {timeout}s")
 
     # A declined command may exit non-zero; the table must then be unchanged.
     if returncode != 0 and expect != 'unchanged':
@@ -251,19 +252,17 @@ def _handle_sql(step, engines, warehouse_path, namespace, name, mutation_engines
         print(f"    {step_id} [sql]: {len(statements)} statements via {step['config']['backend']}")
         return OperationResult.dry_run()
 
-    snapshot_id = _get_mutation_engine(step, mutation_engines).run_sql(namespace, name, statements)
+    sql_result = _get_mutation_engine(step, mutation_engines).run_sql(namespace, name, statements)
 
+    # Arbitrary SQL has no predicted row count, so every engine must match what the writer counts.
     assertions: list[AssertionResult] = []
     post_hashes: dict[str, int] = {}
-    first_count = None
     for engine_name, engine in engines:
         post = engine.capture_checkpoint(warehouse_path, namespace, name)
-        # Arbitrary SQL has no predicted row count, so every engine must match the first one.
-        first_count = post.row_count if first_count is None else first_count
-        assertions.append(AssertionResult.row_count(first_count, post.row_count, prefix=engine_name))
+        assertions.append(AssertionResult.row_count(sql_result.row_count, post.row_count, prefix=engine_name))
         post_hashes[engine_name] = post.content_hash
     assertions.extend(_cross_engine_assertions(post_hashes))
-    return OperationResult.success(assertions, snapshot_id=snapshot_id)
+    return OperationResult.success(assertions, snapshot_id=sql_result.snapshot_id)
 
 
 def _handle_rollback(step, engines, warehouse_path, namespace, name, mutation_engines,
@@ -331,12 +330,13 @@ def _process_table(
     backends_needed = {step['config']['backend'] for step in workflow_def.steps if 'backend' in step.get('config', {})}
     if workflow_def.setup:
         backends_needed.add(workflow_def.setup['backend'])
-    mutation_engines = _init_mutation_engines(warehouse_path, backends_needed, seed=seed) if not dry_run else {}
+    mutation_engines: dict = {}
 
-    if workflow_def.setup and not dry_run:
-        mutation_engines[workflow_def.setup['backend']].run_sql(
-            namespace, table_name, workflow_def.setup['statements']
-        )
+    # Point queries predict each value from its row id, as generated tables are filled, so they
+    # cannot check a table whose rows were written by SQL.
+    if point_queries and (workflow_def.setup or any(s['operation'] == 'sql' for s in workflow_def.steps)):
+        print("  Point queries skipped: the workflow writes rows with SQL")
+        point_queries = False
 
     rollback_targets: set[str] = {
         step['config']['to_step'] for step in workflow_def.steps
@@ -351,12 +351,22 @@ def _process_table(
     alive_ids_by_step: dict[StepId, set[int]] = {}
     queryable_columns: list[tuple[ColumnName, ColTypeStr]] = []
 
-    if point_queries and not dry_run and engines:
-        _, first_engine = engines[0]
-        alive_ids = first_engine.get_row_ids(warehouse_path, namespace, table_name)
-        queryable_columns = first_engine.get_columns(warehouse_path, namespace, table_name)
-
     try:
+        try:
+            if not dry_run:
+                mutation_engines = _init_mutation_engines(warehouse_path, backends_needed, seed=seed)
+            if workflow_def.setup and not dry_run:
+                mutation_engines[workflow_def.setup['backend']].run_sql(
+                    namespace, table_name, workflow_def.setup['statements']
+                )
+            if point_queries and not dry_run and engines:
+                _, first_engine = engines[0]
+                alive_ids = first_engine.get_row_ids(warehouse_path, namespace, table_name)
+                queryable_columns = first_engine.get_columns(warehouse_path, namespace, table_name)
+        except Exception as e:
+            result.error = f"Workflow setup failed: {e}"
+            return result
+
         for step in workflow_def.steps:
             step_id = step['id']
             operation = step['operation']
@@ -407,11 +417,6 @@ def _process_table(
                         if to_step not in alive_ids_by_step:
                             raise RuntimeError(f"No saved alive_ids for rollback target '{to_step}'")
                         alive_ids = alive_ids_by_step[to_step].copy()
-                    case 'sql':
-                        # Arbitrary SQL has no predicted effect, so the expected IDs become
-                        # whatever the table holds after the statements.
-                        _, first_engine = engines[0]
-                        alive_ids = first_engine.get_row_ids(warehouse_path, namespace, table_name)
                     case 'replace':
                         # A correct compaction preserves the logical row set, so keeping our
                         # prediction unchanged lets point queries detect rows incorrectly

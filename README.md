@@ -177,13 +177,13 @@ steps:
 ```
 
 **Step operations:**
-- `replace` — runs an external command that should not change logical content (e.g., compaction). A checkpoint (row count + content hash) is captured before and validated after. Requires `command`; `timeout` is optional. `expect` optionally states what the command must do to the current snapshot: `replace` commits a new snapshot whose operation is `replace`, `none` leaves the snapshot as it was because there was nothing to rewrite, and `unchanged` also leaves it as it was but lets the command exit non-zero, for a compactor that declines the table.
+- `replace` — runs an external command that should not change logical content (e.g., compaction). A checkpoint (row count + content hash) is captured before and validated after. Requires `command`; `timeout` is optional. `expect` optionally states what the command must do to the current snapshot: `replace` commits a new snapshot whose operation is `replace`, `none` leaves the snapshot as it was because there was nothing to rewrite, and `unchanged` also leaves it as it was but lets the command exit non-zero, for a compactor that declines the table. A command that times out always fails the step.
 - `append` — adds rows to the table via the specified backend. Validates the row count increased by `num_rows`. Requires `backend` and `num_rows`.
 - `delete` — deletes rows from the table. Validates the row count decreased by `num_rows`. Requires `backend` and `num_rows`.
-- `sql` — runs SQL statements in order through the backend, with `${table}` standing for the table's qualified name. Every engine must then read the same row count and content. Requires `backend` and `statements`.
+- `sql` — runs SQL statements in order through the backend. Every engine must then read the row count the backend reports and the same content. Requires `backend` and `statements`. Point queries predict values the way generated tables are filled, so a workflow with `setup` or `sql` steps runs without them.
 - `rollback` — rolls the table back to the snapshot as of an earlier step, and validates the state matches that step's checkpoint. Requires `backend` and `to_step` (the `id` of a previous `append`, `delete` or `sql` step).
 
-**Placeholders** available in `command`: `${warehouse}`, `${namespace}`, `${table_name}`.
+**Placeholders** available in `command`: `${warehouse}`, `${namespace}`, `${table_name}`. In `sql` and `setup` statements, `${table}` stands for the table's qualified name, and `${namespace}` and `${table_name}` for its parts, for example `CALL local.system.rewrite_data_files(table => '${namespace}.${table_name}')`. `$$` becomes `$`, and any other `$` is left as written.
 
 ### Workflows that build their own table
 

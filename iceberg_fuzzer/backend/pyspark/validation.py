@@ -21,6 +21,8 @@ class PySparkValidation(ValidationEngine):
     Computes content hashes using canonical type formatting for cross-engine agreement.
     """
 
+    reports_snapshots = True
+
     def __init__(self, warehouse_path: str):
         self._warehouse_path = warehouse_path
         self._spark = None
