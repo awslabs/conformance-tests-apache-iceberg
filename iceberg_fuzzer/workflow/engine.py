@@ -15,6 +15,7 @@ from iceberg_fuzzer.backend.duckdb import DuckDBValidation
 from iceberg_fuzzer.backend.point_query import validate_point_queries
 from iceberg_fuzzer.backend.pyspark.mutation import PySparkMutation
 from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation
+from iceberg_fuzzer.checks import TableCheck
 from iceberg_fuzzer.workflow.loader import Workflow, load_workflow
 
 StepId = str
@@ -100,116 +101,86 @@ def _cross_engine_assertions(post_hashes: dict[str, int]) -> list[AssertionResul
     )]
 
 
+def _capture(engines, warehouse_path, namespace, name) -> dict[EngineName, Checkpoint]:
+    return {engine_name: engine.capture_checkpoint(warehouse_path, namespace, name) for engine_name, engine in engines}
+
+
+def _agreement(post: dict[EngineName, Checkpoint], expected_rows: int) -> list[AssertionResult]:
+    """Each engine reads the expected row count, and all engines read the same content."""
+    assertions = [AssertionResult.row_count(expected_rows, cp.row_count, prefix=n) for n, cp in post.items()]
+    return assertions + _cross_engine_assertions({n: cp.content_hash for n, cp in post.items()})
+
+
+def _run_command(step, resolved: str, output_dir, workflow_name, namespace, name) -> int | None:
+    """Run a replace step's command and return its exit code, or None if it timed out."""
+    timeout = step['config'].get('timeout', 300)
+    out_dir = Path(output_dir) / workflow_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = out_dir / f"{namespace}.{name}.{step['id']}.stdout"
+    stderr_path = out_dir / f"{namespace}.{name}.{step['id']}.stderr"
+    with open(stdout_path, 'w') as out_f, open(stderr_path, 'w') as err_f:
+        try:
+            return subprocess.run(
+                shlex.split(resolved), shell=False, stdout=out_f, stderr=err_f,
+                timeout=timeout,
+            ).returncode
+        except subprocess.TimeoutExpired:
+            err_f.write(f"\nOperation timed out after {timeout}s\n")
+            return None
+
+
 def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders, output_dir, workflow_name, dry_run=False) -> OperationResult:
     """Handle a 'replace' step: checkpoint with all engines, run command, validate all."""
     step_id = step['id']
-    step_config = step['config']
-    resolved = Template(step_config['command']).safe_substitute(placeholders)
+    resolved = Template(step['config']['command']).safe_substitute(placeholders)
 
     if dry_run:
         print(f"    {step_id} [replace]: {resolved.strip()}")
         return OperationResult.dry_run()
 
-    checkpoints: dict[str, Checkpoint] = {}
-    for engine_name, engine in engines:
-        checkpoints[engine_name] = engine.capture_checkpoint(warehouse_path, namespace, name)
-
-    out_dir = Path(output_dir) / workflow_name
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    stdout_path = out_dir / f"{namespace}.{name}.{step_id}.stdout"
-    stderr_path = out_dir / f"{namespace}.{name}.{step_id}.stderr"
-
-    with open(stdout_path, 'w') as out_f, open(stderr_path, 'w') as err_f:
-        try:
-            result = subprocess.run(
-                shlex.split(resolved),
-                shell=False,
-                stdout=out_f,
-                stderr=err_f,
-                timeout=step_config.get('timeout', 300),
-            )
-            returncode = result.returncode
-        except subprocess.TimeoutExpired:
-            err_f.write(f"\nOperation timed out after {step_config.get('timeout', 300)}s\n")
-            returncode = -1
-
+    checkpoints = _capture(engines, warehouse_path, namespace, name)
+    returncode = _run_command(step, resolved, output_dir, workflow_name, namespace, name)
+    if returncode is None:
+        return OperationResult.failed(f"Step '{step_id}' timed out after {step['config'].get('timeout', 300)}s")
     if returncode != 0:
         return OperationResult.failed(f"Step '{step_id}' exited with code {returncode}")
 
     assertions: list[AssertionResult] = []
     post_hashes: dict[str, int] = {}
-
     for engine_name, engine in engines:
-        engine_assertions = engine.validate(checkpoints[engine_name], warehouse_path, namespace, name)
-        for a in engine_assertions:
-            assertions.append(AssertionResult(
-                name=f"{engine_name}.{a.name}",
-                passed=a.passed,
-                expected=a.expected,
-                actual=a.actual,
-            ))
+        for a in engine.validate(checkpoints[engine_name], warehouse_path, namespace, name):
+            assertions.append(AssertionResult(name=f"{engine_name}.{a.name}", passed=a.passed, expected=a.expected, actual=a.actual))
             if a.name == 'content_hash':
                 post_hashes[engine_name] = a.actual
-
     assertions.extend(_cross_engine_assertions(post_hashes))
     return OperationResult.success(assertions)
 
 
 def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationResult:
     """Handle an 'append' step: append rows, validate row count with all engines."""
-    step_id = step['id']
-    step_config = step['config']
-    num_rows = step_config['num_rows']
-
+    num_rows = step['config']['num_rows']
     if dry_run:
-        print(f"    {step_id} [append]: {num_rows} rows via {step_config['backend']}")
+        print(f"    {step['id']} [append]: {num_rows} rows via {step['config']['backend']}")
         return OperationResult.dry_run()
 
-    backend = _get_mutation_engine(step, mutation_engines)
-
-    # Use first engine for pre-count (all should agree)
     _, first_engine = engines[0]
     pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
-    append_result = backend.append_rows(namespace, name, num_rows)
-
-    assertions: list[AssertionResult] = []
-    post_hashes: dict[str, int] = {}
-
-    for engine_name, engine in engines:
-        post = engine.capture_checkpoint(warehouse_path, namespace, name)
-        assertions.append(AssertionResult.row_count(pre_count + num_rows, post.row_count, prefix=engine_name))
-        post_hashes[engine_name] = post.content_hash
-
-    assertions.extend(_cross_engine_assertions(post_hashes))
+    append_result = _get_mutation_engine(step, mutation_engines).append_rows(namespace, name, num_rows)
+    assertions = _agreement(_capture(engines, warehouse_path, namespace, name), pre_count + num_rows)
     return OperationResult.success(assertions, snapshot_id=append_result.snapshot_id, appended_ids=append_result.appended_ids)
 
 
 def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engines, dry_run=False) -> OperationResult:
     """Handle a 'delete' step: delete random rows, validate row count."""
-    step_id = step['id']
-    step_config = step['config']
-    num_rows = step_config['num_rows']
-
+    num_rows = step['config']['num_rows']
     if dry_run:
-        print(f"    {step_id} [delete]: {num_rows} rows via {step_config['backend']}")
+        print(f"    {step['id']} [delete]: {num_rows} rows via {step['config']['backend']}")
         return OperationResult.dry_run()
-
-    backend = _get_mutation_engine(step, mutation_engines)
 
     _, first_engine = engines[0]
     pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
-    delete_result = backend.delete_rows(namespace, name, num_rows)
-
-    assertions: list[AssertionResult] = []
-    post_hashes: dict[str, int] = {}
-
-    for engine_name, engine in engines:
-        post = engine.capture_checkpoint(warehouse_path, namespace, name)
-        assertions.append(AssertionResult.row_count(pre_count - num_rows, post.row_count, prefix=engine_name))
-        post_hashes[engine_name] = post.content_hash
-
-    assertions.extend(_cross_engine_assertions(post_hashes))
+    delete_result = _get_mutation_engine(step, mutation_engines).delete_rows(namespace, name, num_rows)
+    assertions = _agreement(_capture(engines, warehouse_path, namespace, name), pre_count - num_rows)
     return OperationResult.success(assertions, snapshot_id=delete_result.snapshot_id, deleted_ids=delete_result.deleted_ids)
 
 
@@ -217,39 +188,26 @@ def _handle_rollback(step, engines, warehouse_path, namespace, name, mutation_en
                      snapshot_id_by_step, accumulated_checkpoints, dry_run=False) -> OperationResult:
     """Handle a 'rollback' step: roll back to a prior step's snapshot, then validate."""
     step_id = step['id']
-    step_config = step['config']
-    to_step = step_config['to_step']
+    to_step = step['config']['to_step']
 
     if dry_run:
-        print(f"    {step_id} [rollback]: to step '{to_step}' via {step_config['backend']}")
+        print(f"    {step_id} [rollback]: to step '{to_step}' via {step['config']['backend']}")
         return OperationResult.dry_run()
-
     if to_step not in snapshot_id_by_step:
         return OperationResult.failed(f"Step '{step_id}': no snapshot_id recorded for step '{to_step}'")
-
     if to_step not in accumulated_checkpoints:
         return OperationResult.failed(f"Step '{step_id}': no checkpoint stored for step '{to_step}'")
 
     target_snapshot_id = snapshot_id_by_step[to_step]
-    target_checkpoints = accumulated_checkpoints[to_step]
+    targets = accumulated_checkpoints[to_step]
+    actual_snapshot_id = _get_mutation_engine(step, mutation_engines).rollback_to_snapshot(namespace, name, target_snapshot_id)
 
-    backend = _get_mutation_engine(step, mutation_engines)
-    actual_snapshot_id = backend.rollback_to_snapshot(namespace, name, target_snapshot_id)
-
-    assertions: list[AssertionResult] = [
-        AssertionResult.equal("snapshot_id", target_snapshot_id, actual_snapshot_id),
-    ]
-    post_hashes: dict[str, int] = {}
-
-    for engine_name, engine in engines:
-        post = engine.capture_checkpoint(warehouse_path, namespace, name)
-        target = target_checkpoints[engine_name]
-
-        assertions.append(AssertionResult.row_count(target.row_count, post.row_count, prefix=engine_name))
-        assertions.append(AssertionResult.content_hash(target.content_hash, post.content_hash, prefix=engine_name))
-        post_hashes[engine_name] = post.content_hash
-
-    assertions.extend(_cross_engine_assertions(post_hashes))
+    post = _capture(engines, warehouse_path, namespace, name)
+    assertions = [AssertionResult.equal("snapshot_id", target_snapshot_id, actual_snapshot_id)]
+    for engine_name, cp in post.items():
+        assertions.append(AssertionResult.row_count(targets[engine_name].row_count, cp.row_count, prefix=engine_name))
+        assertions.append(AssertionResult.content_hash(targets[engine_name].content_hash, cp.content_hash, prefix=engine_name))
+    assertions.extend(_cross_engine_assertions({n: cp.content_hash for n, cp in post.items()}))
     return OperationResult.success(assertions)
 
 
@@ -263,8 +221,12 @@ def _process_table(
     dry_run: bool = False,
     seed: int | None = None,
     point_queries: bool = True,
+    table_checks: list[TableCheck] = (),
 ) -> TableResult:
-    """Process a single table through all workflow steps."""
+    """Process a single table through all workflow steps.
+
+    table_checks run around every step they apply to, see iceberg_fuzzer.checks.
+    """
     workflow_name = workflow_def.name
 
     result = TableResult(table_name=table_name, namespace=namespace)
@@ -301,7 +263,9 @@ def _process_table(
             step_id = step['id']
             operation = step['operation']
 
+            checks = [c for c in table_checks if c.applies_to(operation)] if not dry_run else []
             try:
+                check_states = [(c, c.before(namespace, table_name)) for c in checks]
                 if operation == 'replace':
                     op_result = _handle_replace(
                         step, engines, warehouse_path, namespace, table_name, placeholders, output_dir, workflow_name, dry_run
@@ -327,6 +291,14 @@ def _process_table(
             if op_result.error:
                 result.error = op_result.error
                 return result
+
+            for check, state in check_states:
+                try:
+                    op_result.assertions.extend(check.after(state, namespace, table_name))
+                except Exception as e:
+                    op_result.assertions.append(AssertionResult(
+                        name=check.name, passed=False, expected="check completes", actual=f"raised {e!r}",
+                    ))
 
             # Update alive_ids and run point query validation.
             if point_queries and not dry_run:
@@ -363,12 +335,7 @@ def _process_table(
                 snapshot_id_by_step[step_id] = op_result.snapshot_id
 
             if step_id in rollback_targets and not dry_run:
-                checkpoints_by_engine: dict[EngineName, Checkpoint] = {}
-                for engine_name, engine in engines:
-                    checkpoints_by_engine[engine_name] = engine.capture_checkpoint(
-                        warehouse_path, namespace, table_name
-                    )
-                accumulated_checkpoints[step_id] = checkpoints_by_engine
+                accumulated_checkpoints[step_id] = _capture(engines, warehouse_path, namespace, table_name)
                 if point_queries:
                     alive_ids_by_step[step_id] = alive_ids.copy()
     finally:

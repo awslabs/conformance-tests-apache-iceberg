@@ -59,40 +59,73 @@ class AssertionResult:
     """Result of a single assertion check within a workflow step.
 
     Attributes:
-        name: Identifier for the assertion (e.g., 'row_count', 'content_hash').
-        passed: Whether the assertion passed.
+        name: Identifier for the assertion, such as 'row_count', 'pyspark.content_hash' or
+            'column_statistics.lower_bound'. Built from the fields below when they are given.
+        passed: Whether the assertion passed. An assertion that was not applicable passes.
         expected: The expected value.
         actual: The actual value observed.
+        check: The check that made the assertion, such as 'row_count' or 'column_statistics'.
+        problem: The kind of problem within the check, such as 'lower_bound', when a check
+            reports each kind as its own assertion.
+        reader: The reader whose rows the assertion is about, such as 'pyspark'.
+        row_filter: The predicate the reader read the table through.
+        applicable: False when there was nothing to check, such as a codec check after a step
+            that wrote no files, so a pass is not counted as tested.
     """
     name: str
     passed: bool
     expected: Any = None
     actual: Any = None
+    check: str | None = None
+    problem: str | None = None
+    reader: str | None = None
+    row_filter: str | None = None
+    applicable: bool = True
+
+    def __post_init__(self):
+        # An assertion built from its name alone, as validation engines outside this package may
+        # build them, gets its check and problem from the name.
+        if self.check is None:
+            check, _, problem = self.name.split(" where ", 1)[0].partition(".")
+            self.check, self.problem = check, self.problem or problem or None
 
     @classmethod
-    def equal(cls, name: str, expected, actual, prefix: str | None = None):
-        """Assert two values are equal."""
-        full_name = f"{prefix}.{name}" if prefix else name
-        return cls(name=full_name, passed=expected == actual, expected=expected, actual=actual)
+    def of(cls, check: str, passed: bool, expected=None, actual=None, problem: str | None = None,
+           reader: str | None = None, row_filter: str | None = None, applicable: bool = True):
+        """An assertion named from its reader, check, problem and row filter, as in
+        'pyspark.row_count where id < 5'."""
+        name = ".".join(part for part in (reader, check, problem) if part)
+        if row_filter:
+            name += f" where {row_filter}"
+        return cls(name=name, passed=passed, expected=expected, actual=actual, check=check, problem=problem,
+                   reader=reader, row_filter=row_filter, applicable=applicable)
 
     @classmethod
-    def row_count(cls, expected, actual, prefix: str | None = None):
+    def equal(cls, name: str, expected, actual, prefix: str | None = None, row_filter: str | None = None):
+        """Assert two values are equal. prefix is the reader the values come from."""
+        check, _, problem = name.partition(".")
+        return cls.of(check, expected == actual, expected, actual, problem=problem or None, reader=prefix, row_filter=row_filter)
+
+    @classmethod
+    def row_count(cls, expected, actual, prefix: str | None = None, row_filter: str | None = None):
         """Assert row count matches."""
-        return cls.equal("row_count", expected, actual, prefix=prefix)
+        return cls.equal("row_count", expected, actual, prefix=prefix, row_filter=row_filter)
 
     @classmethod
-    def content_hash(cls, expected, actual, prefix: str | None = None):
+    def content_hash(cls, expected, actual, prefix: str | None = None, row_filter: str | None = None):
         """Assert content hash matches."""
-        return cls.equal("content_hash", expected, actual, prefix=prefix)
+        return cls.equal("content_hash", expected, actual, prefix=prefix, row_filter=row_filter)
 
     @classmethod
     def skipped(cls, name: str, reason: str):
-        """Record that a check was skipped (passes but notes why).
+        """Record that a check had nothing to check. It passes, and is not counted as tested."""
+        check, _, problem = name.partition(".")
+        return cls.of(check, True, expected="skipped", actual=reason, problem=problem or None, applicable=False)
 
-        # TODO: Add a proper skipped/status field instead of overloading
-        # expected/actual for non-assertion metadata.
-        """
-        return cls(name=name, passed=True, expected="skipped", actual=reason)
+    def for_reader(self, reader: str) -> "AssertionResult":
+        """The same assertion, attributed to a reader."""
+        return AssertionResult.of(self.check or self.name, self.passed, self.expected, self.actual, problem=self.problem,
+                                  reader=reader, row_filter=self.row_filter, applicable=self.applicable)
 
 
 class ValidationEngine(ABC):
