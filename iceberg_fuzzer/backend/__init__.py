@@ -151,6 +151,10 @@ class ValidationEngine(ABC):
         """Return the set of all 'id' column values currently in the table."""
         pass
 
+    def current_snapshot(self, warehouse: str, namespace: str, table_name: str) -> tuple[int | None, str | None]:
+        """Return the table's current snapshot ID and its operation, or (None, None)."""
+        raise NotImplementedError(f"{type(self).__name__} does not report snapshots")
+
     def close(self):
         """Release resources. Called when the workflow completes."""
         pass
@@ -216,6 +220,14 @@ class MutationEngine(ABC):
             The current snapshot ID after the rollback completes.
         """
         pass
+
+    def run_sql(self, namespace: str, table_name: str, statements: list[str]) -> int | None:
+        """Run SQL statements in order, with ${table} standing for the table's qualified name.
+
+        Returns:
+            The table's current snapshot ID afterwards, or None if it has no snapshot.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not run SQL")
 
     def close(self):
         """Release resources. Called when the workflow completes."""

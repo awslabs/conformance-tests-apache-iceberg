@@ -94,6 +94,15 @@ class PySparkValidation(ValidationEngine):
         rows = spark.sql(f"SELECT id FROM {table_ref}").collect()
         return {row.id for row in rows}
 
+    def current_snapshot(self, warehouse: str, namespace: str, table_name: str) -> tuple[int | None, str | None]:
+        table_ref = self._resolve_table_ref(namespace, table_name)
+        rows = self._get_spark().sql(
+            f"SELECT s.snapshot_id, s.operation FROM {table_ref}.refs r "
+            f"JOIN {table_ref}.snapshots s ON r.snapshot_id = s.snapshot_id "
+            f"WHERE r.name = 'main' AND r.type = 'BRANCH'"
+        ).collect()
+        return (rows[0].snapshot_id, rows[0].operation) if rows else (None, None)
+
     def close(self):
         if self._spark is not None:
             self._spark.stop()

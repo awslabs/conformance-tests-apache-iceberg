@@ -170,7 +170,7 @@ def test_rollback_references_replace_step(tmp_path):
             {"id": "rb", "operation": "rollback", "config": {"backend": "pyspark", "to_step": "compact"}},
         ],
     }))
-    with pytest.raises(ValueError, match="not a prior append/delete step"):
+    with pytest.raises(ValueError, match="not a prior append/delete/sql step"):
         load_workflow(str(path))
 
 
@@ -183,7 +183,7 @@ def test_rollback_references_future_step(tmp_path):
             {"id": "app", "operation": "append", "config": {"backend": "pyspark", "num_rows": 5}},
         ],
     }))
-    with pytest.raises(ValueError, match="not a prior append/delete step"):
+    with pytest.raises(ValueError, match="not a prior append/delete/sql step"):
         load_workflow(str(path))
 
 
@@ -196,7 +196,7 @@ def test_rollback_references_nonexistent_step(tmp_path):
             {"id": "rb", "operation": "rollback", "config": {"backend": "pyspark", "to_step": "ghost"}},
         ],
     }))
-    with pytest.raises(ValueError, match="not a prior append/delete step"):
+    with pytest.raises(ValueError, match="not a prior append/delete/sql step"):
         load_workflow(str(path))
 
 
@@ -239,3 +239,70 @@ def test_rollback_spec_file():
     wf = load_workflow("specs/workflows/rollback.yaml")
     assert wf.name == "append_delete_rollback"
     assert len(wf.steps) == 3
+
+
+def test_valid_sql_workflow_with_setup(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "setup": {"backend": "pyspark", "statements": ["CREATE TABLE ${table} (id BIGINT) USING iceberg"]},
+        "steps": [
+            {"id": "s", "operation": "sql",
+             "config": {"backend": "pyspark", "statements": ["INSERT INTO ${table} VALUES (1)"]}},
+            {"id": "r", "operation": "rollback", "config": {"backend": "pyspark", "to_step": "s"}},
+        ],
+    }))
+    workflow = load_workflow(str(path))
+    assert workflow.setup["statements"] == ["CREATE TABLE ${table} (id BIGINT) USING iceberg"]
+    assert [s["operation"] for s in workflow.steps] == ["sql", "rollback"]
+
+
+def test_sql_missing_statements(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "steps": [{"id": "s", "operation": "sql", "config": {"backend": "pyspark"}}],
+    }))
+    with pytest.raises(ValueError, match="missing required config field 'statements'"):
+        load_workflow(str(path))
+
+
+def test_sql_statements_must_be_strings(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "steps": [{"id": "s", "operation": "sql", "config": {"backend": "pyspark", "statements": []}}],
+    }))
+    with pytest.raises(ValueError, match="non-empty list of SQL strings"):
+        load_workflow(str(path))
+
+
+def test_setup_missing_backend(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "setup": {"statements": ["SELECT 1"]},
+        "steps": [{"id": "a", "operation": "append", "config": {"backend": "pyspark", "num_rows": 1}}],
+    }))
+    with pytest.raises(ValueError, match="setup missing required 'backend'"):
+        load_workflow(str(path))
+
+
+def test_replace_expect_values(tmp_path):
+    path = tmp_path / "wf.yaml"
+    for expect in ("replace", "none", "unchanged"):
+        path.write_text(yaml.dump({
+            "name": "test",
+            "steps": [{"id": "c", "operation": "replace", "config": {"command": "true", "expect": expect}}],
+        }))
+        assert load_workflow(str(path)).steps[0]["config"]["expect"] == expect
+
+
+def test_replace_unknown_expect(tmp_path):
+    path = tmp_path / "wf.yaml"
+    path.write_text(yaml.dump({
+        "name": "test",
+        "steps": [{"id": "c", "operation": "replace", "config": {"command": "true", "expect": "maybe"}}],
+    }))
+    with pytest.raises(ValueError, match="has expect 'maybe'"):
+        load_workflow(str(path))

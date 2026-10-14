@@ -1,5 +1,7 @@
 """PySpark backend — mutation (append, etc.)."""
 
+from string import Template
+
 from pyspark.sql import Row
 
 from iceberg_fuzzer.backend import AppendResult, DeleteResult, MutationEngine
@@ -79,6 +81,16 @@ class PySparkMutation(MutationEngine):
             snapshot_id=self._get_current_snapshot_id(qualified),
             deleted_ids=set(ids_to_delete),
         )
+
+    def run_sql(self, namespace: str, table_name: str, statements: list[str]) -> int | None:
+        spark = self._get_spark()
+        qualified = self._qualified_name(namespace, table_name)
+        for statement in statements:
+            spark.sql(Template(statement).substitute(table=qualified))
+        rows = spark.sql(
+            f"SELECT snapshot_id FROM {qualified}.refs WHERE name = 'main' AND type = 'BRANCH'"
+        ).collect()
+        return rows[0].snapshot_id if rows else None
 
     def rollback_to_snapshot(self, namespace: str, table_name: str, snapshot_id: int) -> int:
         spark = self._get_spark()

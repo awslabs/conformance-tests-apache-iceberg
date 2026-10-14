@@ -10,14 +10,33 @@ _OPERATION_REQUIRED_CONFIG_FIELDS = {
     'append': ['backend', 'num_rows'],
     'delete': ['backend', 'num_rows'],
     'rollback': ['backend', 'to_step'],
+    'sql': ['backend', 'statements'],
 }
+
+# What a replace step may require of the table afterwards: a new replace snapshot, no new
+# snapshot because there was nothing to rewrite, or no change because the command declined.
+REPLACE_EXPECTATIONS = ('replace', 'none', 'unchanged')
+
+# Operations whose snapshot a later rollback step may return to.
+_ROLLBACK_TARGET_OPERATIONS = ('append', 'delete', 'sql')
 
 
 @dataclass
 class Workflow:
-    """A parsed and validated workflow definition."""
+    """A parsed and validated workflow definition.
+
+    `setup`, when present, holds a backend and SQL statements that run once before the first
+    step, for example to create the table the steps act on.
+    """
     name: str
     steps: list[dict]
+    setup: dict | None = None
+
+
+def _validate_statements(owner: str, config: dict) -> None:
+    statements = config.get('statements')
+    if not isinstance(statements, list) or not statements or not all(isinstance(s, str) for s in statements):
+        raise ValueError(f"{owner} 'statements' must be a non-empty list of SQL strings")
 
 
 def load_workflow(path: str) -> Workflow:
@@ -29,6 +48,12 @@ def load_workflow(path: str) -> Workflow:
         raise ValueError(f"Workflow YAML missing required 'name' field: {path}")
     if 'steps' not in workflow_def or not workflow_def['steps']:
         raise ValueError(f"Workflow YAML missing or empty 'steps' field: {path}")
+
+    setup = workflow_def.get('setup')
+    if setup is not None:
+        if 'backend' not in setup:
+            raise ValueError(f"Workflow setup missing required 'backend' field: {path}")
+        _validate_statements("Workflow setup", setup)
 
     for i, step in enumerate(workflow_def['steps']):
         if 'id' not in step:
@@ -50,16 +75,25 @@ def load_workflow(path: str) -> Workflow:
                     f"Step '{step['id']}' ({op}) missing required config field '{field_name}'"
                 )
 
+        if op == 'replace' and 'expect' in config and config['expect'] not in REPLACE_EXPECTATIONS:
+            raise ValueError(
+                f"Step '{step['id']}' (replace) has expect '{config['expect']}', "
+                f"expected one of {', '.join(REPLACE_EXPECTATIONS)}"
+            )
+
+        if op == 'sql':
+            _validate_statements(f"Step '{step['id']}' (sql)", config)
+
         if op == 'rollback':
             to_step = config['to_step']
             prior_mutation_ids = {
                 s['id'] for s in workflow_def['steps'][:i]
-                if s['operation'] in ('append', 'delete')
+                if s['operation'] in _ROLLBACK_TARGET_OPERATIONS
             }
             if to_step not in prior_mutation_ids:
                 raise ValueError(
                     f"Step '{step['id']}' (rollback) references '{to_step}' "
-                    f"which is not a prior append/delete step"
+                    f"which is not a prior append/delete/sql step"
                 )
 
-    return Workflow(name=workflow_def['name'], steps=workflow_def['steps'])
+    return Workflow(name=workflow_def['name'], steps=workflow_def['steps'], setup=setup)
