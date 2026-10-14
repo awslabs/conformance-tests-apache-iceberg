@@ -1,6 +1,8 @@
 """PySpark backend — validation via SparkSession table reads."""
 
-from pyspark.sql import functions as F
+import datetime
+
+from pyspark.sql.types import TimestampType
 
 from iceberg_fuzzer.backend import (
     ValidationEngine,
@@ -10,15 +12,27 @@ from iceberg_fuzzer.backend import (
     ColumnName,
     ColTypeStr,
 )
+from iceberg_fuzzer.backend.canonical import HASH_MODULUS, hash_rows
 from iceberg_fuzzer.backend.point_query import format_sql_literal
-from iceberg_fuzzer.backend.pyspark.canonical import PySparkCanonicalCast
 from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
+
+
+def _as_utc(rows, local_time: list[int]):
+    """PySpark returns TIMESTAMP values as naive datetimes in the Python process's local time,
+    so they are made aware before hashing. TIMESTAMP_NTZ values stay naive."""
+    for row in rows:
+        values = list(row)
+        for i in local_time:
+            if values[i] is not None:
+                values[i] = values[i].astimezone(datetime.timezone.utc)
+        yield values
 
 
 class PySparkValidation(ValidationEngine):
     """PySpark-based validation engine using Spark SQL for table access.
 
-    Computes content hashes using canonical type formatting for cross-engine agreement.
+    Each Spark task hashes its rows with the shared encoding in canonical.py, and the driver
+    adds the partial results. The rows go through the RDD API, because mapInArrow needs pandas.
     """
 
     def __init__(self, warehouse_path: str):
@@ -35,27 +49,14 @@ class PySparkValidation(ValidationEngine):
         catalog = "s3tables" if is_s3 else "local"
         return f"{catalog}.{namespace}.{table_name}"
 
-    def _compute_hash(self, table_ref: str) -> int:
-        spark = self._get_spark()
-        df = spark.table(table_ref)
-
-        canonical = PySparkCanonicalCast()
-        canonical_cols = [
-            canonical.cast(field.name, field.dataType)
-            for field in df.schema
-        ]
-        concat_expr = F.concat_ws("|", *canonical_cols)
-        hash_col = F.sha2(concat_expr, 256)
-        # 15 hex chars = 60 bits, fits in signed long
-        truncated = F.conv(F.substring(hash_col, 1, 15), 16, 10).cast("long")
-        result = df.select(F.bit_xor(truncated).alias("h")).collect()[0]["h"]
-        return result or 0
+    def _count_and_hash(self, table_ref: str) -> tuple[int, int]:
+        df = self._get_spark().table(table_ref)
+        local_time = [i for i, f in enumerate(df.schema) if isinstance(f.dataType, TimestampType)]
+        partials = df.rdd.mapPartitions(lambda rows: [hash_rows(_as_utc(rows, local_time))]).collect()
+        return sum(rows for rows, _ in partials), sum(h for _, h in partials) % HASH_MODULUS
 
     def capture_checkpoint(self, warehouse: str, namespace: str, table_name: str) -> Checkpoint:
-        table_ref = self._resolve_table_ref(namespace, table_name)
-        spark = self._get_spark()
-        row_count = spark.table(table_ref).count()
-        content_hash = self._compute_hash(table_ref)
+        row_count, content_hash = self._count_and_hash(self._resolve_table_ref(namespace, table_name))
         return Checkpoint(row_count=row_count, content_hash=content_hash)
 
     def validate(self, checkpoint: Checkpoint, warehouse: str, namespace: str, table_name: str) -> list[AssertionResult]:

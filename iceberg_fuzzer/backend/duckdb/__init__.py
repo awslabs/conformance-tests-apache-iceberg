@@ -13,7 +13,7 @@ from iceberg_fuzzer.backend import (
     ColTypeStr,
     is_s3_tables_warehouse,
 )
-from iceberg_fuzzer.backend.duckdb.canonical import DuckDBCanonicalCast
+from iceberg_fuzzer.backend.canonical import hash_batches
 from iceberg_fuzzer.backend.point_query import format_sql_literal
 
 
@@ -37,32 +37,9 @@ def _ensure_iceberg_extension():
         _iceberg_installed = True
 
 
-def _get_row_count(conn, source: str) -> int:
-    """Return the total row count for a table."""
-    return conn.execute(f"SELECT COUNT(*) FROM {source}").fetchone()[0]
-
-
-def _get_content_hash(conn, source: str) -> int:
-    """Return an order-independent content hash for a table.
-
-    Uses canonical type formatting so that all query engines produce the same hash for the same data.
-
-    Algorithm: SHA256 of pipe-delimited canonical strings per row,
-    first 15 hex chars (60 bits) cast to BIGINT, XOR across all rows.
-    60 bits ensures the value fits in a signed BIGINT.
-    """
-    schema_query = f"DESCRIBE SELECT * FROM {source}"
-    columns = [(row[0], row[1]) for row in conn.execute(schema_query).fetchall()]
-
-    canonical = DuckDBCanonicalCast()
-    concat_expr = " || '|' || ".join(
-        canonical.cast(name, dtype) for name, dtype in columns
-    )
-    query = (
-        f"SELECT bit_xor(CAST('0x' || substr(sha256({concat_expr}), 1, 15) AS BIGINT)) "
-        f"FROM {source}"
-    )
-    return conn.execute(query).fetchone()[0] or 0
+def _count_and_hash(conn, source: str) -> tuple[int, int]:
+    """Row count and content hash of a table, using the shared encoding in canonical.py."""
+    return hash_batches(conn.execute(f"SELECT * FROM {source}").fetch_record_batch())
 
 
 def _escape_identifier(name: str) -> str:
@@ -118,19 +95,17 @@ class DuckDBValidation(ValidationEngine):
     ) -> Checkpoint:
         source = self._table_source(warehouse, namespace, table_name)
         conn = self._get_conn()
-        return Checkpoint(
-            row_count=_get_row_count(conn, source),
-            content_hash=_get_content_hash(conn, source),
-        )
+        row_count, content_hash = _count_and_hash(conn, source)
+        return Checkpoint(row_count=row_count, content_hash=content_hash)
 
     def validate(
         self, checkpoint: Checkpoint, warehouse: str, namespace: str, table_name: str
     ) -> list[AssertionResult]:
         source = self._table_source(warehouse, namespace, table_name)
-        conn = self._get_conn()
+        row_count, content_hash = _count_and_hash(self._get_conn(), source)
         return [
-            AssertionResult.row_count(checkpoint.row_count, _get_row_count(conn, source)),
-            AssertionResult.content_hash(checkpoint.content_hash, _get_content_hash(conn, source)),
+            AssertionResult.row_count(checkpoint.row_count, row_count),
+            AssertionResult.content_hash(checkpoint.content_hash, content_hash),
         ]
 
     def filtered_count(
