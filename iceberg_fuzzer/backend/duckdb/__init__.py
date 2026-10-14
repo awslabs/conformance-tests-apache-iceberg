@@ -48,31 +48,58 @@ def _escape_identifier(name: str) -> str:
 
 
 class DuckDBValidation(ValidationEngine):
-    """DuckDB-based validation engine for local and S3 Tables warehouses."""
+    """DuckDB-based validation engine for local and S3 Tables warehouses.
 
-    def __init__(self, warehouse_path: str):
+    extension_directory points DuckDB at extensions installed ahead of time, for hosts that
+    cannot download them. Extensions built outside DuckDB's release process are unsigned, so
+    loading them also allows unsigned extensions. endpoint overrides the S3 Tables Iceberg REST
+    endpoint, for example for a non-production stage.
+    """
+
+    def __init__(self, warehouse_path: str, extension_directory: str | None = None, endpoint: str | None = None):
         self._warehouse_path = warehouse_path
         self._is_s3 = is_s3_tables_warehouse(warehouse_path)
         self._aws_region = _extract_region(warehouse_path) if self._is_s3 else None
+        self._extension_directory = extension_directory
+        self._endpoint = endpoint
         self._conn = None
+
+    def _connect(self):
+        if self._extension_directory is None:
+            _ensure_iceberg_extension()
+            return duckdb.connect()
+        return duckdb.connect(config={
+            "extension_directory": self._extension_directory,
+            "allow_unsigned_extensions": "true",
+            "autoinstall_known_extensions": "false",
+        })
+
+    def _load(self, conn, name: str):
+        if self._extension_directory is None:
+            conn.execute(f"INSTALL {name}; LOAD {name};")
+        else:
+            conn.execute(f"LOAD {name};")
 
     def _get_conn(self):
         if self._conn is not None:
             return self._conn
 
-        _ensure_iceberg_extension()
-        conn = duckdb.connect()
+        conn = self._connect()
         conn.execute("LOAD iceberg;")
 
         if self._is_s3:
             region = self._aws_region
-            conn.execute("INSTALL httpfs; LOAD httpfs;")
+            self._load(conn, "httpfs")
+            if self._extension_directory is not None:
+                # credential_chain comes from the aws extension, which autoinstall would fetch.
+                self._load(conn, "aws")
             conn.execute(f"CREATE OR REPLACE SECRET secret (TYPE s3, PROVIDER credential_chain, REGION '{region}');")
 
+            endpoint = (self._endpoint or f"https://s3tables.{region}.amazonaws.com").removeprefix("https://").rstrip("/")
             conn.execute(f"""
                 ATTACH '{self._warehouse_path}' AS s3tables (
                     TYPE ICEBERG,
-                    ENDPOINT 's3tables.{region}.amazonaws.com/iceberg',
+                    ENDPOINT '{endpoint}/iceberg',
                     AUTHORIZATION_TYPE 'sigv4',
                     SIGV4_REGION '{region}',
                     SIGV4_SERVICE 's3tables'

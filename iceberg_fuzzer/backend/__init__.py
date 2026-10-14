@@ -45,10 +45,13 @@ class Checkpoint:
 
     Attributes:
         row_count: Total number of rows in the table.
-        content_hash: Order-independent hash of all row data (XOR of per-row SHA256).
+        content_hash: Order-independent hash of all row data, see backend/canonical.py.
+        filtered: Row count and content hash per filter, for engines that also read the table
+            through row filters.
     """
     row_count: int
     content_hash: int
+    filtered: dict[str, tuple[int, int]] = field(default_factory=dict)
 
 
 @dataclass
