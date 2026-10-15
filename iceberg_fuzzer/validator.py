@@ -44,15 +44,12 @@ class TableValidator(ABC):
         pass
 
     @abstractmethod
-    def validate_tables(
-        self, num_parallel: int = 1, full_content_validation: bool = False
-    ) -> Dict:
+    def validate_tables(self, num_parallel: int = 1) -> Dict:
         """
         Validate all tables in the warehouse
 
         Args:
             num_parallel: Number of parallel validation workers
-            full_content_validation: Whether to validate all row contents
 
         Returns:
             Dict with validation results summary

@@ -236,9 +236,6 @@ Examples:
 Examples:
   # Validate tables with parallel workers
   %(prog)s --warehouse-path /tmp/warehouse --specs specs/simple.yaml --num-parallel 16
-
-  # Full content validation (slower)
-  %(prog)s --warehouse-path /tmp/warehouse --specs specs/simple.yaml --full-content-validation
         """)
 
     validate_parser.add_argument('--warehouse-path',
@@ -251,9 +248,6 @@ Examples:
                        type=int,
                        default=1,
                        help='Number of parallel workers (default: 1)')
-    validate_parser.add_argument('--full-content-validation',
-                       action='store_true',
-                       help='Validate all rows (slower)')
     validate_parser.add_argument('--minimal',
                        action='store_true',
                        help='Validate minimal set (uncompressed, plain encoding only)')
@@ -541,8 +535,6 @@ Examples:
             '--specs', args.specs,
             '--num-parallel', str(args.num_parallel)
         ]
-        if args.full_content_validation:
-            validator_cmd.append('--full-content-validation')
         if args.minimal:
             validator_cmd.append('--minimal')
 

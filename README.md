@@ -72,8 +72,11 @@ Run `python3 -m iceberg_fuzzer.cli <command> --help` for the full option list.
 
 ### validate
 
-Validates row counts, column counts, and optionally full row content by reading
-the tables back with DuckDB.
+Reads the tables back with DuckDB and checks each table against the spec it was
+generated from: row counts, column counts, declared types, Iceberg metadata, and the
+value of every row. Some checks apply to one family only -- compression and encoding
+to the single-type tables, delete files and partition structure to the write-pattern
+and partitioned ones.
 
 ```bash
 # Validate tables with parallel workers
@@ -81,9 +84,6 @@ python3 -m iceberg_fuzzer.cli validate --warehouse-path /path/to/warehouse --spe
 
 # Validate the minimal set (must match the flags used to generate)
 python3 -m iceberg_fuzzer.cli validate --warehouse-path /path/to/warehouse --specs specs/simple.yaml --minimal
-
-# Full content validation (slower, validates all rows)
-python3 -m iceberg_fuzzer.cli validate --warehouse-path /path/to/warehouse --specs specs/simple.yaml --full-content-validation
 ```
 
 The set of tables `validate` expects is derived the same way `generate` derives
