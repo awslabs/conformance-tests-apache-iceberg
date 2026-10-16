@@ -14,7 +14,7 @@ if shutil.which("java") is None:
 from pyspark.sql import SparkSession  # noqa: E402
 from pyspark.sql import types as T  # noqa: E402
 
-from iceberg_fuzzer.backend.canonical import row_hash  # noqa: E402
+from iceberg_fuzzer.backend.canonical import HASH_MODULUS, row_hash  # noqa: E402
 from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation  # noqa: E402
 
 # Spark has no time or uuid type, so those are covered by the DuckDB test only.
@@ -55,4 +55,4 @@ def test_spark_matches_the_python_reference_for_every_type(spark):
     reader = PySparkValidation("unused")
     reader._spark = spark
     one = row_hash(v for _, _, v in _FIELDS)
-    assert reader._count_and_hash("typed") == (2, (2 * one) % (1 << 64))
+    assert reader._count_and_hash("typed") == (2, (2 * one) % HASH_MODULUS)

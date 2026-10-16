@@ -3,7 +3,7 @@
 import pytest
 import yaml
 
-from iceberg_fuzzer.workflow.loader import load_workflow
+from iceberg_fuzzer.workflow.loader import REPLACE_EXPECTATIONS, load_workflow
 
 
 def test_missing_name(tmp_path):
@@ -290,7 +290,7 @@ def test_setup_missing_backend(tmp_path):
 
 def test_replace_expect_values(tmp_path):
     path = tmp_path / "wf.yaml"
-    for expect in ("replace", "none", "unchanged"):
+    for expect in REPLACE_EXPECTATIONS:
         path.write_text(yaml.dump({
             "name": "test",
             "steps": [{"id": "c", "operation": "replace", "config": {"command": "true", "expect": expect}}],

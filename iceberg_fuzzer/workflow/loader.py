@@ -1,8 +1,7 @@
 """Workflow definition loading and validation."""
 
-from dataclasses import dataclass
-
 import re
+from dataclasses import dataclass
 
 import yaml
 

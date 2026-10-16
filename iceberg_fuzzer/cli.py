@@ -421,6 +421,11 @@ Examples:
                        help='Share of commits PyIceberg writes; local warehouses only (default: %(default)s)')
     workflow_generate_parser.add_argument('--duckdb-writer-share', type=float, default=0.0,
                        help='Share of commits DuckDB writes; local warehouses only (default: %(default)s)')
+    workflow_generate_parser.add_argument('--target-file-size-option', default=None,
+                       help='Option of the compaction commands that sets a target file size in bytes, such as '
+                            '--target-file-size. When set, each compaction gets a random target, so files too large '
+                            'to rewrite keep deletes the compactor must merge. Write it with =, as in '
+                            '--target-file-size-option=--target-file-size (default: none)')
     workflow_generate_parser.add_argument('--output', default=None,
                        help='File to write the workflow YAML to (default: standard output)')
 
@@ -520,7 +525,10 @@ Examples:
     # Handle workflow command
     if args.command == 'workflow' and args.workflow_action == 'generate':
         from iceberg_fuzzer.workflow.random_sql import GeneratorConfig, generate_workflow
-        config = GeneratorConfig(pyiceberg_writer_share=args.pyiceberg_writer_share, duckdb_writer_share=args.duckdb_writer_share)
+        config = GeneratorConfig(
+            pyiceberg_writer_share=args.pyiceberg_writer_share, duckdb_writer_share=args.duckdb_writer_share,
+            target_file_size_option=args.target_file_size_option,
+        )
         generated = generate_workflow(args.seed, args.compact_command, args.spark_compact_command, config)
         text = generated.to_yaml()
         if args.output:
@@ -530,11 +538,8 @@ Examples:
         sys.exit(0)
 
     if args.command == 'workflow':
-        from iceberg_fuzzer.checks import TABLE_CHECKS
         from iceberg_fuzzer.workflow import run_workflow
-        checks = None
-        if args.table_checks:
-            checks = list(TABLE_CHECKS) if args.table_checks == 'all' else [c.strip() for c in args.table_checks.split(',')]
+        checks = [c.strip() for c in args.table_checks.split(',')] if args.table_checks else None
         result = run_workflow(
             workflow_file=args.workflow,
             warehouse_path=args.warehouse_path,

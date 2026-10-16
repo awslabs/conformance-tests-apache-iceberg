@@ -74,8 +74,6 @@ def create_spark_session(warehouse_path, app_name=None):
     if app_name is None:
         app_name = f"IcebergTableGenerator-{uuid.uuid4()}"
 
-    # Both catalogs turn off table caching. Workflows commit through external compactors, and a
-    # cached table would keep reading the snapshot from before their commits.
     # Detect if warehouse_path is an S3 table ARN
     is_s3_table = warehouse_path.startswith('arn:aws:s3tables:')
 
@@ -134,6 +132,8 @@ def create_spark_session(warehouse_path, app_name=None):
                 "-XX:+UseCompressedClassPointers -XX:+TieredCompilation -XX:TieredStopAtLevel=4 "
                 "-XX:+AggressiveOpts -XX:+OptimizeStringConcat -XX:+UseStringDeduplication")
 
+    # Both catalogs turn off table caching. Workflows commit through external compactors, and a
+    # cached table would keep reading the snapshot from before their commits.
     if is_s3_table:
         # Configure for S3 Tables using REST catalog (based on official docs)
         # Extract region from ARN: arn:aws:s3tables:region:account:bucket/bucket-name

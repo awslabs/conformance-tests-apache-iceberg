@@ -12,7 +12,8 @@ class RecordingWriter:
 
 
 def test_a_registered_writer_backend_is_created_by_name(monkeypatch):
-    monkeypatch.setitem(engine.MUTATION_BACKENDS, "recording", f"{__name__}:RecordingWriter")
+    monkeypatch.setattr(engine, "MUTATION_BACKENDS", dict(engine.MUTATION_BACKENDS))
+    engine.register_mutation_backend("recording", f"{__name__}:RecordingWriter")
     writer = engine._init_mutation_engines("/w", {"recording"}, seed=3)["recording"]
     assert isinstance(writer, RecordingWriter) and (writer.warehouse_path, writer.seed) == ("/w", 3)
 

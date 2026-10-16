@@ -55,7 +55,6 @@ def test_a_reader_that_cannot_read_fails_its_own_check():
     assert [(f.name, f.passed, f.actual) for f in failures] == [("bad.read", False, "OSError: cannot decode")]
 
 
-
 def test_read_failure_names_the_phase():
     from iceberg_fuzzer.workflow.engine import _read_failure
     assert _read_failure("daft", OSError("x")).name == "daft.read"

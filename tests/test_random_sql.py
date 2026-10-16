@@ -72,12 +72,14 @@ def test_schema_changes_keep_inserts_aligned_with_the_schema():
     rng = random.Random(1)
     columns = _columns(rng, GeneratorConfig())
     for commit in range(1, 30):
-        statement, description, after = _schema_change(rng, columns, commit, GeneratorConfig())
-        assert statement.startswith("ALTER TABLE ${table} ")
+        change = _schema_change(rng, columns, commit, GeneratorConfig())
+        after = change.columns
+        assert change.statement.startswith("ALTER TABLE ${table} ")
         assert after[0] == columns[0]
-        if description.startswith("add"):
+        assert (change.renamed_from is not None) == (change.kind == "rename")
+        if change.kind == "add":
             assert len(after) == len(columns) + 1 and after[-1].nullable
-        elif description.startswith("drop"):
+        elif change.kind == "drop":
             assert len(after) == len(columns) - 1 and not any(c.partition_source for c in columns if c not in after)
         else:
             assert len(after) == len(columns)

@@ -8,6 +8,7 @@ import importlib
 import re
 import shlex
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
@@ -20,6 +21,9 @@ from iceberg_fuzzer.workflow.loader import Workflow, load_workflow
 StepId = str
 EngineName = str
 SnapshotId = int
+
+# Seconds a replace step's command may run when the step sets no timeout.
+DEFAULT_STEP_TIMEOUT = 300
 
 
 @dataclass
@@ -131,10 +135,8 @@ def _init_mutation_engines(
     for name in backends:
         if name not in MUTATION_BACKENDS:
             raise ValueError(f"Unknown backend: {name}")
-        module, _, cls = MUTATION_BACKENDS[name].partition(":")
-        engines[name] = getattr(importlib.import_module(module), cls)(warehouse_path, seed=seed)
+        engines[name] = _load(MUTATION_BACKENDS[name])(warehouse_path, seed=seed)
     return engines
-
 
 def _get_mutation_engine(step: dict, mutation_engines: dict):
     """Return the mutation engine for a step's declared backend."""
@@ -184,7 +186,7 @@ def _snapshot_assertions(expect: str, before: tuple, after: tuple) -> list[Asser
     return [AssertionResult.equal("snapshot.unchanged", before_id, after_id)]
 
 
-def _error_message(error: Exception) -> str:
+def _error_message(error: BaseException) -> str:
     """One line naming the error. PySpark exceptions carry their message in `desc` and print as
     empty, and Py4J errors put the Java cause after a generic first line."""
     message = str(error) or str(getattr(error, 'desc', '')).strip()
@@ -202,7 +204,7 @@ def _reraise_interrupt(error: BaseException) -> None:
         raise error
 
 
-def _read_failure(engine_name: EngineName, error: Exception, check: str = "read") -> AssertionResult:
+def _read_failure(engine_name: EngineName, error: BaseException, check: str = "read") -> AssertionResult:
     return AssertionResult(
         name=f"{engine_name}.{check}", passed=False, expected="the reader reads the table", actual=_error_message(error),
     )
@@ -224,7 +226,7 @@ def _capture(engines, warehouse_path, namespace, name) -> tuple[dict[EngineName,
 
 def _first_row_count(engines, warehouse_path, namespace, name) -> int:
     """The row count from the first engine that reads the table."""
-    checkpoints, failures = {}, []
+    failures = []
     for engine in engines:
         checkpoints, failures = _capture([engine], warehouse_path, namespace, name)
         if checkpoints:
@@ -241,7 +243,7 @@ def _agreement(post: dict[EngineName, Checkpoint], expected_rows: int) -> list[A
 def _run_command(step, resolved: str, output_dir, workflow_name, namespace, name) -> tuple[int | None, str]:
     """Run a replace step's command. Returns its exit code, or None if it timed out, and its
     stdout and stderr."""
-    timeout = step['config'].get('timeout', 300)
+    timeout = step['config'].get('timeout', DEFAULT_STEP_TIMEOUT)
     out_dir = Path(output_dir) / workflow_name
     out_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = out_dir / f"{namespace}.{name}.{step['id']}.stdout"
@@ -258,7 +260,7 @@ def _run_command(step, resolved: str, output_dir, workflow_name, namespace, name
     return returncode, stdout_path.read_text(errors="replace") + stderr_path.read_text(errors="replace")
 
 
-def _declined(step, returncode: int, output: str) -> bool:
+def _declined(step, output: str) -> bool:
     """A non-zero exit is a decline only when the step expects one may happen and the command's
     output matches its decline_output pattern. Any other non-zero exit, such as a crash, fails."""
     pattern = step['config'].get('decline_output')
@@ -282,8 +284,8 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
 
     returncode, output = _run_command(step, resolved, output_dir, workflow_name, namespace, name)
     if returncode is None:
-        return OperationResult.failed(f"Step '{step_id}' timed out after {step['config'].get('timeout', 300)}s")
-    if returncode != 0 and not _declined(step, returncode, output):
+        return OperationResult.failed(f"Step '{step_id}' timed out after {step['config'].get('timeout', DEFAULT_STEP_TIMEOUT)}s")
+    if returncode != 0 and not _declined(step, output):
         return OperationResult.failed(f"Step '{step_id}' exited with code {returncode} without a recognized decline")
 
     assertions: list[AssertionResult] = list(read_failures)
@@ -401,7 +403,7 @@ def _process_table(
     dry_run: bool = False,
     seed: int | None = None,
     point_queries: bool = True,
-    table_checks: list[TableCheck] = (),
+    table_checks: Sequence[TableCheck] = (),
 ) -> TableResult:
     """Process a single table through all workflow steps.
 
@@ -512,7 +514,7 @@ def _process_table(
                 except BaseException as e:
                     _reraise_interrupt(e)
                     op_result.assertions.append(AssertionResult(
-                        name=check.name, passed=False, expected="check completes", actual=f"raised {e!r}",
+                        name=check.name, passed=False, expected="check completes", actual=_error_message(e),
                     ))
 
             # Update alive_ids and run point query validation.
