@@ -17,7 +17,10 @@ def test_generated_workflows_load_and_end_with_a_compaction(tmp_path):
         assert workflow.setup["statements"][0].startswith("CREATE TABLE ${table}")
         last = workflow.steps[-1]
         assert last["operation"] == "replace" and last["config"]["expect"] == "replace_or_unchanged"
-        assert "$" not in "".join(s for step in workflow.steps for s in step["config"].get("statements", [])).replace("${table}", "")
+        statements = "".join(s for step in workflow.steps for s in step["config"].get("statements", []))
+        for placeholder in ("${table}", "${catalog}", "${namespace}", "${table_name}"):
+            statements = statements.replace(placeholder, "")
+        assert "$" not in statements
 
 
 def test_generated_workflows_cover_every_partition_kind_and_nesting():
@@ -60,3 +63,36 @@ def test_compactions_feature_keeps_intermediate_rust_compactions():
             assert "COMPACT" in generated.features["compactions"].split("+")
             return
     raise AssertionError("no seed in 0 to 199 has an intermediate Rust compaction")
+
+
+def test_schema_changes_keep_inserts_aligned_with_the_schema():
+    from iceberg_fuzzer.workflow.random_sql import _schema_change, _columns, GeneratorConfig
+    import random
+
+    rng = random.Random(1)
+    columns, _, _ = _columns(rng, GeneratorConfig())
+    for commit in range(1, 30):
+        statement, description, after = _schema_change(rng, columns, commit, GeneratorConfig())
+        assert statement.startswith("ALTER TABLE ${table} ")
+        assert after[0] == columns[0]
+        if description.startswith("add"):
+            assert len(after) == len(columns) + 1 and after[-1].nullable
+        elif description.startswith("drop"):
+            assert len(after) == len(columns) - 1 and not any(c.partition_source for c in columns if c not in after)
+        else:
+            assert len(after) == len(columns)
+        columns = after
+
+
+def test_some_seeds_change_the_schema_and_rewrite_manifests():
+    features = [generate_workflow(seed, "rust", "spark").features for seed in range(1, 60)]
+    kinds = {kind for f in features for kind in f["schema_changes"].split("+")}
+    assert {"add", "rename", "promote", "drop", "none"} <= kinds
+    assert any(f["manifests_rewritten"] == "True" for f in features)
+
+
+def test_every_seed_generates():
+    from iceberg_fuzzer.workflow.random_sql import GeneratorConfig
+    config = GeneratorConfig(deep_nesting_share=0.0, pyiceberg_writer_share=0.3, duckdb_writer_share=0.2)
+    for seed in range(3000):
+        generate_workflow(seed, "rust", "spark", config)

@@ -1,7 +1,7 @@
 """Seeded random workflows that build their own table with SQL.
 
 `generate_workflow` turns a seed into a workflow: a table with a random schema, partition spec
-and properties, then appends, deletes, updates and compactions in a random order. Every value
+and properties, then appends, deletes, updates, schema changes and compactions in a random order. Every value
 is a deterministic function of the row id and the seed, so the same seed and GENERATOR_VERSION
 always give the same workflow and the same rows, and a failure replays exactly.
 
@@ -12,21 +12,24 @@ table. Either way every reader must return the rows it returned before the step.
 import itertools
 import random
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import yaml
 
-GENERATOR_VERSION = 2
+GENERATOR_VERSION = 3
 
 TABLE = "${table}"
 # Spark rejects writing expressions it cannot prove non-null into required columns.
 ALLOW_REQUIRED = "SET `spark.sql.iceberg.check-nullability`=false"
 # Spark's vectorized Iceberg reader cannot read the DELTA_LENGTH_BYTE_ARRAY strings in DuckDB's
-# data page v2 files.
+# data page v2 files, nor, in Iceberg 1.10.0, DuckDB's int columns once promoted to BIGINT.
 SCALAR_SPARK_READS = "SET `spark.sql.iceberg.vectorization.enabled`=false"
 # The split range() gets by default from the fuzzer's spark.default.parallelism, written out.
 INPUT_PARTITIONS = 8
 IN_PROCESS_SPARK_COMPACTION = "CALL ${catalog}.system.rewrite_data_files(table => '${namespace}.${table_name}')"
+# Rewrites every manifest with the current schema ID, so files written under an earlier schema sit
+# in manifests that claim the current one, as Spark's manifest merging also leaves them.
+REWRITE_MANIFESTS = "CALL ${catalog}.system.rewrite_manifests(table => '${namespace}.${table_name}')"
 
 PRIMITIVE_TYPES = ("boolean", "int", "long", "float", "double", "decimal", "date", "timestamp", "string", "binary")
 NESTED_TYPES = ("struct", "list", "map")
@@ -34,6 +37,8 @@ PARTITION_KINDS = ("identity", "bucket", "truncate", "years", "months", "days", 
 CODECS = ("zstd", "snappy", "gzip", "uncompressed")
 METRICS_MODES = ("truncate(16)", "full", "counts", "none")
 DECIMALS = ((10, 2), (18, 6), (38, 10))
+SCHEMA_CHANGES = ("add_column", "rename_column", "promote", "drop_column")
+TIMESTAMP_VALUE = "timestamp_micros(-315619200000000 + CAST({hash} AS BIGINT) * 1000003)"
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,10 @@ class GeneratorConfig:
     edge_value_share: float = 0.3
     mid_compaction_share: float = 0.3
     spark_compaction_share: float = 0.25
+    # A schema change after a commit, from the second commit on, and how often the manifests are
+    # then rewritten with the new schema ID.
+    schema_change_share: float = 0.3
+    rewrite_manifests_share: float = 0.5
     # Commits written and committed by PyIceberg instead of Spark, on local warehouses. Partition
     # transforms other than identity need PyIceberg's pyiceberg-core package.
     pyiceberg_writer_share: float = 0.0
@@ -131,7 +140,7 @@ def _primitive(kind: str, salt: int, rng: random.Random) -> tuple[str, str, list
         )
     if kind == "timestamp":
         return (
-            "TIMESTAMP", f"timestamp_micros(-315619200000000 + CAST({_hash(salt, 2_000_000_000)} AS BIGINT) * 1000003)",
+            "TIMESTAMP", TIMESTAMP_VALUE.format(hash=_hash(salt, 2_000_000_000)),
             ["TIMESTAMP'1969-12-31 23:59:59.999999'", "TIMESTAMP'2024-02-29 12:00:00'"],
         )
     if kind == "string":
@@ -161,8 +170,9 @@ def _nested(kind: str, salt: int, deep: bool) -> tuple[str, str]:
                 f"named_struct('a', CAST({_hash(salt, 100)} AS INT), "
                 f"'b', named_struct('x', CONCAT('x', CAST({_hash(salt + 1, 50)} AS STRING))))"
             )
-        return "STRUCT<a: INT, b: STRING>", (
-            f"named_struct('a', CAST({_hash(salt, 100)} AS INT), 'b', CONCAT('b', CAST({_hash(salt + 1, 50)} AS STRING)))"
+        return "STRUCT<a: INT, b: STRING, t: TIMESTAMP>", (
+            f"named_struct('a', CAST({_hash(salt, 100)} AS INT), 'b', CONCAT('b', CAST({_hash(salt + 1, 50)} AS STRING)), "
+            f"'t', {TIMESTAMP_VALUE.format(hash=_hash(salt + 2, 2_000_000_000))})"
         )
     if kind == "list":
         return "ARRAY<INT>", f"array(CAST({_hash(salt, 100)} AS INT), CAST({_hash(salt + 1, 100)} AS INT))"
@@ -284,6 +294,72 @@ def _filters(seed: int, columns: list[Column], partition_kind: str, total_rows: 
     return tuple(filters)
 
 
+# Widening a column's own type, or a nested int's, as Iceberg allows: a nested path and the type
+# text that changes in the column's type.
+_PROMOTIONS = {
+    "INT": ("", "BIGINT"),
+    "FLOAT": ("", "DOUBLE"),
+    "STRUCT<a: INT, b: STRING, t: TIMESTAMP>": (".a", "STRUCT<a: BIGINT, b: STRING, t: TIMESTAMP>"),
+    "ARRAY<INT>": (".element", "ARRAY<BIGINT>"),
+    # Not MAP<STRING, INT>: reading a promoted map value through PyIceberg aborts the process in
+    # the runtime's Arrow C++ build, on a check that the map's keys have no nulls.
+}
+
+
+def _promotion(column: Column) -> tuple[str, str, str] | None:
+    """The ALTER COLUMN path, the new type for the statement and the column's new SQL type."""
+    if column.partition_source:
+        return None
+    if column.sql_type.startswith("DECIMAL("):
+        precision, scale = (int(part) for part in column.sql_type[len("DECIMAL("):-1].split(","))
+        if precision == 38:
+            return None
+        widened = f"DECIMAL({min(38, precision + 8)},{scale})"
+        return column.name, widened, widened
+    if column.sql_type not in _PROMOTIONS:
+        return None
+    path, new_type = _PROMOTIONS[column.sql_type]
+    return f"{column.name}{path}", "BIGINT" if path else new_type, new_type
+
+
+def _schema_change(rng: random.Random, columns: list[Column], commit: int, config: GeneratorConfig) -> tuple[str, str, list[Column]]:
+    """One ALTER TABLE statement, a description and the columns after it. Added columns go last,
+    where Spark adds them, so positional INSERT ... SELECT statements stay aligned.
+
+    Dropping the column added last, or renaming a column back, makes the schema equal to an
+    earlier one, and Iceberg then reuses that schema's ID. Files written in between then belong to
+    a schema that is no longer any table schema's, while the table looks unchanged by ID."""
+    kind = rng.choice(SCHEMA_CHANGES)
+    droppable = [i for i, c in enumerate(columns) if i and not c.partition_source]
+    if kind == "drop_column" and droppable:
+        added = [i for i in droppable if columns[i].name.startswith("a")]
+        i = added[-1] if added and rng.random() < 0.5 else rng.choice(droppable)
+        return f"ALTER TABLE {TABLE} DROP COLUMN {columns[i].name}", f"drop {columns[i].name}", columns[:i] + columns[i + 1:]
+    renamed = [i for i, c in enumerate(columns) if c.name.startswith("r") and "_" in c.name]
+    if kind == "rename_column" and renamed and rng.random() < 0.5:
+        i = rng.choice(renamed)
+        original = columns[i].name.split("_", 1)[1]
+        if original not in {c.name for c in columns}:
+            statement = f"ALTER TABLE {TABLE} RENAME COLUMN {columns[i].name} TO {original}"
+            return statement, f"rename {columns[i].name} back to {original}", columns[:i] + [replace(columns[i], name=original)] + columns[i + 1:]
+    promotable = [(i, p) for i, c in enumerate(columns) if (p := _promotion(c))]
+    if kind == "promote" and promotable:
+        i, (path, statement_type, new_type) = rng.choice(promotable)
+        columns = columns[:i] + [replace(columns[i], sql_type=new_type)] + columns[i + 1:]
+        return f"ALTER TABLE {TABLE} ALTER COLUMN {path} TYPE {statement_type}", f"promote {path} to {statement_type}", columns
+    if kind == "rename_column" and len(columns) > 1:
+        i = rng.randrange(1, len(columns))
+        new_name = f"r{commit}_{columns[i].name}"
+        statement = f"ALTER TABLE {TABLE} RENAME COLUMN {columns[i].name} TO {new_name}"
+        description = f"rename {columns[i].name} to {new_name}"
+        return statement, description, columns[:i] + [replace(columns[i], name=new_name)] + columns[i + 1:]
+    primitive = rng.choice(PRIMITIVE_TYPES)
+    salt = 7001 + commit * 10
+    sql_type, expression, edges = _primitive(primitive, salt, rng)
+    added = Column(f"a{commit}_{primitive}", sql_type, _with_edges(expression, edges, True, salt + 7, config.edge_value_share, rng))
+    return f"ALTER TABLE {TABLE} ADD COLUMN {added.name} {sql_type}", f"add {added.name} {sql_type}", columns + [added]
+
+
 def _compaction(step_id: str, command: str, expect: str | None, timeout: int) -> dict:
     config = {"command": command, "timeout": timeout}
     if expect:
@@ -305,6 +381,7 @@ def generate_workflow(
     """
     rng = random.Random(f"{GENERATOR_VERSION}:{seed}")
     columns, partition_clause, dimensions = _columns(rng, config)
+    created = columns
     properties = _properties(rng, config)
     dimensions["properties"] = ", ".join(f"{k}={v}" for k, v in properties.items() if k != "format-version")
     definitions = ", ".join(f"{c.name} {c.sql_type}{'' if c.nullable else ' NOT NULL'}" for c in columns)
@@ -317,6 +394,9 @@ def generate_workflow(
     events: list[str] = []
     next_id = 0
     duckdb_v2 = False
+    duckdb_written = False
+    scalar_reads = False
+    schema_changes: list[str] = []
 
     def flush():
         if statements:
@@ -337,6 +417,8 @@ def generate_workflow(
             flush()
             statement = _duckdb_copy(columns, next_id, next_id + rows, files, rng, config)
             duckdb_v2 = duckdb_v2 or "PARQUET_VERSION v2" in statement
+            duckdb_written = True
+            scalar_reads = scalar_reads or duckdb_v2 or "promote" in schema_changes
             steps.append({"id": f"duckdb_{len(steps) + 1}", "operation": "sql",
                           "config": {"backend": "duckdb", "statements": [statement]}})
             events.append(f"DuckDB APPEND {rows} rows, {statement.rsplit('(', 1)[1].rstrip(')')}")
@@ -354,10 +436,19 @@ def generate_workflow(
             if statement:
                 statements.append(statement)
                 events.append("UPDATE")
+        if commit and rng.random() < config.schema_change_share:
+            statement, description, columns = _schema_change(rng, columns, commit, config)
+            statements.append(statement)
+            events.append(f"ALTER {description}")
+            schema_changes.append(description.split()[0])
+            scalar_reads = scalar_reads or (duckdb_written and description.startswith("promote"))
+            if rng.random() < config.rewrite_manifests_share:
+                statements.append(REWRITE_MANIFESTS)
+                events.append("REWRITE MANIFESTS")
         if commit and rng.random() < config.mid_compaction_share:
             flush()
             if spark_compact_command and rng.random() < config.spark_compaction_share:
-                if duckdb_v2:
+                if scalar_reads:
                     steps.append({"id": f"spark_compact_{len(steps) + 1}", "operation": "sql",
                                   "config": {"backend": "pyspark", "statements": [IN_PROCESS_SPARK_COMPACTION]}})
                     events.append("Spark COMPACT in process")
@@ -374,10 +465,10 @@ def generate_workflow(
 
     definition = {
         "name": f"random_{seed}",
-        "setup": {"backend": "pyspark", "statements": [SCALAR_SPARK_READS, create] if duckdb_v2 else [create]},
+        "setup": {"backend": "pyspark", "statements": [SCALAR_SPARK_READS, create] if scalar_reads else [create]},
         "steps": steps,
     }
-    nested = next((c.name.split("_", 1)[1] for c in columns if c.name.split("_", 1)[-1] in NESTED_TYPES), "none")
+    nested = next((c.name.split("_", 1)[1] for c in created if c.name.split("_", 1)[-1] in NESTED_TYPES), "none")
     writers = {e.split(" APPEND")[0] if " APPEND" in e else "Spark" for e in events if "APPEND" in e}
     features = {
         "partition": dimensions.pop("_partition_kind"),
@@ -390,10 +481,14 @@ def generate_workflow(
         "deletes": "+".join(sorted({e.split()[1] for e in events if e.startswith("DELETE")})) or "none",
         "update": str("UPDATE" in events),
         "compactions": "+".join(sorted({e for e in events[:-1] if "COMPACT" in e} | {"final"})),
+        "schema_changes": "+".join(sorted(set(schema_changes))) or "none",
+        "manifests_rewritten": str("REWRITE MANIFESTS" in events),
     }
     for kind in PRIMITIVE_TYPES:
         features[f"type_{kind}"] = str(any(c.name.endswith(f"_{kind}") for c in columns))
-    filters = _filters(seed, columns, features["partition"], next_id)
+    # A filter names a column that exists under the same name at every step.
+    stable = [c for c in columns if c.name in {c.name for c in created}]
+    filters = _filters(seed, stable, features["partition"] if any(c.partition_source for c in stable) else "none", next_id)
     return GeneratedWorkflow(seed, definition, dimensions, features, filters)
 
 

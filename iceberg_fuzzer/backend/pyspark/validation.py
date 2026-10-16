@@ -2,7 +2,7 @@
 
 import datetime
 
-from pyspark.sql.types import TimestampType
+from pyspark.sql.types import ArrayType, MapType, StructType, TimestampType
 
 from iceberg_fuzzer.backend import (
     ValidationEngine,
@@ -17,14 +17,37 @@ from iceberg_fuzzer.backend.point_query import format_sql_literal
 from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
 
 
-def _as_utc(rows, local_time: list[int]):
-    """PySpark returns TIMESTAMP values as naive datetimes in the Python process's local time,
-    so they are made aware before hashing. TIMESTAMP_NTZ values stay naive."""
+def _to_utc(data_type):
+    """A function that makes the TIMESTAMP values in a value of data_type aware, at any depth, or
+    None if it holds none. PySpark returns them as naive datetimes in the Python process's local
+    time. TIMESTAMP_NTZ values stay naive. Structs come back as dicts, which hash like Rows."""
+    if isinstance(data_type, TimestampType):
+        return lambda value: value.astimezone(datetime.timezone.utc)
+    if isinstance(data_type, StructType):
+        fields = [(f.name, _to_utc(f.dataType)) for f in data_type.fields]
+        if not any(convert for _, convert in fields):
+            return None
+        return lambda row: {name: _apply(convert, row[i]) for i, (name, convert) in enumerate(fields)}
+    if isinstance(data_type, ArrayType):
+        element = _to_utc(data_type.elementType)
+        return element and (lambda values: [_apply(element, v) for v in values])
+    if isinstance(data_type, MapType):
+        key, value = _to_utc(data_type.keyType), _to_utc(data_type.valueType)
+        if not (key or value):
+            return None
+        return lambda entries: {_apply(key, k): _apply(value, v) for k, v in entries.items()}
+    return None
+
+
+def _apply(convert, value):
+    return value if convert is None or value is None else convert(value)
+
+
+def _as_utc(rows, converters: list[tuple[int, object]]):
     for row in rows:
         values = list(row)
-        for i in local_time:
-            if values[i] is not None:
-                values[i] = values[i].astimezone(datetime.timezone.utc)
+        for i, convert in converters:
+            values[i] = _apply(convert, values[i])
         yield values
 
 
@@ -53,8 +76,8 @@ class PySparkValidation(ValidationEngine):
 
     def _count_and_hash(self, table_ref: str) -> tuple[int, int]:
         df = self._get_spark().table(table_ref)
-        local_time = [i for i, f in enumerate(df.schema) if isinstance(f.dataType, TimestampType)]
-        partials = df.rdd.mapPartitions(lambda rows: [hash_rows(_as_utc(rows, local_time))]).collect()
+        converters = [(i, convert) for i, f in enumerate(df.schema) if (convert := _to_utc(f.dataType))]
+        partials = df.rdd.mapPartitions(lambda rows: [hash_rows(_as_utc(rows, converters))]).collect()
         return sum(rows for rows, _ in partials), sum(h for _, h in partials) % HASH_MODULUS
 
     def capture_checkpoint(self, warehouse: str, namespace: str, table_name: str) -> Checkpoint:
