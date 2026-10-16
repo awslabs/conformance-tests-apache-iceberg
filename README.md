@@ -136,7 +136,24 @@ python3 -m iceberg_fuzzer.cli workflow run \
     --table-name "$TABLE" \
     --namespace simple \
     --dry-run
+
+# Write a seeded random workflow that builds its own table; the same seed gives the same workflow
+python3 -m iceberg_fuzzer.cli workflow generate --seed 14 --output random_14.yaml \
+    --compact-command 'python3 scripts/example-pyspark-compact.py --warehouse ${warehouse} --namespace ${namespace} --table-name ${table_name}'
+
+# Run it with more readers, a filtered read and every table check
+python3 -m iceberg_fuzzer.cli workflow run \
+    --workflow random_14.yaml \
+    --warehouse-path /tmp/warehouse \
+    --table-name random_14 \
+    --namespace generated \
+    --no-point-queries \
+    --readers pyspark,duckdb,pyiceberg,polars,daft \
+    --row-filter 'id >= 50 AND id <= 66' \
+    --table-checks all
 ```
+
+`--readers` picks the readers that validate every step, DuckDB and PySpark by default. `--table-checks` runs table checks around the steps, by name or `all`, such as `manifest_minimum` and `column_statistics`; see `TABLE_CHECKS` in `iceberg_fuzzer/checks.py`. PyIceberg, Polars, Daft and iceberg-rust, and the table checks, read local warehouses only. A generated workflow lists its suggested row filters in its header.
 
 ### Workflow YAML format
 

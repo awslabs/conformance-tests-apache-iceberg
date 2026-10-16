@@ -12,11 +12,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
 
-from iceberg_fuzzer.backend import AssertionResult, Checkpoint, ColTypeStr, ColumnName, ValidationEngine
-from iceberg_fuzzer.backend.duckdb import DuckDBValidation
+from iceberg_fuzzer.backend import AssertionResult, Checkpoint, ColTypeStr, ColumnName, ValidationEngine, is_s3_tables_warehouse
 from iceberg_fuzzer.backend.point_query import validate_point_queries
-from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation
-from iceberg_fuzzer.checks import TableCheck
+from iceberg_fuzzer.checks import TableCheck, iceberg_metadata_checks
 from iceberg_fuzzer.workflow.loader import Workflow, load_workflow
 
 StepId = str
@@ -82,6 +80,47 @@ def register_mutation_backend(name: str, target: str) -> None:
     """Make a writer backend available to workflow steps. target is "module:class", and the
     class takes the warehouse path and a seed keyword argument, like PySparkMutation."""
     MUTATION_BACKENDS[name] = target
+
+
+# Readers `run_workflow` can validate with, as "module:class". Arrow readers take a function that
+# loads the table and row filters; the others take the warehouse path.
+ARROW_READERS: dict[str, str] = {
+    "pyiceberg": "iceberg_fuzzer.backend.pyiceberg.validation:PyIcebergValidation",
+    "polars": "iceberg_fuzzer.backend.polars.validation:PolarsValidation",
+    "daft": "iceberg_fuzzer.backend.daft.validation:DaftValidation",
+    "iceberg_rust": "iceberg_fuzzer.backend.iceberg_rust.validation:IcebergRustValidation",
+}
+WAREHOUSE_READERS: dict[str, str] = {
+    "duckdb": "iceberg_fuzzer.backend.duckdb:DuckDBValidation",
+    "pyspark": "iceberg_fuzzer.backend.pyspark.validation:PySparkValidation",
+}
+DEFAULT_READERS = ("duckdb", "pyspark")
+
+
+def _load(target: str):
+    module, _, cls = target.partition(":")
+    return getattr(importlib.import_module(module), cls)
+
+
+def _local_table_loader(warehouse_path: str):
+    from iceberg_fuzzer.backend.pyiceberg.mutation import HadoopLayoutCatalog
+    catalog = HadoopLayoutCatalog(warehouse_path)
+    return lambda namespace, table_name: catalog.load_table((namespace, table_name))
+
+
+def build_readers(warehouse_path: str, names=DEFAULT_READERS, row_filters: tuple[str, ...] = ()) -> list[tuple[EngineName, ValidationEngine]]:
+    """The named readers. Arrow readers load local warehouses only, through the Hadoop layout."""
+    unknown = [n for n in names if n not in ARROW_READERS and n not in WAREHOUSE_READERS]
+    if unknown:
+        raise ValueError(f"Unknown readers: {', '.join(unknown)}. Known: {', '.join([*WAREHOUSE_READERS, *ARROW_READERS])}")
+    arrow = [n for n in names if n in ARROW_READERS]
+    if arrow and is_s3_tables_warehouse(warehouse_path):
+        raise ValueError(f"Readers {', '.join(arrow)} read local warehouses only")
+    load_table = _local_table_loader(warehouse_path) if arrow else None
+    return [
+        (n, _load(ARROW_READERS[n])(load_table, row_filters) if n in ARROW_READERS else _load(WAREHOUSE_READERS[n])(warehouse_path))
+        for n in names
+    ]
 
 
 def _init_mutation_engines(
@@ -538,11 +577,16 @@ def run_workflow(
     output_dir: str = 'output/workflow-logs',
     seed: int | None = None,
     point_queries: bool = True,
+    readers=DEFAULT_READERS,
+    table_checks: list[str] | None = None,
+    row_filters: tuple[str, ...] = (),
 ) -> TableResult | None:
     """Run a workflow against a single table.
 
-    Validates each step with all available engines (DuckDB, PySpark) and
-    asserts cross-engine content hash agreement.
+    Validates each step with the named readers, DuckDB and PySpark by default, and asserts
+    cross-engine content hash agreement. table_checks names checks from
+    iceberg_fuzzer.checks.TABLE_CHECKS to run around the steps; row_filters are predicates the
+    Arrow readers also read the table through.
 
     Returns a TableResult, or None if dry_run is True.
     """
@@ -555,14 +599,18 @@ def run_workflow(
     if dry_run:
         print(f"  {namespace}.{table_name}:")
         engines = []
+        checks = []
     else:
-        engines = [
-            ("duckdb", DuckDBValidation(warehouse_path)),
-            ("pyspark", PySparkValidation(warehouse_path)),
-        ]
+        if table_checks and is_s3_tables_warehouse(warehouse_path):
+            raise ValueError("Table checks read local warehouses only")
+        engines = build_readers(warehouse_path, readers, row_filters)
+        checks = iceberg_metadata_checks(_local_table_loader(warehouse_path), table_checks) if table_checks else []
 
     try:
-        result = _process_table(workflow_def, warehouse_path, namespace, table_name, output_dir, engines, dry_run, seed=seed, point_queries=point_queries)
+        result = _process_table(
+            workflow_def, warehouse_path, namespace, table_name, output_dir, engines, dry_run, seed=seed,
+            point_queries=point_queries, table_checks=checks,
+        )
     finally:
         for _, engine in engines:
             engine.close()

@@ -28,3 +28,13 @@ def test_table_checks_are_selected_by_name():
     assert [type(c) for c in chosen] == [ColumnStatistics, ManifestMinimumSequence]
     with pytest.raises(ValueError, match="Unknown table checks: nope"):
         iceberg_metadata_checks(None, ["nope"])
+
+
+def test_readers_are_built_by_name_and_arrow_readers_need_a_local_warehouse(tmp_path):
+    from iceberg_fuzzer.backend.polars.validation import PolarsValidation
+    [(name, reader)] = engine.build_readers(str(tmp_path), ("polars",), ("id < 3",))
+    assert name == "polars" and isinstance(reader, PolarsValidation)
+    with pytest.raises(ValueError, match="Unknown readers: nope"):
+        engine.build_readers(str(tmp_path), ("nope",))
+    with pytest.raises(ValueError, match="local warehouses only"):
+        engine.build_readers("arn:aws:s3tables:us-east-1:123456789012:bucket/b", ("polars",))

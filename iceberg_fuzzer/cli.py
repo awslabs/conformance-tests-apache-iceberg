@@ -27,6 +27,7 @@ import logging
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +397,32 @@ Examples:
     workflow_run_parser.add_argument('--point-queries', action=argparse.BooleanOptionalAction,
                        default=True,
                        help='Run point query validation after each step (default: %(default)s)')
+    workflow_run_parser.add_argument('--readers',
+                       default='duckdb,pyspark',
+                       help='Comma-separated readers that validate every step: duckdb, pyspark, pyiceberg, '
+                            'polars, daft, iceberg_rust. The last four read local warehouses only (default: %(default)s)')
+    workflow_run_parser.add_argument('--table-checks',
+                       default=None,
+                       help='Comma-separated table checks to run around the steps, or "all". '
+                            'Local warehouses only (default: none)')
+    workflow_run_parser.add_argument('--row-filter', action='append', default=[],
+                       help='A predicate such as "id < 100" that the pyiceberg, polars, daft and iceberg_rust '
+                            'readers also read the table through. Repeat for more')
+
+    workflow_generate_parser = workflow_subparsers.add_parser('generate',
+        help='Write a seeded random workflow that builds its own table')
+    workflow_generate_parser.add_argument('--seed', type=int, required=True,
+                       help='Seed; the same seed always gives the same workflow')
+    workflow_generate_parser.add_argument('--compact-command', required=True,
+                       help='Command of the compactor under test, with ${warehouse}, ${namespace} and ${table_name}')
+    workflow_generate_parser.add_argument('--spark-compact-command', default=None,
+                       help='Command of a control compaction that some workflows run between commits')
+    workflow_generate_parser.add_argument('--pyiceberg-writer-share', type=float, default=0.0,
+                       help='Share of commits PyIceberg writes; local warehouses only (default: %(default)s)')
+    workflow_generate_parser.add_argument('--duckdb-writer-share', type=float, default=0.0,
+                       help='Share of commits DuckDB writes; local warehouses only (default: %(default)s)')
+    workflow_generate_parser.add_argument('--output', default=None,
+                       help='File to write the workflow YAML to (default: standard output)')
 
     args = parser.parse_args()
 
@@ -491,8 +518,23 @@ Examples:
         sys.exit(1 if failed > 0 else 0)
 
     # Handle workflow command
+    if args.command == 'workflow' and args.workflow_action == 'generate':
+        from iceberg_fuzzer.workflow.random_sql import GeneratorConfig, generate_workflow
+        config = GeneratorConfig(pyiceberg_writer_share=args.pyiceberg_writer_share, duckdb_writer_share=args.duckdb_writer_share)
+        generated = generate_workflow(args.seed, args.compact_command, args.spark_compact_command, config)
+        text = generated.to_yaml()
+        if args.output:
+            Path(args.output).write_text(text)
+        else:
+            print(text, end='')
+        sys.exit(0)
+
     if args.command == 'workflow':
+        from iceberg_fuzzer.checks import TABLE_CHECKS
         from iceberg_fuzzer.workflow import run_workflow
+        checks = None
+        if args.table_checks:
+            checks = list(TABLE_CHECKS) if args.table_checks == 'all' else [c.strip() for c in args.table_checks.split(',')]
         result = run_workflow(
             workflow_file=args.workflow,
             warehouse_path=args.warehouse_path,
@@ -502,6 +544,9 @@ Examples:
             dry_run=args.dry_run,
             seed=args.seed,
             point_queries=args.point_queries,
+            readers=tuple(r.strip() for r in args.readers.split(',') if r.strip()),
+            table_checks=checks,
+            row_filters=tuple(args.row_filter),
         )
         sys.exit(0 if result is None or result.passed else 1)
 
