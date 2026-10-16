@@ -4,6 +4,7 @@ Workflow engine for iceberg-fuzzer.
 Runs multi-step workflows against existing Iceberg tables.
 """
 
+import importlib
 import re
 import shlex
 import subprocess
@@ -14,7 +15,6 @@ from string import Template
 from iceberg_fuzzer.backend import AssertionResult, Checkpoint, ColTypeStr, ColumnName, ValidationEngine
 from iceberg_fuzzer.backend.duckdb import DuckDBValidation
 from iceberg_fuzzer.backend.point_query import validate_point_queries
-from iceberg_fuzzer.backend.pyspark.mutation import PySparkMutation
 from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation
 from iceberg_fuzzer.checks import TableCheck
 from iceberg_fuzzer.workflow.loader import Workflow, load_workflow
@@ -69,22 +69,31 @@ class TableResult:
         )
 
 
+# Writer backends a workflow step can name, as "module:class". Classes are imported only when a
+# workflow uses them, so a backend's dependencies are needed only by the workflows that use it.
+MUTATION_BACKENDS: dict[str, str] = {
+    "pyspark": "iceberg_fuzzer.backend.pyspark.mutation:PySparkMutation",
+    "pyiceberg": "iceberg_fuzzer.backend.pyiceberg.mutation:PyIcebergMutation",
+    "duckdb": "iceberg_fuzzer.backend.duckdb.mutation:DuckDBMutation",
+}
+
+
+def register_mutation_backend(name: str, target: str) -> None:
+    """Make a writer backend available to workflow steps. target is "module:class", and the
+    class takes the warehouse path and a seed keyword argument, like PySparkMutation."""
+    MUTATION_BACKENDS[name] = target
+
+
 def _init_mutation_engines(
     warehouse_path: str, backends: set[str], seed: int | None = None
 ) -> dict:
     """Create mutation engine instances for the requested backends."""
     engines = {}
     for name in backends:
-        if name == "pyspark":
-            engines[name] = PySparkMutation(warehouse_path, seed=seed)
-        elif name == "pyiceberg":
-            from iceberg_fuzzer.backend.pyiceberg.mutation import PyIcebergMutation
-            engines[name] = PyIcebergMutation(warehouse_path, seed=seed)
-        elif name == "duckdb":
-            from iceberg_fuzzer.backend.duckdb.mutation import DuckDBMutation
-            engines[name] = DuckDBMutation(warehouse_path, seed=seed)
-        else:
+        if name not in MUTATION_BACKENDS:
             raise ValueError(f"Unknown backend: {name}")
+        module, _, cls = MUTATION_BACKENDS[name].partition(":")
+        engines[name] = getattr(importlib.import_module(module), cls)(warehouse_path, seed=seed)
     return engines
 
 
@@ -104,7 +113,7 @@ def _cross_engine_assertions(post_hashes: dict[str, int]) -> list[AssertionResul
         name="cross_engine.content_hash",
         passed=all_agree,
         expected="all engines agree",
-        actual=f"{post_hashes}" if not all_agree else f"agreed ({values[0]})",
+        actual=dict(post_hashes) if not all_agree else f"agreed ({values[0]})",
     )]
 
 

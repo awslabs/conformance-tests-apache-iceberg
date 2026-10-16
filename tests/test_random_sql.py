@@ -70,7 +70,7 @@ def test_schema_changes_keep_inserts_aligned_with_the_schema():
     import random
 
     rng = random.Random(1)
-    columns, _, _ = _columns(rng, GeneratorConfig())
+    columns = _columns(rng, GeneratorConfig())
     for commit in range(1, 30):
         statement, description, after = _schema_change(rng, columns, commit, GeneratorConfig())
         assert statement.startswith("ALTER TABLE ${table} ")
@@ -96,3 +96,18 @@ def test_every_seed_generates():
     config = GeneratorConfig(deep_nesting_share=0.0, pyiceberg_writer_share=0.3, duckdb_writer_share=0.2)
     for seed in range(3000):
         generate_workflow(seed, "rust", "spark", config)
+
+
+def test_a_dimension_draws_from_its_own_stream():
+    from dataclasses import replace
+    from iceberg_fuzzer.workflow.random_sql import GeneratorConfig
+
+    def without(events, kind):
+        return [e for e in events.split(", ") if not e.startswith(kind)]
+
+    base = GeneratorConfig(pyiceberg_writer_share=0.3, duckdb_writer_share=0.2)
+    for seed in range(50):
+        with_updates = generate_workflow(seed, "rust", "spark", base)
+        no_updates = generate_workflow(seed, "rust", "spark", replace(base, update_share=0.0))
+        assert with_updates.dimensions["columns"] == no_updates.dimensions["columns"]
+        assert without(with_updates.dimensions["workflow"], "UPDATE") == without(no_updates.dimensions["workflow"], "UPDATE")

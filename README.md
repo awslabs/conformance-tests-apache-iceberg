@@ -217,6 +217,13 @@ steps:
       expect: replace
 ```
 
+### Extending workflows
+
+- **Writer backend.** A `MutationEngine` subclass, registered with `register_mutation_backend("name", "module:Class")` in `iceberg_fuzzer.workflow.engine`. Workflow steps then name it as their `backend`. A writer that only writes Parquet files can subclass `PyIcebergMutation` and override `_parse` and `_write`, as `DuckDBMutation` does.
+- **Reader.** A subclass of `ArrowValidation` in `iceberg_fuzzer.backend.arrow_reader` that implements `scan(table, row_filter)`. The base class hashes the rows, reads through row filters and reports snapshots. See the Polars and Daft readers.
+- **Table check.** A `TableCheck` subclass in `iceberg_fuzzer.checks`, with a `name`, the operations it runs around, and `before` and `after` methods returning `AssertionResult`s. Add it to `TABLE_CHECKS`. `iceberg_metadata_checks(load_table, names)` builds the named checks, or all of them.
+- **Generated workflow dimension.** In `iceberg_fuzzer.workflow.random_sql`, a share or bounds in `GeneratorConfig`, a `_Builder` method that draws from its own stream, `self.streams["<dimension>"]`, and a feature for `pairwise_seeds`. Each dimension's draws come from its own stream, so a new dimension leaves the other dimensions' choices for every seed unchanged.
+
 ## Requirements
 
 - Python 3.12+

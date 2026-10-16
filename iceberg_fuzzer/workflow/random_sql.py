@@ -1,9 +1,15 @@
 """Seeded random workflows that build their own table with SQL.
 
 `generate_workflow` turns a seed into a workflow: a table with a random schema, partition spec
-and properties, then appends, deletes, updates, schema changes and compactions in a random order. Every value
-is a deterministic function of the row id and the seed, so the same seed and GENERATOR_VERSION
-always give the same workflow and the same rows, and a failure replays exactly.
+and properties, then appends, deletes, updates, schema changes and compactions in a random order.
+Every value is a deterministic function of the row id and the seed, so the same seed and
+GENERATOR_VERSION always give the same workflow and the same rows, and a failure replays exactly.
+
+Each dimension, such as the schema, the writers or the deletes, draws from its own random stream,
+seeded by the generator version, the seed and the dimension's name. A new dimension gets a new
+stream, so adding it leaves every other dimension's choices, and so every existing seed's
+workflow apart from the new steps, unchanged. A dimension is a stream name, a share or bounds in
+GeneratorConfig, a method of _Builder that adds its steps, and a feature for pairwise selection.
 
 Compaction steps expect `replace_or_unchanged`, because a compactor may decline a generated
 table. Either way every reader must return the rows it returned before the step.
@@ -16,7 +22,7 @@ from dataclasses import dataclass, field, replace
 
 import yaml
 
-GENERATOR_VERSION = 3
+GENERATOR_VERSION = 4
 
 TABLE = "${table}"
 # Spark rejects writing expressions it cannot prove non-null into required columns.
@@ -198,9 +204,21 @@ def _partition_column(kind: str, salt: int, rng: random.Random) -> tuple[Column,
     return column, f"PARTITIONED BY ({kind}(p_ts))"
 
 
-def _columns(rng: random.Random, config: GeneratorConfig) -> tuple[list[Column], str, dict]:
+class _Streams:
+    """One random stream per dimension of a seed's workflow."""
+
+    def __init__(self, seed: int):
+        self._seed = seed
+        self._streams: dict[str, random.Random] = {}
+
+    def __getitem__(self, dimension: str) -> random.Random:
+        if dimension not in self._streams:
+            self._streams[dimension] = random.Random(f"{GENERATOR_VERSION}:{self._seed}:{dimension}")
+        return self._streams[dimension]
+
+
+def _columns(rng: random.Random, config: GeneratorConfig) -> list[Column]:
     columns = [Column("id", "BIGINT", "id", nullable=False)]
-    dimensions: dict = {}
     nested = rng.random() < config.nested_share
     deep = nested and rng.random() < config.deep_nesting_share
     for i in range(rng.randint(1, config.max_columns)):
@@ -215,18 +233,16 @@ def _columns(rng: random.Random, config: GeneratorConfig) -> tuple[list[Column],
         sql_type, expression, edges = _primitive(kind, salt, rng)
         expression = _with_edges(expression, edges, nullable, salt + 7, config.edge_value_share, rng)
         columns.append(Column(f"c{i}_{kind}", sql_type, expression, nullable))
-    partition_clause = ""
-    if rng.random() < config.partitioned_share:
-        kind = rng.choice(PARTITION_KINDS)
-        source, partition_clause = _partition_column(kind, 991, rng)
-        columns.append(source)
-        dimensions["partition"] = partition_clause.removeprefix("PARTITIONED BY ")
-        dimensions["_partition_kind"] = kind
-    else:
-        dimensions["partition"] = "none"
-        dimensions["_partition_kind"] = "none"
-    dimensions["columns"] = ", ".join(f"{c.name} {c.sql_type}{'' if c.nullable else ' NOT NULL'}" for c in columns)
-    return columns, partition_clause, dimensions
+    return columns
+
+
+def _partitioning(rng: random.Random, config: GeneratorConfig) -> tuple[str, Column | None, str]:
+    """The partition transform, its source column, which goes last, and the PARTITIONED BY clause."""
+    if rng.random() >= config.partitioned_share:
+        return "none", None, ""
+    kind = rng.choice(PARTITION_KINDS)
+    source, clause = _partition_column(kind, 991, rng)
+    return kind, source, clause
 
 
 def _properties(rng: random.Random, config: GeneratorConfig) -> dict:
@@ -275,10 +291,8 @@ def _update(columns: list[Column], salt: int) -> str | None:
     return f"UPDATE {TABLE} SET {targets[0].name} = 'updated' WHERE {_hash(salt, 100)} < 5"
 
 
-def _filters(seed: int, columns: list[Column], partition_kind: str, total_rows: int) -> tuple[str, ...]:
-    """An id range on every table, and a predicate on the partition source or another column.
-    Drawn from their own stream, so adding them leaves the workflow of every seed unchanged."""
-    rng = random.Random(f"{GENERATOR_VERSION}:{seed}:filters")
+def _filters(rng: random.Random, columns: list[Column], partition_kind: str, total_rows: int) -> tuple[str, ...]:
+    """An id range on every table, and a predicate on the partition source or another column."""
     low = rng.randrange(max(total_rows, 1))
     filters = [f"id >= {low} AND id <= {low + rng.randint(0, max(total_rows // 4, 1))}"]
     source = next((c for c in columns if c.partition_source), None)
@@ -367,6 +381,104 @@ def _compaction(step_id: str, command: str, expect: str | None, timeout: int) ->
     return {"id": step_id, "operation": "replace", "config": config}
 
 
+class _Builder:
+    """The steps of one workflow. Each method adds one kind of step and draws only from its own
+    dimension's stream."""
+
+    def __init__(self, streams: _Streams, columns: list[Column], config: GeneratorConfig,
+                 compact_command: str, spark_compact_command: str | None):
+        self.streams, self.columns, self.config = streams, columns, config
+        self.compact_command, self.spark_compact_command = compact_command, spark_compact_command
+        self.steps: list[dict] = []
+        self.statements: list[str] = []
+        self.commits: list[tuple[int, int]] = []
+        self.events: list[str] = []
+        self.schema_changes: list[str] = []
+        self.next_id = 0
+        self.duckdb_written = False
+        # Spark's vectorized reader cannot read some DuckDB files, see SCALAR_SPARK_READS.
+        self.scalar_reads = False
+
+    def _flush(self):
+        if self.statements:
+            self.steps.append({"id": f"sql_{len(self.steps) + 1}", "operation": "sql",
+                               "config": {"backend": "pyspark", "statements": [ALLOW_REQUIRED, *self.statements]}})
+            self.statements.clear()
+
+    def write(self):
+        sizes, writers, config = self.streams["commit_sizes"], self.streams["writers"], self.config
+        rows = max(1, int(config.min_rows_per_commit * (config.max_rows_per_commit / config.min_rows_per_commit) ** sizes.random()))
+        files = sizes.randint(1, config.max_files_per_commit)
+        start, end = self.next_id, self.next_id + rows
+        writer = writers.random()
+        if writer < config.pyiceberg_writer_share:
+            self._flush()
+            self.steps.append({"id": f"pyiceberg_{len(self.steps) + 1}", "operation": "sql",
+                               "config": {"backend": "pyiceberg", "statements": [_insert(self.columns, start, end, files)]}})
+            self.events.append(f"PyIceberg APPEND {rows} rows")
+        elif writer < config.pyiceberg_writer_share + config.duckdb_writer_share:
+            self._flush()
+            statement = _duckdb_copy(self.columns, start, end, files, writers, config)
+            self.duckdb_written = True
+            self.scalar_reads = self.scalar_reads or "PARQUET_VERSION v2" in statement or "promote" in self.schema_changes
+            self.steps.append({"id": f"duckdb_{len(self.steps) + 1}", "operation": "sql",
+                               "config": {"backend": "duckdb", "statements": [statement]}})
+            self.events.append(f"DuckDB APPEND {rows} rows, {statement.rsplit('(', 1)[1].rstrip(')')}")
+        else:
+            self.statements.append(_insert(self.columns, start, end, files))
+            self.events.append(f"APPEND {rows} rows in up to {files} files")
+        self.commits.append((start, end))
+        self.next_id = end
+
+    def delete(self, commit: int):
+        rng = self.streams["deletes"]
+        if rng.random() < self.config.delete_share:
+            statement, kind = _delete(rng, self.commits, 5000 + commit)
+            self.statements.append(statement)
+            self.events.append(f"DELETE {kind}")
+
+    def update(self, commit: int):
+        if self.streams["updates"].random() < self.config.update_share:
+            statement = _update(self.columns, 6000 + commit)
+            if statement:
+                self.statements.append(statement)
+                self.events.append("UPDATE")
+
+    def change_schema(self, commit: int):
+        rng = self.streams["schema_changes"]
+        if not commit or rng.random() >= self.config.schema_change_share:
+            return
+        statement, description, self.columns = _schema_change(rng, self.columns, commit, self.config)
+        self.statements.append(statement)
+        self.events.append(f"ALTER {description}")
+        self.schema_changes.append(description.split()[0])
+        self.scalar_reads = self.scalar_reads or (self.duckdb_written and description.startswith("promote"))
+        if rng.random() < self.config.rewrite_manifests_share:
+            self.statements.append(REWRITE_MANIFESTS)
+            self.events.append("REWRITE MANIFESTS")
+
+    def compact(self, commit: int):
+        rng, config = self.streams["compactions"], self.config
+        if not commit or rng.random() >= config.mid_compaction_share:
+            return
+        self._flush()
+        if self.spark_compact_command and rng.random() < config.spark_compaction_share:
+            if self.scalar_reads:
+                self.steps.append({"id": f"spark_compact_{len(self.steps) + 1}", "operation": "sql",
+                                   "config": {"backend": "pyspark", "statements": [IN_PROCESS_SPARK_COMPACTION]}})
+                self.events.append("Spark COMPACT in process")
+            else:
+                self.steps.append(_compaction(f"spark_compact_{len(self.steps) + 1}", self.spark_compact_command, None, config.compaction_timeout))
+                self.events.append("Spark COMPACT")
+        else:
+            self.final_compaction()
+
+    def final_compaction(self):
+        self._flush()
+        self.steps.append(_compaction(f"compact_{len(self.steps) + 1}", self.compact_command, "replace_or_unchanged", self.config.compaction_timeout))
+        self.events.append("COMPACT")
+
+
 def generate_workflow(
     seed: int,
     compact_command: str,
@@ -379,99 +491,43 @@ def generate_workflow(
     with a new replace snapshot or unchanged. spark_compact_command, when given, is a control
     compaction that some workflows run between commits.
     """
-    rng = random.Random(f"{GENERATOR_VERSION}:{seed}")
-    columns, partition_clause, dimensions = _columns(rng, config)
+    streams = _Streams(seed)
+    columns = _columns(streams["schema"], config)
+    partition_kind, source, partition_clause = _partitioning(streams["partitioning"], config)
+    if source is not None:
+        columns.append(source)
     created = columns
-    properties = _properties(rng, config)
-    dimensions["properties"] = ", ".join(f"{k}={v}" for k, v in properties.items() if k != "format-version")
+    properties = _properties(streams["properties"], config)
     definitions = ", ".join(f"{c.name} {c.sql_type}{'' if c.nullable else ' NOT NULL'}" for c in columns)
     tblproperties = ", ".join(f"'{k}'='{v}'" for k, v in properties.items())
     create = f"CREATE TABLE {TABLE} ({definitions}) USING iceberg {partition_clause} TBLPROPERTIES ({tblproperties})"
 
-    steps: list[dict] = []
-    statements: list[str] = []
-    commits: list[tuple[int, int]] = []
-    events: list[str] = []
-    next_id = 0
-    duckdb_v2 = False
-    duckdb_written = False
-    scalar_reads = False
-    schema_changes: list[str] = []
+    builder = _Builder(streams, columns, config, compact_command, spark_compact_command)
+    for commit in range(streams["commit_count"].randint(1, config.max_commits)):
+        builder.write()
+        builder.delete(commit)
+        builder.update(commit)
+        builder.change_schema(commit)
+        builder.compact(commit)
+    builder.final_compaction()
+    events, columns = builder.events, builder.columns
 
-    def flush():
-        if statements:
-            steps.append({"id": f"sql_{len(steps) + 1}", "operation": "sql",
-                          "config": {"backend": "pyspark", "statements": [ALLOW_REQUIRED, *statements]}})
-            statements.clear()
-
-    for commit in range(rng.randint(1, config.max_commits)):
-        rows = max(1, int(config.min_rows_per_commit * (config.max_rows_per_commit / config.min_rows_per_commit) ** rng.random()))
-        files = rng.randint(1, config.max_files_per_commit)
-        writer = rng.random()
-        if writer < config.pyiceberg_writer_share:
-            flush()
-            steps.append({"id": f"pyiceberg_{len(steps) + 1}", "operation": "sql",
-                          "config": {"backend": "pyiceberg", "statements": [_insert(columns, next_id, next_id + rows, files)]}})
-            events.append(f"PyIceberg APPEND {rows} rows")
-        elif writer < config.pyiceberg_writer_share + config.duckdb_writer_share:
-            flush()
-            statement = _duckdb_copy(columns, next_id, next_id + rows, files, rng, config)
-            duckdb_v2 = duckdb_v2 or "PARQUET_VERSION v2" in statement
-            duckdb_written = True
-            scalar_reads = scalar_reads or duckdb_v2 or "promote" in schema_changes
-            steps.append({"id": f"duckdb_{len(steps) + 1}", "operation": "sql",
-                          "config": {"backend": "duckdb", "statements": [statement]}})
-            events.append(f"DuckDB APPEND {rows} rows, {statement.rsplit('(', 1)[1].rstrip(')')}")
-        else:
-            statements.append(_insert(columns, next_id, next_id + rows, files))
-            events.append(f"APPEND {rows} rows in up to {files} files")
-        commits.append((next_id, next_id + rows))
-        next_id += rows
-        if rng.random() < config.delete_share:
-            statement, kind = _delete(rng, commits, 5000 + commit)
-            statements.append(statement)
-            events.append(f"DELETE {kind}")
-        if rng.random() < config.update_share:
-            statement = _update(columns, 6000 + commit)
-            if statement:
-                statements.append(statement)
-                events.append("UPDATE")
-        if commit and rng.random() < config.schema_change_share:
-            statement, description, columns = _schema_change(rng, columns, commit, config)
-            statements.append(statement)
-            events.append(f"ALTER {description}")
-            schema_changes.append(description.split()[0])
-            scalar_reads = scalar_reads or (duckdb_written and description.startswith("promote"))
-            if rng.random() < config.rewrite_manifests_share:
-                statements.append(REWRITE_MANIFESTS)
-                events.append("REWRITE MANIFESTS")
-        if commit and rng.random() < config.mid_compaction_share:
-            flush()
-            if spark_compact_command and rng.random() < config.spark_compaction_share:
-                if scalar_reads:
-                    steps.append({"id": f"spark_compact_{len(steps) + 1}", "operation": "sql",
-                                  "config": {"backend": "pyspark", "statements": [IN_PROCESS_SPARK_COMPACTION]}})
-                    events.append("Spark COMPACT in process")
-                else:
-                    steps.append(_compaction(f"spark_compact_{len(steps) + 1}", spark_compact_command, None, config.compaction_timeout))
-                    events.append("Spark COMPACT")
-            else:
-                steps.append(_compaction(f"compact_{len(steps) + 1}", compact_command, "replace_or_unchanged", config.compaction_timeout))
-                events.append("COMPACT")
-    flush()
-    steps.append(_compaction(f"compact_{len(steps) + 1}", compact_command, "replace_or_unchanged", config.compaction_timeout))
-    events.append("COMPACT")
-    dimensions["workflow"] = ", ".join(events)
-
+    dimensions = {
+        "columns": definitions,
+        "partition": partition_clause.removeprefix("PARTITIONED BY ") or "none",
+        "properties": ", ".join(f"{k}={v}" for k, v in properties.items() if k != "format-version"),
+        "workflow": ", ".join(events),
+    }
     definition = {
         "name": f"random_{seed}",
-        "setup": {"backend": "pyspark", "statements": [SCALAR_SPARK_READS, create] if scalar_reads else [create]},
-        "steps": steps,
+        "setup": {"backend": "pyspark", "statements": [SCALAR_SPARK_READS, create] if builder.scalar_reads else [create]},
+        "steps": builder.steps,
     }
     nested = next((c.name.split("_", 1)[1] for c in created if c.name.split("_", 1)[-1] in NESTED_TYPES), "none")
     writers = {e.split(" APPEND")[0] if " APPEND" in e else "Spark" for e in events if "APPEND" in e}
+    commits = builder.commits
     features = {
-        "partition": dimensions.pop("_partition_kind"),
+        "partition": partition_kind,
         "nested": nested,
         "delete_mode": properties["write.delete.mode"],
         "codec": properties["write.parquet.compression-codec"],
@@ -481,14 +537,15 @@ def generate_workflow(
         "deletes": "+".join(sorted({e.split()[1] for e in events if e.startswith("DELETE")})) or "none",
         "update": str("UPDATE" in events),
         "compactions": "+".join(sorted({e for e in events[:-1] if "COMPACT" in e} | {"final"})),
-        "schema_changes": "+".join(sorted(set(schema_changes))) or "none",
+        "schema_changes": "+".join(sorted(set(builder.schema_changes))) or "none",
         "manifests_rewritten": str("REWRITE MANIFESTS" in events),
     }
     for kind in PRIMITIVE_TYPES:
         features[f"type_{kind}"] = str(any(c.name.endswith(f"_{kind}") for c in columns))
     # A filter names a column that exists under the same name at every step.
     stable = [c for c in columns if c.name in {c.name for c in created}]
-    filters = _filters(seed, stable, features["partition"] if any(c.partition_source for c in stable) else "none", next_id)
+    stable_kind = partition_kind if any(c.partition_source for c in stable) else "none"
+    filters = _filters(streams["filters"], stable, stable_kind, builder.next_id)
     return GeneratedWorkflow(seed, definition, dimensions, features, filters)
 
 
