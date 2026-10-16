@@ -23,6 +23,7 @@ Unified CLI for generating Apache Iceberg tables with PySpark, PyIceberg, or Pol
 """
 
 import argparse
+import json
 import logging
 import os
 import subprocess
@@ -429,7 +430,23 @@ Examples:
     workflow_generate_parser.add_argument('--output', default=None,
                        help='File to write the workflow YAML to (default: standard output)')
 
+    checks_parser = subparsers.add_parser('checks', help='Describe the table checks')
+    checks_subparsers = checks_parser.add_subparsers(dest='checks_action', required=True)
+    checks_list_parser = checks_subparsers.add_parser('list', help='List every table check with its basis and source')
+    checks_list_parser.add_argument('--format', choices=['markdown', 'json'], default='markdown')
+
     args = parser.parse_args()
+
+    if args.command == 'checks':
+        from iceberg_fuzzer.checks import TABLE_CHECKS
+        rows = [check.info() for check in TABLE_CHECKS.values()]
+        if args.format == 'json':
+            print(json.dumps(rows, indent=2))
+        else:
+            print("| Check | Asserts | Basis | Runs after | Source |\n|---|---|---|---|---|")
+            for row in rows:
+                print(f"| `{row['name']}` | {row['summary']} | {row['basis']} | {row['operations']} | {row['source']} |")
+        return
 
     # Handle build-shapes command
     if args.command == 'build-shapes':

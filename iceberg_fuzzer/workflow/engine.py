@@ -150,11 +150,9 @@ def _cross_engine_assertions(post_hashes: dict[str, int]) -> list[AssertionResul
 
     values = list(post_hashes.values())
     all_agree = all(v == values[0] for v in values)
-    return [AssertionResult(
-        name="cross_engine.content_hash",
-        passed=all_agree,
-        expected="all engines agree",
-        actual=dict(post_hashes) if not all_agree else f"agreed ({values[0]})",
+    return [AssertionResult.of(
+        "cross_engine", all_agree, "all engines agree",
+        dict(post_hashes) if not all_agree else f"agreed ({values[0]})", problem="content_hash",
     )]
 
 
@@ -169,18 +167,14 @@ def _snapshot_assertions(expect: str, before: tuple, after: tuple) -> list[Asser
     """Check the current snapshot after a replace step against its declared expectation."""
     (before_id, _), (after_id, after_operation) = before, after
     if expect == 'replace_or_unchanged':
-        return [AssertionResult(
-            name="snapshot.replace_or_unchanged",
-            passed=after_id == before_id or after_operation == 'replace',
-            expected=f"snapshot {before_id} unchanged, or a new replace snapshot",
-            actual=f"{after_id} ({after_operation})",
+        return [AssertionResult.of(
+            "snapshot", after_id == before_id or after_operation == 'replace',
+            f"snapshot {before_id} unchanged, or a new replace snapshot", f"{after_id} ({after_operation})",
+            problem="replace_or_unchanged",
         )]
     if expect == 'replace':
         return [
-            AssertionResult(
-                name="snapshot.new", passed=after_id != before_id,
-                expected=f"a snapshot other than {before_id}", actual=after_id,
-            ),
+            AssertionResult.of("snapshot", after_id != before_id, f"a snapshot other than {before_id}", after_id, problem="new"),
             AssertionResult.equal("snapshot.operation", "replace", after_operation),
         ]
     return [AssertionResult.equal("snapshot.unchanged", before_id, after_id)]
@@ -205,9 +199,7 @@ def _reraise_interrupt(error: BaseException) -> None:
 
 
 def _read_failure(engine_name: EngineName, error: BaseException, check: str = "read") -> AssertionResult:
-    return AssertionResult(
-        name=f"{engine_name}.{check}", passed=False, expected="the reader reads the table", actual=_error_message(error),
-    )
+    return AssertionResult.of(check, False, "the reader reads the table", _error_message(error), reader=engine_name)
 
 
 def _capture(engines, warehouse_path, namespace, name) -> tuple[dict[EngineName, Checkpoint], list[AssertionResult]]:
@@ -317,8 +309,8 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
             assertions.append(_read_failure(engine_name, error, "read_after"))
             continue
         for a in validated:
-            assertions.append(AssertionResult(name=f"{engine_name}.{a.name}", passed=a.passed, expected=a.expected, actual=a.actual))
-            if a.name == 'content_hash':
+            assertions.append(a.for_reader(engine_name))
+            if a.check == 'content_hash' and a.row_filter is None:
                 post_hashes[engine_name] = a.actual
     assertions.extend(_cross_engine_assertions(post_hashes))
     return OperationResult.success(assertions)
@@ -472,8 +464,8 @@ def _process_table(
                     check_states.append((check, check.before(namespace, table_name)))
                 except BaseException as e:
                     _reraise_interrupt(e)
-                    check_failures.append(AssertionResult(
-                        name=check.name, passed=False, expected="check completes before the step", actual=_error_message(e),
+                    check_failures.append(AssertionResult.of(
+                        check.name, False, "check completes before the step", _error_message(e), problem="error_before_step",
                     ))
             try:
                 if operation == 'replace':
@@ -513,8 +505,8 @@ def _process_table(
                     op_result.assertions.extend(check.after(state, namespace, table_name))
                 except BaseException as e:
                     _reraise_interrupt(e)
-                    op_result.assertions.append(AssertionResult(
-                        name=check.name, passed=False, expected="check completes", actual=_error_message(e),
+                    op_result.assertions.append(AssertionResult.of(
+                        check.name, False, "check completes", _error_message(e), problem="error",
                     ))
 
             # Update alive_ids and run point query validation.
@@ -562,6 +554,10 @@ def _process_table(
     return result
 
 
+def _outcome(a: AssertionResult) -> str:
+    return "FAIL" if not a.passed else "PASS" if a.applicable else "N/A"
+
+
 def _print_table_result(result: TableResult):
     """Print per-table result."""
     prefix = "✅" if result.passed else "❌"
@@ -570,13 +566,13 @@ def _print_table_result(result: TableResult):
     if result.error:
         # Show any steps that completed before the error
         for step_id, assertions in result.step_assertions.items():
-            summary = ", ".join(f"{a.name}={'PASS' if a.passed else 'FAIL'}" for a in assertions)
+            summary = ", ".join(f"{a.name}={_outcome(a)}" for a in assertions)
             print(f"  ✅ {qualified} [{step_id}]: {summary}")
         print(f"  {prefix} {qualified}: FAILED - {result.error}")
         return
 
     for step_id, assertions in result.step_assertions.items():
-        summary = ", ".join(f"{a.name}={'PASS' if a.passed else 'FAIL'}" for a in assertions)
+        summary = ", ".join(f"{a.name}={_outcome(a)}" for a in assertions)
         step_passed = all(a.passed for a in assertions)
         step_prefix = "✅" if step_passed else "❌"
         print(f"  {step_prefix} {qualified} [{step_id}]: {summary}")

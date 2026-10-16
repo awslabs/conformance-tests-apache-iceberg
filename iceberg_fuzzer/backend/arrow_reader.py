@@ -90,8 +90,8 @@ class ArrowValidation(ValidationEngine):
         ]
         for row_filter, (rows, content_hash) in checkpoint.filtered.items():
             now_rows, now_hash = current.filtered[row_filter]
-            assertions.append(AssertionResult.equal(f"row_count where {row_filter}", rows, now_rows))
-            assertions.append(AssertionResult.equal(f"content_hash where {row_filter}", content_hash, now_hash))
+            assertions.append(AssertionResult.row_count(rows, now_rows, row_filter=row_filter))
+            assertions.append(AssertionResult.content_hash(content_hash, now_hash, row_filter=row_filter))
         return assertions
 
     def filtered_count(self, warehouse: str, namespace: str, table_name: str, column_filter: ColumnFilter) -> int:

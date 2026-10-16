@@ -153,7 +153,7 @@ python3 -m iceberg_fuzzer.cli workflow run \
     --table-checks all
 ```
 
-`--readers` picks the readers that validate every step, DuckDB and PySpark by default. `--table-checks` runs table checks around the steps, by name or `all`, such as `manifest_minimum` and `column_statistics`; see `TABLE_CHECKS` in `iceberg_fuzzer/checks.py`. PyIceberg, Polars, Daft and iceberg-rust, and the table checks, read local warehouses only. A generated workflow lists its suggested row filters in its header.
+`--readers` picks the readers that validate every step, DuckDB and PySpark by default. `--table-checks` runs table checks around the steps, by name or `all`, such as `manifest_minimum` and `column_statistics`; `iceberg-fuzzer checks list` prints every check with what it asserts, its basis and a source link. PyIceberg, Polars, Daft and iceberg-rust, and the table checks, read local warehouses only. A generated workflow lists its suggested row filters in its header.
 
 ### Workflow YAML format
 
@@ -238,7 +238,7 @@ steps:
 
 - **Writer backend.** A `MutationEngine` subclass, registered with `register_mutation_backend("name", "module:Class")` in `iceberg_fuzzer.workflow.engine`. Workflow steps then name it as their `backend`. A writer that only writes Parquet files can subclass `PyIcebergMutation` and override `_parse` and `_write`, as `DuckDBMutation` does.
 - **Reader.** A subclass of `ArrowValidation` in `iceberg_fuzzer.backend.arrow_reader` that implements `scan(table, row_filter)`. The base class hashes the rows, reads through row filters and reports snapshots. See the Polars and Daft readers.
-- **Table check.** A `TableCheck` subclass in `iceberg_fuzzer.checks`, with a `name`, the operations it runs around, and `before` and `after` methods returning `AssertionResult`s. Add it to `TABLE_CHECKS`. `iceberg_metadata_checks(load_table, names)` builds the named checks, or all of them.
+- **Table check.** A `TableCheck` subclass in a module of `iceberg_fuzzer.checks`, with a `name`, a one-line `summary`, its `basis` and `source`, the operations it runs around, and `before` and `after` methods returning `AssertionResult`s. `NewFilesCheck` and `CommitCheck` cover checks on the files a step adds and on what it commits. A check with nothing to check returns `_not_applicable(reason)`, so it is not counted as tested. Add it to `TABLE_CHECKS`. `iceberg_metadata_checks(load_table, names)` builds the named checks, or all of them.
 - **Generated workflow dimension.** In `iceberg_fuzzer.workflow.random_sql`, a share or bounds in `GeneratorConfig`, a `_Builder` method that draws from its own stream, `self.streams["<dimension>"]`, and a feature for `pairwise_seeds`. Each dimension's draws come from its own stream, so a new dimension leaves the other dimensions' choices for every seed unchanged.
 
 ## Requirements
