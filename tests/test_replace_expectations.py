@@ -124,3 +124,23 @@ def test_a_reader_that_could_not_read_the_input_still_checks_the_output(tmp_path
     late = ReadsOnlyTheOutput(rows=4, content=9, readable=False)
     result = _replace(tmp_path, "true", engines=[("a", _Table()), ("late", late)])
     assert {a.name for a in result.assertions if not a.passed} == {"late.read", "late.row_count", "cross_engine.content_hash"}
+
+
+def test_a_reader_panic_is_a_failed_read_but_an_interrupt_stops_the_run():
+    from iceberg_fuzzer.workflow.engine import _capture
+
+    class PanicException(BaseException):
+        pass
+
+    class Panics:
+        def capture_checkpoint(self, *args):
+            raise PanicException("assertion failed")
+
+    class Interrupted:
+        def capture_checkpoint(self, *args):
+            raise KeyboardInterrupt
+
+    _, failures = _capture([("polars", Panics())], "w", "ns", "t")
+    assert [f.name for f in failures] == ["polars.read"]
+    with pytest.raises(KeyboardInterrupt):
+        _capture([("polars", Interrupted())], "w", "ns", "t")

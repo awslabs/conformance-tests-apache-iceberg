@@ -194,6 +194,14 @@ def _error_message(error: Exception) -> str:
     return f"{type(error).__name__}: {cause if cause and 'An error occurred while calling' in first else first}"
 
 
+def _reraise_interrupt(error: BaseException) -> None:
+    """Readers built on Rust, such as Polars, raise a panic as a BaseException, which counts as a
+    failed check like any other error. Anything else that is not an Exception, such as Ctrl-C,
+    still stops the run."""
+    if not isinstance(error, Exception) and type(error).__name__ != "PanicException":
+        raise error
+
+
 def _read_failure(engine_name: EngineName, error: Exception, check: str = "read") -> AssertionResult:
     return AssertionResult(
         name=f"{engine_name}.{check}", passed=False, expected="the reader reads the table", actual=_error_message(error),
@@ -208,7 +216,8 @@ def _capture(engines, warehouse_path, namespace, name) -> tuple[dict[EngineName,
     for engine_name, engine in engines:
         try:
             checkpoints[engine_name] = engine.capture_checkpoint(warehouse_path, namespace, name)
-        except Exception as error:
+        except BaseException as error:
+            _reraise_interrupt(error)
             failures.append(_read_failure(engine_name, error))
     return checkpoints, failures
 
@@ -290,7 +299,8 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
             # compared with the row count the other readers saw before and with their content.
             try:
                 post = engine.capture_checkpoint(warehouse_path, namespace, name)
-            except Exception as error:
+            except BaseException as error:
+                _reraise_interrupt(error)
                 assertions.append(_read_failure(engine_name, error))
                 continue
             if reference is not None:
@@ -299,7 +309,8 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
             continue
         try:
             validated = engine.validate(checkpoints[engine_name], warehouse_path, namespace, name)
-        except Exception as error:
+        except BaseException as error:
+            _reraise_interrupt(error)
             # The reader read the table before the command, so the command's output is what it cannot read.
             assertions.append(_read_failure(engine_name, error, "read_after"))
             continue
@@ -442,7 +453,8 @@ def _process_table(
                 _, first_engine = engines[0]
                 alive_ids = first_engine.get_row_ids(warehouse_path, namespace, table_name)
                 queryable_columns = first_engine.get_columns(warehouse_path, namespace, table_name)
-        except Exception as e:
+        except BaseException as e:
+            _reraise_interrupt(e)
             result.error = f"Workflow setup failed: {e}"
             return result
 
@@ -456,7 +468,8 @@ def _process_table(
             for check in checks:
                 try:
                     check_states.append((check, check.before(namespace, table_name)))
-                except Exception as e:
+                except BaseException as e:
+                    _reraise_interrupt(e)
                     check_failures.append(AssertionResult(
                         name=check.name, passed=False, expected="check completes before the step", actual=_error_message(e),
                     ))
@@ -484,7 +497,8 @@ def _process_table(
                     )
                 else:
                     op_result = OperationResult.failed(f"Unknown operation '{operation}' at step '{step_id}'")
-            except Exception as e:
+            except BaseException as e:
+                _reraise_interrupt(e)
                 op_result = OperationResult.failed(f"Step '{step_id}' failed: {_error_message(e)}")
 
             if op_result.error:
@@ -495,7 +509,8 @@ def _process_table(
             for check, state in check_states:
                 try:
                     op_result.assertions.extend(check.after(state, namespace, table_name))
-                except Exception as e:
+                except BaseException as e:
+                    _reraise_interrupt(e)
                     op_result.assertions.append(AssertionResult(
                         name=check.name, passed=False, expected="check completes", actual=f"raised {e!r}",
                     ))
