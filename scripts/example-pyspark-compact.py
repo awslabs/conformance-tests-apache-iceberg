@@ -80,7 +80,7 @@ def create_spark_session(warehouse_path: str) -> SparkSession:
     return spark
 
 
-def compact(spark: SparkSession, warehouse_path: str, namespace: str, table_name: str):
+def compact(spark: SparkSession, warehouse_path: str, namespace: str, table_name: str, rewrite_position_deletes: bool = False):
     is_s3_table = warehouse_path.startswith("arn:aws:s3tables:")
     catalog = "s3tables" if is_s3_table else "local"
     qualified = f"{catalog}.{namespace}.{table_name}"
@@ -89,6 +89,10 @@ def compact(spark: SparkSession, warehouse_path: str, namespace: str, table_name
     spark.sql(
         f"CALL {catalog}.system.rewrite_data_files(table => '{namespace}.{table_name}')"
     )
+    if rewrite_position_deletes:
+        spark.sql(
+            f"CALL {catalog}.system.rewrite_position_delete_files(table => '{namespace}.{table_name}')"
+        )
     print(f"Compaction complete: {qualified}")
 
 
@@ -99,11 +103,15 @@ def main():
     )
     parser.add_argument("--namespace", required=True, help="Table namespace")
     parser.add_argument("--table-name", required=True, help="Table name")
+    parser.add_argument(
+        "--rewrite-position-deletes", action="store_true",
+        help="Also rewrite position delete files, as compactors that merge deletes do",
+    )
     args = parser.parse_args()
 
     spark = create_spark_session(args.warehouse)
     try:
-        compact(spark, args.warehouse, args.namespace, args.table_name)
+        compact(spark, args.warehouse, args.namespace, args.table_name, args.rewrite_position_deletes)
     finally:
         spark.stop()
 

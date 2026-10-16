@@ -22,7 +22,7 @@ from dataclasses import dataclass, field, replace
 
 import yaml
 
-GENERATOR_VERSION = 4
+GENERATOR_VERSION = 5
 
 TABLE = "${table}"
 # Spark rejects writing expressions it cannot prove non-null into required columns.
@@ -33,6 +33,9 @@ SCALAR_SPARK_READS = "SET `spark.sql.iceberg.vectorization.enabled`=false"
 # The split range() gets by default from the fuzzer's spark.default.parallelism, written out.
 INPUT_PARTITIONS = 8
 IN_PROCESS_SPARK_COMPACTION = "CALL ${catalog}.system.rewrite_data_files(table => '${namespace}.${table_name}')"
+# Spark rewrites delete files separately; with it, a Spark compaction also merges position deletes,
+# as the compactor under test does, so its delete files are a reference for theirs.
+IN_PROCESS_SPARK_DELETE_REWRITE = "CALL ${catalog}.system.rewrite_position_delete_files(table => '${namespace}.${table_name}')"
 # Rewrites every manifest with the current schema ID, so files written under an earlier schema sit
 # in manifests that claim the current one, as Spark's manifest merging also leaves them.
 REWRITE_MANIFESTS = "CALL ${catalog}.system.rewrite_manifests(table => '${namespace}.${table_name}')"
@@ -466,7 +469,7 @@ class _Builder:
         if self.spark_compact_command and rng.random() < config.spark_compaction_share:
             if self.scalar_reads:
                 self.steps.append({"id": f"spark_compact_{len(self.steps) + 1}", "operation": "sql",
-                                   "config": {"backend": "pyspark", "statements": [IN_PROCESS_SPARK_COMPACTION]}})
+                                   "config": {"backend": "pyspark", "statements": [IN_PROCESS_SPARK_COMPACTION, IN_PROCESS_SPARK_DELETE_REWRITE]}})
                 self.events.append("Spark COMPACT in process")
             else:
                 self.steps.append(_compaction(f"spark_compact_{len(self.steps) + 1}", self.spark_compact_command, None, config.compaction_timeout))
