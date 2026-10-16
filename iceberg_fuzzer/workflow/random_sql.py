@@ -6,9 +6,9 @@ Every value is a deterministic function of the row id and the seed, so the same 
 GENERATOR_VERSION always give the same workflow and the same rows, and a failure replays exactly.
 
 Each dimension, such as the schema, the writers or the deletes, draws from its own random stream,
-seeded by the generator version, the seed and the dimension's name. A new dimension gets a new
-stream, so adding it leaves every other dimension's choices, and so every existing seed's
-workflow apart from the new steps, unchanged. A dimension is a stream name, a share or bounds in
+seeded by the base version, the seed and the dimension's name, and the dimension's own version
+once it has changed. A new dimension gets a new stream, and a changed one a new version, so
+either leaves every other dimension's choices for every seed unchanged. A dimension is a stream name, a share or bounds in
 GeneratorConfig, a method of _Builder that adds its steps, and a feature for pairwise selection.
 
 Compaction steps expect `replace_or_unchanged`, because a compactor may decline a generated
@@ -22,7 +22,12 @@ from dataclasses import dataclass, field, replace
 
 import yaml
 
-GENERATOR_VERSION = 5
+# Seeds every dimension's stream. Changing it changes every seed's workflow.
+BASE_VERSION = 5
+# Dimensions changed since BASE_VERSION, with their own version, so a change to one dimension
+# reseeds only that dimension's stream.
+DIMENSION_VERSIONS: dict[str, int] = {"filters": 1}
+GENERATOR_VERSION = str(BASE_VERSION) + "".join(f"+{d}{v}" for d, v in sorted(DIMENSION_VERSIONS.items()))
 
 TABLE = "${table}"
 # Spark rejects writing expressions it cannot prove non-null into required columns.
@@ -217,7 +222,8 @@ class _Streams:
 
     def __getitem__(self, dimension: str) -> random.Random:
         if dimension not in self._streams:
-            self._streams[dimension] = random.Random(f"{GENERATOR_VERSION}:{self._seed}:{dimension}")
+            version = f":{DIMENSION_VERSIONS[dimension]}" if dimension in DIMENSION_VERSIONS else ""
+            self._streams[dimension] = random.Random(f"{BASE_VERSION}:{self._seed}:{dimension}{version}")
         return self._streams[dimension]
 
 
@@ -399,6 +405,8 @@ class _Builder:
         self.events: list[str] = []
         self.schema_changes: list[str] = []
         self.next_id = 0
+        # Every name a rename has taken a column away from, even one renamed back later.
+        self.renamed: set[str] = set()
         self.duckdb_written = False
         # Spark's vectorized reader cannot read some DuckDB files, see SCALAR_SPARK_READS.
         self.scalar_reads = False
@@ -456,6 +464,8 @@ class _Builder:
         self.statements.append(statement)
         self.events.append(f"ALTER {description}")
         self.schema_changes.append(description.split()[0])
+        if description.startswith("rename"):
+            self.renamed.add(description.split()[1])
         self.scalar_reads = self.scalar_reads or (self.duckdb_written and description.startswith("promote"))
         if rng.random() < self.config.rewrite_manifests_share:
             self.statements.append(REWRITE_MANIFESTS)
@@ -547,7 +557,7 @@ def generate_workflow(
     for kind in PRIMITIVE_TYPES:
         features[f"type_{kind}"] = str(any(c.name.endswith(f"_{kind}") for c in columns))
     # A filter names a column that exists under the same name at every step.
-    stable = [c for c in columns if c.name in {c.name for c in created}]
+    stable = [c for c in columns if c.name in {c.name for c in created} and c.name not in builder.renamed]
     stable_kind = partition_kind if any(c.partition_source for c in stable) else "none"
     filters = _filters(streams["filters"], stable, stable_kind, builder.next_id)
     return GeneratedWorkflow(seed, definition, dimensions, features, filters)

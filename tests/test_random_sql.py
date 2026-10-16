@@ -111,3 +111,21 @@ def test_a_dimension_draws_from_its_own_stream():
         no_updates = generate_workflow(seed, "rust", "spark", replace(base, update_share=0.0))
         assert with_updates.dimensions["columns"] == no_updates.dimensions["columns"]
         assert without(with_updates.dimensions["workflow"], "UPDATE") == without(no_updates.dimensions["workflow"], "UPDATE")
+
+
+def test_a_dimension_version_reseeds_only_that_dimension(monkeypatch):
+    from iceberg_fuzzer.workflow import random_sql
+    before = [generate_workflow(seed, "rust", "spark") for seed in range(30)]
+    monkeypatch.setitem(random_sql.DIMENSION_VERSIONS, "filters", random_sql.DIMENSION_VERSIONS["filters"] + 1)
+    after = [generate_workflow(seed, "rust", "spark") for seed in range(30)]
+    assert [g.definition for g in before] == [g.definition for g in after]
+    assert [g.filters for g in before] != [g.filters for g in after]
+
+
+def test_filters_skip_columns_renamed_at_any_step():
+    from iceberg_fuzzer.workflow.random_sql import GeneratorConfig
+    config = GeneratorConfig(deep_nesting_share=0.0, pyiceberg_writer_share=0.3, duckdb_writer_share=0.2)
+    for seed in range(1, 800):
+        generated = generate_workflow(seed, "rust", "spark", config)
+        renamed = {e.split()[2] for e in generated.dimensions["workflow"].split(", ") if e.startswith("ALTER rename")}
+        assert not any(name in f for f in generated.filters for name in renamed), seed
