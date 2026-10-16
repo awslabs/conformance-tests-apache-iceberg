@@ -14,8 +14,9 @@ _OPERATION_REQUIRED_CONFIG_FIELDS = {
 }
 
 # What a replace step may require of the table afterwards: a new replace snapshot, no new
-# snapshot because there was nothing to rewrite, or no change because the command declined.
-REPLACE_EXPECTATIONS = ('replace', 'none', 'unchanged')
+# snapshot because there was nothing to rewrite, no change because the command declined, or
+# either a replace snapshot or no change, for generated tables a compactor may refuse.
+REPLACE_EXPECTATIONS = ('replace', 'none', 'unchanged', 'replace_or_unchanged')
 
 # Operations whose snapshot a later rollback step may return to.
 _ROLLBACK_TARGET_OPERATIONS = ('append', 'delete', 'sql')

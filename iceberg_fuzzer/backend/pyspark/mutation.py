@@ -85,7 +85,7 @@ class PySparkMutation(MutationEngine):
     def run_sql(self, namespace: str, table_name: str, statements: list[str]) -> SqlResult:
         spark = self._get_spark()
         qualified = self._qualified_name(namespace, table_name)
-        placeholders = {'table': qualified, 'namespace': namespace, 'table_name': table_name}
+        placeholders = {'table': qualified, 'namespace': namespace, 'table_name': table_name, 'catalog': self._catalog_name()}
         for statement in statements:
             spark.sql(Template(statement).safe_substitute(placeholders))
         return SqlResult(

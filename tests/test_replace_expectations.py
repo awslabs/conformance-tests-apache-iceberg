@@ -30,3 +30,9 @@ def test_snapshot_engine_is_the_first_that_reports_snapshots():
     assert _snapshot_engine([("a", plain), ("b", reporting)]) is reporting
     with pytest.raises(ValueError, match="reports snapshots"):
         _snapshot_engine([("a", plain)])
+
+
+def test_replace_or_unchanged_accepts_either_outcome():
+    assert _passed("replace_or_unchanged", (1, "append"), (2, "replace")) == {"snapshot.replace_or_unchanged": True}
+    assert _passed("replace_or_unchanged", (1, "append"), (1, "append")) == {"snapshot.replace_or_unchanged": True}
+    assert _passed("replace_or_unchanged", (1, "append"), (2, "overwrite")) == {"snapshot.replace_or_unchanged": False}

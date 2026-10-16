@@ -76,6 +76,12 @@ def _init_mutation_engines(
     for name in backends:
         if name == "pyspark":
             engines[name] = PySparkMutation(warehouse_path, seed=seed)
+        elif name == "pyiceberg":
+            from iceberg_fuzzer.backend.pyiceberg.mutation import PyIcebergMutation
+            engines[name] = PyIcebergMutation(warehouse_path, seed=seed)
+        elif name == "duckdb":
+            from iceberg_fuzzer.backend.duckdb.mutation import DuckDBMutation
+            engines[name] = DuckDBMutation(warehouse_path, seed=seed)
         else:
             raise ValueError(f"Unknown backend: {name}")
     return engines
@@ -111,6 +117,13 @@ def _snapshot_engine(engines) -> ValidationEngine:
 def _snapshot_assertions(expect: str, before: tuple, after: tuple) -> list[AssertionResult]:
     """Check the current snapshot after a replace step against its declared expectation."""
     (before_id, _), (after_id, after_operation) = before, after
+    if expect == 'replace_or_unchanged':
+        return [AssertionResult(
+            name="snapshot.replace_or_unchanged",
+            passed=after_id == before_id or after_operation == 'replace',
+            expected=f"snapshot {before_id} unchanged, or a new replace snapshot",
+            actual=f"{after_id} ({after_operation})",
+        )]
     if expect == 'replace':
         return [
             AssertionResult(
@@ -168,13 +181,13 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
     if returncode is None:
         return OperationResult.failed(f"Step '{step_id}' timed out after {step['config'].get('timeout', 300)}s")
     # A declined command may exit non-zero; the table must then be unchanged.
-    if returncode != 0 and expect != 'unchanged':
+    if returncode != 0 and expect not in ('unchanged', 'replace_or_unchanged'):
         return OperationResult.failed(f"Step '{step_id}' exited with code {returncode}")
 
     assertions: list[AssertionResult] = []
     if snapshot_engine:
         after = snapshot_engine.current_snapshot(warehouse_path, namespace, name)
-        assertions.extend(_snapshot_assertions(expect, before, after))
+        assertions.extend(_snapshot_assertions('unchanged' if returncode else expect, before, after))
 
     post_hashes: dict[str, int] = {}
     for engine_name, engine in engines:
@@ -351,7 +364,9 @@ def _process_table(
                 else:
                     op_result = OperationResult.failed(f"Unknown operation '{operation}' at step '{step_id}'")
             except Exception as e:
-                op_result = OperationResult.failed(f"Step '{step_id}' failed: {e}")
+                # PySpark exceptions carry their message in `desc` and print as empty.
+                message = str(e) or str(getattr(e, 'desc', '')).strip()
+                op_result = OperationResult.failed(f"Step '{step_id}' failed: {type(e).__name__}: {message}")
 
             if op_result.error:
                 result.error = op_result.error
