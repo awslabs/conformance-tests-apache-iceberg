@@ -129,3 +129,16 @@ def test_filters_skip_columns_renamed_at_any_step():
         generated = generate_workflow(seed, "rust", "spark", config)
         renamed = {e.split()[2] for e in generated.dimensions["workflow"].split(", ") if e.startswith("ALTER rename")}
         assert not any(name in f for f in generated.filters for name in renamed), seed
+
+
+def test_target_file_sizes_are_drawn_only_when_the_option_is_set():
+    from dataclasses import replace
+    from iceberg_fuzzer.workflow.random_sql import GeneratorConfig
+    plain = GeneratorConfig()
+    sized = replace(plain, target_file_size_option="--target-file-size")
+    commands = [s["config"]["command"] for seed in range(40) for s in generate_workflow(seed, "rust", "spark", sized).definition["steps"] if s["operation"] == "replace"]
+    assert any(" --target-file-size " in c for c in commands) and any(c == "rust" for c in commands)
+    for seed in range(40):
+        assert all(s["config"].get("command", "rust") in ("rust", "spark") for s in generate_workflow(seed, "rust", "spark", plain).definition["steps"] if s["operation"] == "replace")
+        assert [e.split(" to ", 1)[0] if e.endswith(" bytes") else e for e in generate_workflow(seed, "rust", "spark", sized).dimensions["workflow"].split(", ")] == \
+            generate_workflow(seed, "rust", "spark", plain).dimensions["workflow"].split(", ")

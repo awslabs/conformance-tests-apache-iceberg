@@ -26,7 +26,7 @@ import yaml
 BASE_VERSION = 5
 # Dimensions changed since BASE_VERSION, with their own version, so a change to one dimension
 # reseeds only that dimension's stream.
-DIMENSION_VERSIONS: dict[str, int] = {"filters": 1}
+DIMENSION_VERSIONS: dict[str, int] = {"filters": 1, "target_file_sizes": 1}
 GENERATOR_VERSION = str(BASE_VERSION) + "".join(f"+{d}{v}" for d, v in sorted(DIMENSION_VERSIONS.items()))
 
 TABLE = "${table}"
@@ -79,6 +79,12 @@ class GeneratorConfig:
     # then rewritten with the new schema ID.
     schema_change_share: float = 0.3
     rewrite_manifests_share: float = 0.5
+    # The compaction commands' option for a target file size in bytes, such as "--target-file-size",
+    # or None to leave every compaction at its default. A small target leaves larger files out of
+    # a compaction, so deletes on them survive it and the compactor rewrites them.
+    target_file_size_option: str | None = None
+    # None is the compactor's default.
+    target_file_sizes: tuple[int | None, ...] = (None, 16 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024)
     # Commits written and committed by PyIceberg instead of Spark, on local warehouses. Partition
     # transforms other than identity need PyIceberg's pyiceberg-core package.
     pyiceberg_writer_share: float = 0.0
@@ -407,6 +413,7 @@ class _Builder:
         self.next_id = 0
         # Every name a rename has taken a column away from, even one renamed back later.
         self.renamed: set[str] = set()
+        self.target_sizes: set[int] = set()
         self.duckdb_written = False
         # Spark's vectorized reader cannot read some DuckDB files, see SCALAR_SPARK_READS.
         self.scalar_reads = False
@@ -482,15 +489,28 @@ class _Builder:
                                    "config": {"backend": "pyspark", "statements": [IN_PROCESS_SPARK_COMPACTION, IN_PROCESS_SPARK_DELETE_REWRITE]}})
                 self.events.append("Spark COMPACT in process")
             else:
-                self.steps.append(_compaction(f"spark_compact_{len(self.steps) + 1}", self.spark_compact_command, None, config.compaction_timeout))
-                self.events.append("Spark COMPACT")
+                command, size = self._with_target_size(self.spark_compact_command)
+                self.steps.append(_compaction(f"spark_compact_{len(self.steps) + 1}", command, None, config.compaction_timeout))
+                self.events.append(f"Spark COMPACT{size}")
         else:
             self.final_compaction()
 
+    def _with_target_size(self, command: str) -> tuple[str, str]:
+        """The command with a target file size drawn for it, and how the events name the size."""
+        option = self.config.target_file_size_option
+        if option is None:
+            return command, ""
+        size = self.streams["target_file_sizes"].choice(self.config.target_file_sizes)
+        if size is None:
+            return command, ""
+        self.target_sizes.add(size)
+        return f"{command} {option} {size}", f" to {size} bytes"
+
     def final_compaction(self):
         self._flush()
-        self.steps.append(_compaction(f"compact_{len(self.steps) + 1}", self.compact_command, "replace_or_unchanged", self.config.compaction_timeout))
-        self.events.append("COMPACT")
+        command, size = self._with_target_size(self.compact_command)
+        self.steps.append(_compaction(f"compact_{len(self.steps) + 1}", command, "replace_or_unchanged", self.config.compaction_timeout))
+        self.events.append(f"COMPACT{size}")
 
 
 def generate_workflow(
@@ -550,7 +570,8 @@ def generate_workflow(
         "commits": "1" if len(commits) == 1 else "2-3" if len(commits) <= 3 else "4+",
         "deletes": "+".join(sorted({e.split()[1] for e in events if e.startswith("DELETE")})) or "none",
         "update": str("UPDATE" in events),
-        "compactions": "+".join(sorted({e for e in events[:-1] if "COMPACT" in e} | {"final"})),
+        "compactions": "+".join(sorted({e.split(" to ", 1)[0] if e.endswith(" bytes") else e for e in events[:-1] if "COMPACT" in e} | {"final"})),
+        "target_file_size": "small" if builder.target_sizes else "default",
         "schema_changes": "+".join(sorted(set(builder.schema_changes))) or "none",
         "manifests_rewritten": str("REWRITE MANIFESTS" in events),
     }

@@ -80,14 +80,16 @@ def create_spark_session(warehouse_path: str) -> SparkSession:
     return spark
 
 
-def compact(spark: SparkSession, warehouse_path: str, namespace: str, table_name: str, rewrite_position_deletes: bool = False):
+def compact(spark: SparkSession, warehouse_path: str, namespace: str, table_name: str, rewrite_position_deletes: bool = False,
+            target_file_size: int | None = None):
     is_s3_table = warehouse_path.startswith("arn:aws:s3tables:")
     catalog = "s3tables" if is_s3_table else "local"
     qualified = f"{catalog}.{namespace}.{table_name}"
 
     print(f"Compacting {qualified}...")
+    options = f", options => map('target-file-size-bytes', '{target_file_size}')" if target_file_size else ""
     spark.sql(
-        f"CALL {catalog}.system.rewrite_data_files(table => '{namespace}.{table_name}')"
+        f"CALL {catalog}.system.rewrite_data_files(table => '{namespace}.{table_name}'{options})"
     )
     if rewrite_position_deletes:
         spark.sql(
@@ -107,11 +109,12 @@ def main():
         "--rewrite-position-deletes", action="store_true",
         help="Also rewrite position delete files, as compactors that merge deletes do",
     )
+    parser.add_argument("--target-file-size", type=int, default=None, help="Target data file size in bytes")
     args = parser.parse_args()
 
     spark = create_spark_session(args.warehouse)
     try:
-        compact(spark, args.warehouse, args.namespace, args.table_name, args.rewrite_position_deletes)
+        compact(spark, args.warehouse, args.namespace, args.table_name, args.rewrite_position_deletes, args.target_file_size)
     finally:
         spark.stop()
 
