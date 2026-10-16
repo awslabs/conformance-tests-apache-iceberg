@@ -50,7 +50,7 @@ class DuckDBMutation(PyIcebergMutation):
             slices = [(p.partition_key.partition, p.arrow_table_partition) for p in _determine_partitions(table.spec(), schema, rows)]
         else:
             slices = [(Record(), rows)]
-        data_dir = table.location().removeprefix("file:").rstrip("/") + "/data"
+        data_dir = (metadata.properties.get("write.data.path") or table.location().rstrip("/") + "/data").removeprefix("file:")
         Path(data_dir).mkdir(parents=True, exist_ok=True)
         data_files = []
         with duckdb.connect() as connection:

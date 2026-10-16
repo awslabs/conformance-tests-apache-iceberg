@@ -144,3 +144,26 @@ def test_target_file_sizes_are_drawn_only_when_the_option_is_set():
         assert all(s["config"].get("command", "rust") in ("rust", "spark") for s in generate_workflow(seed, "rust", "spark", plain).definition["steps"] if s["operation"] == "replace")
         assert [e.split(" to ", 1)[0] if e.endswith(" bytes") else e for e in generate_workflow(seed, "rust", "spark", sized).dimensions["workflow"].split(", ")] == \
             generate_workflow(seed, "rust", "spark", plain).dimensions["workflow"].split(", ")
+
+
+def test_custom_data_path_can_be_turned_off():
+    from iceberg_fuzzer.workflow.random_sql import GeneratorConfig
+    off = GeneratorConfig(custom_data_path=False)
+    assert any("write.data.path" in generate_workflow(seed, "rust", "spark").dimensions["properties"] for seed in range(40))
+    assert not any("write.data.path" in generate_workflow(seed, "rust", "spark", off).dimensions["properties"] for seed in range(40))
+
+
+def test_write_properties_come_only_in_combinations_that_change_something():
+    for seed in range(400):
+        properties = dict(p.split("=", 1) for p in generate_workflow(seed, "rust", "spark").dimensions["properties"].split(", "))
+        if properties.get("commit.manifest-merge.enabled") == "false":
+            assert "commit.manifest.min-count-to-merge" not in properties
+        if "write.parquet.compression-level" in properties:
+            assert properties["write.parquet.compression-codec"] in ("zstd", "gzip")
+        if "write.delete.parquet.compression-codec" in properties:
+            assert properties["write.delete.parquet.compression-codec"] != properties["write.parquet.compression-codec"]
+        if "write.delete.parquet.compression-level" in properties:
+            assert properties["write.delete.parquet.compression-codec"] in ("zstd", "gzip")
+        for key, mode in properties.items():
+            if key.startswith("write.metadata.metrics.column."):
+                assert mode != properties["write.metadata.metrics.default"]

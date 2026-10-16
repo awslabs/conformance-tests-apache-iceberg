@@ -26,7 +26,7 @@ import yaml
 BASE_VERSION = 5
 # Dimensions changed since BASE_VERSION, with their own version, so a change to one dimension
 # reseeds only that dimension's stream.
-DIMENSION_VERSIONS: dict[str, int] = {"filters": 1, "target_file_sizes": 1}
+DIMENSION_VERSIONS: dict[str, int] = {"filters": 1, "target_file_sizes": 1, "write_properties": 4}
 GENERATOR_VERSION = str(BASE_VERSION) + "".join(f"+{d}{v}" for d, v in sorted(DIMENSION_VERSIONS.items()))
 
 TABLE = "${table}"
@@ -85,6 +85,11 @@ class GeneratorConfig:
     target_file_size_option: str | None = None
     # None is the compactor's default.
     target_file_sizes: tuple[int | None, ...] = (None, 16 * 1024, 64 * 1024, 256 * 1024, 1024 * 1024)
+    # Each optional write property is set with this share, with a value drawn from its options.
+    write_property_share: float = 0.3
+    # Whether write.data.path may point inside the local warehouse. Off for S3 Tables, which
+    # places data files itself.
+    custom_data_path: bool = True
     # Commits written and committed by PyIceberg instead of Spark, on local warehouses. Partition
     # transforms other than identity need PyIceberg's pyiceberg-core package.
     pyiceberg_writer_share: float = 0.0
@@ -261,6 +266,13 @@ def _partitioning(rng: random.Random, config: GeneratorConfig) -> tuple[str, Col
     return kind, source, clause
 
 
+# The properties every generated table sets; _write_properties adds optional ones.
+BASE_PROPERTIES = {
+    "format-version", "write.delete.mode", "write.update.mode", "write.parquet.compression-codec",
+    "write.metadata.metrics.default",
+}
+
+
 def _properties(rng: random.Random, config: GeneratorConfig) -> dict:
     mode = "copy-on-write" if rng.random() < config.copy_on_write_share else "merge-on-read"
     return {
@@ -270,6 +282,54 @@ def _properties(rng: random.Random, config: GeneratorConfig) -> dict:
         "write.parquet.compression-codec": rng.choice(config.codecs),
         "write.metadata.metrics.default": rng.choice(METRICS_MODES),
     }
+
+
+# Optional table properties with values every Iceberg writer accepts, drawn per table. They change
+# how writers lay out pages, files and manifests, or are foreign keys a compaction must keep.
+WRITE_PROPERTY_OPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("write.parquet.page-size-bytes", ("8192", "65536", "1048576")),
+    ("write.parquet.dict-size-bytes", ("4096", "65536", "2097152")),
+    ("write.parquet.page-row-limit", ("100", "1000", "20000")),
+    ("write.target-file-size-bytes", ("1048576", "134217728")),
+    ("write.distribution-mode", ("none", "hash")),
+    ("write.format.default", ("parquet",)),
+    ("write.summary.partition-limit", ("0", "1", "100")),
+    ("commit.manifest-merge.enabled", ("true", "false")),
+    ("gc.enabled", ("true", "false")),
+    ("athena.example", ("1",)),
+    ("flink.example", ("1",)),
+    # Bookkeeping the Firehose Iceberg writer sets on S3 Tables.
+    ("record-expiration-column", ("id",)),
+    ("schema-version-id-updated-by-aws", ("1",)),
+)
+# Under the table's own directory in a local warehouse, so cleanup still removes it.
+CUSTOM_DATA_PATH = "${warehouse}/${namespace}/${table_name}/custom-data"
+COMPRESSION_LEVELS = {"zstd": ("1", "3", "9", "19"), "gzip": ("1", "6", "9")}
+
+
+def _write_properties(rng: random.Random, config: GeneratorConfig, columns: list[Column], codec: str, metrics: str) -> dict:
+    """Optional write properties, only in combinations that change something: a compression level
+    for codecs that take one, a delete file codec that differs from the data file codec, a manifest
+    merge threshold unless merging is off, and a metrics mode for one column that differs from the
+    table's default."""
+    properties = {key: rng.choice(values) for key, values in WRITE_PROPERTY_OPTIONS if rng.random() < config.write_property_share}
+    if codec in COMPRESSION_LEVELS and rng.random() < config.write_property_share:
+        properties["write.parquet.compression-level"] = rng.choice(COMPRESSION_LEVELS[codec])
+    others = [c for c in config.codecs if c != codec]
+    if others and rng.random() < config.write_property_share:
+        delete_codec = rng.choice(others)
+        properties["write.delete.parquet.compression-codec"] = delete_codec
+        if delete_codec in COMPRESSION_LEVELS and rng.random() < config.write_property_share:
+            properties["write.delete.parquet.compression-level"] = rng.choice(COMPRESSION_LEVELS[delete_codec])
+    if properties.get("commit.manifest-merge.enabled") != "false" and rng.random() < config.write_property_share:
+        properties["commit.manifest.min-count-to-merge"] = rng.choice(("2", "100"))
+    if config.custom_data_path and rng.random() < config.write_property_share:
+        properties["write.data.path"] = CUSTOM_DATA_PATH
+    primitive = [c for c in columns[1:] if not c.partition_source and c.sql_type.split("<")[0] not in ("STRUCT", "ARRAY", "MAP")]
+    if primitive and rng.random() < config.write_property_share:
+        mode = rng.choice([m for m in METRICS_MODES if m != metrics])
+        properties[f"write.metadata.metrics.column.{rng.choice(primitive).name}"] = mode
+    return properties
 
 
 def _select(columns: list[Column], start: int, end: int, files: int) -> str:
@@ -561,6 +621,7 @@ def _features(builder: _Builder, created: list[Column], partition_kind: str, pro
         "target_file_size": "small" if builder.target_sizes else "default",
         "schema_changes": "+".join(sorted(builder.schema_changes)) or "none",
         "manifests_rewritten": str(builder.manifests_rewritten),
+        "write_properties": "some" if set(properties) - BASE_PROPERTIES else "none",
     }
     for kind in PRIMITIVE_TYPES:
         features[f"type_{kind}"] = str(any(c.name.endswith(f"_{kind}") for c in builder.columns))
@@ -585,6 +646,10 @@ def generate_workflow(
     if source is not None:
         created.append(source)
     properties = _properties(streams["properties"], config)
+    properties |= _write_properties(
+        streams["write_properties"], config, created,
+        properties["write.parquet.compression-codec"], properties["write.metadata.metrics.default"],
+    )
     definitions = ", ".join(f"{c.name} {c.sql_type}{'' if c.nullable else ' NOT NULL'}" for c in created)
     tblproperties = ", ".join(f"'{k}'='{v}'" for k, v in properties.items())
     create = f"CREATE TABLE {TABLE} ({definitions}) USING iceberg {partition_clause} TBLPROPERTIES ({tblproperties})"
