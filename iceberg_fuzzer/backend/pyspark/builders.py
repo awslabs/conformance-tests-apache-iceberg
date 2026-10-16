@@ -119,6 +119,7 @@ def create_spark_session(warehouse_path, app_name=None):
         .config("spark.sql.parquet.enableVectorizedWriter", "true") \
         .config("spark.sql.files.maxPartitionBytes", "128MB") \
         .config("spark.sql.shuffle.partitions", "200") \
+        .config("spark.sql.session.timeZone", "UTC") \
         .config("spark.default.parallelism", "8") \
         .config("spark.sql.execution.arrow.maxRecordsPerBatch", "10000") \
         .config("spark.sql.codegen.wholeStage", "true") \

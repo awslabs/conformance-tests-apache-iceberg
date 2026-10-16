@@ -44,3 +44,19 @@ def test_pairwise_seeds_cover_every_pair_of_candidates():
     pairs = lambda seed: set(itertools.combinations(sorted(generate_workflow(seed, "compact", "spark").features.items()), 2))
     assert set().union(*(pairs(s) for s in chosen)) == set().union(*(pairs(s) for s in candidates))
     assert len(chosen) < 300 and chosen == pairwise_seeds(candidates)
+
+
+def test_filters_are_deterministic_and_leave_the_workflow_alone():
+    first, again = generate_workflow(7, "rust", "spark"), generate_workflow(7, "rust", "spark")
+    assert first.filters == again.filters and first.filters[0].startswith("id >= ")
+    assert {len(generate_workflow(seed, "rust", "spark").filters) for seed in range(40)} <= {1, 2}
+
+
+def test_compactions_feature_keeps_intermediate_rust_compactions():
+    for seed in range(200):
+        generated = generate_workflow(seed, "rust", "spark")
+        replaces = [s for s in generated.definition["steps"] if s["operation"] == "replace"]
+        if sum(s["config"]["command"] == "rust" for s in replaces[:-1]):
+            assert "COMPACT" in generated.features["compactions"].split("+")
+            return
+    raise AssertionError("no seed in 0 to 199 has an intermediate Rust compaction")

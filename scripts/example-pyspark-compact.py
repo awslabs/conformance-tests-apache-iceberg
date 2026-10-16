@@ -23,6 +23,8 @@ def create_spark_session(warehouse_path: str) -> SparkSession:
         SparkSession.builder.appName("iceberg-fuzzer-compact")
         .master("local[*]")
         .config("spark.ui.enabled", "false")
+        # The vectorized reader cannot read DELTA_LENGTH_BYTE_ARRAY strings, which DuckDB writes.
+        .config("spark.sql.iceberg.vectorization.enabled", "false")
         .config(
             "spark.sql.extensions",
             "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",

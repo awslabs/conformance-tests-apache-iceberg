@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+import re
+
 import yaml
 
 
@@ -81,6 +83,12 @@ def load_workflow(path: str) -> Workflow:
                 f"Step '{step['id']}' (replace) has expect '{config['expect']}', "
                 f"expected one of {', '.join(REPLACE_EXPECTATIONS)}"
             )
+
+        if op == 'replace' and 'decline_output' in config:
+            try:
+                re.compile(config['decline_output'])
+            except (re.error, TypeError) as error:
+                raise ValueError(f"Step '{step['id']}' (replace) has an invalid decline_output pattern: {error}") from error
 
         if op == 'sql':
             _validate_statements(f"Step '{step['id']}' (sql)", config)

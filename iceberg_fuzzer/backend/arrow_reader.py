@@ -56,9 +56,17 @@ class ArrowValidation(ValidationEngine):
             to the full scan, since a filter changes which files and deletes a reader plans.
     """
 
+    reports_snapshots = True
+
     def __init__(self, load_table: LoadTable, row_filters: tuple[str, ...] = ()):
         self._load_table = load_table
         self._row_filters = row_filters
+
+    def current_snapshot(self, warehouse: str, namespace: str, table_name: str) -> tuple[int | None, str | None]:
+        snapshot = self._load_table(namespace, table_name).current_snapshot()
+        if snapshot is None:
+            return None, None
+        return snapshot.snapshot_id, snapshot.summary.operation.value if snapshot.summary else None
 
     @abstractmethod
     def scan(self, table: Table, row_filter: str | None = None) -> pa.Table:

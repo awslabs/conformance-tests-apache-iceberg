@@ -4,6 +4,7 @@ Workflow engine for iceberg-fuzzer.
 Runs multi-step workflows against existing Iceberg tables.
 """
 
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass, field
@@ -135,8 +136,43 @@ def _snapshot_assertions(expect: str, before: tuple, after: tuple) -> list[Asser
     return [AssertionResult.equal("snapshot.unchanged", before_id, after_id)]
 
 
-def _capture(engines, warehouse_path, namespace, name) -> dict[EngineName, Checkpoint]:
-    return {engine_name: engine.capture_checkpoint(warehouse_path, namespace, name) for engine_name, engine in engines}
+def _error_message(error: Exception) -> str:
+    """One line naming the error. PySpark exceptions carry their message in `desc` and print as
+    empty, and Py4J errors put the Java cause after a generic first line."""
+    message = str(error) or str(getattr(error, 'desc', '')).strip()
+    lines = [line.strip() for line in message.splitlines() if line.strip()]
+    cause = next((line for line in lines[1:] if re.search(r"(Exception|Error)\b", line) and not line.startswith("at ")), None)
+    first = lines[0] if lines else ""
+    return f"{type(error).__name__}: {cause if cause and 'An error occurred while calling' in first else first}"
+
+
+def _read_failure(engine_name: EngineName, error: Exception, check: str = "read") -> AssertionResult:
+    return AssertionResult(
+        name=f"{engine_name}.{check}", passed=False, expected="the reader reads the table", actual=_error_message(error),
+    )
+
+
+def _capture(engines, warehouse_path, namespace, name) -> tuple[dict[EngineName, Checkpoint], list[AssertionResult]]:
+    """Each engine's checkpoint. An engine that cannot read the table fails its own read check,
+    and the others carry on, so one reader's limits do not hide what the rest see."""
+    checkpoints: dict[EngineName, Checkpoint] = {}
+    failures: list[AssertionResult] = []
+    for engine_name, engine in engines:
+        try:
+            checkpoints[engine_name] = engine.capture_checkpoint(warehouse_path, namespace, name)
+        except Exception as error:
+            failures.append(_read_failure(engine_name, error))
+    return checkpoints, failures
+
+
+def _first_row_count(engines, warehouse_path, namespace, name) -> int:
+    """The row count from the first engine that reads the table."""
+    checkpoints, failures = {}, []
+    for engine in engines:
+        checkpoints, failures = _capture([engine], warehouse_path, namespace, name)
+        if checkpoints:
+            return next(iter(checkpoints.values())).row_count
+    raise RuntimeError(f"No engine could read the table: {failures[0].actual if failures else 'no engines'}")
 
 
 def _agreement(post: dict[EngineName, Checkpoint], expected_rows: int) -> list[AssertionResult]:
@@ -145,8 +181,9 @@ def _agreement(post: dict[EngineName, Checkpoint], expected_rows: int) -> list[A
     return assertions + _cross_engine_assertions({n: cp.content_hash for n, cp in post.items()})
 
 
-def _run_command(step, resolved: str, output_dir, workflow_name, namespace, name) -> int | None:
-    """Run a replace step's command and return its exit code, or None if it timed out."""
+def _run_command(step, resolved: str, output_dir, workflow_name, namespace, name) -> tuple[int | None, str]:
+    """Run a replace step's command. Returns its exit code, or None if it timed out, and its
+    stdout and stderr."""
     timeout = step['config'].get('timeout', 300)
     out_dir = Path(output_dir) / workflow_name
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -154,13 +191,22 @@ def _run_command(step, resolved: str, output_dir, workflow_name, namespace, name
     stderr_path = out_dir / f"{namespace}.{name}.{step['id']}.stderr"
     with open(stdout_path, 'w') as out_f, open(stderr_path, 'w') as err_f:
         try:
-            return subprocess.run(
+            returncode = subprocess.run(
                 shlex.split(resolved), shell=False, stdout=out_f, stderr=err_f,
                 timeout=timeout,
             ).returncode
         except subprocess.TimeoutExpired:
             err_f.write(f"\nOperation timed out after {timeout}s\n")
-            return None
+            returncode = None
+    return returncode, stdout_path.read_text(errors="replace") + stderr_path.read_text(errors="replace")
+
+
+def _declined(step, returncode: int, output: str) -> bool:
+    """A non-zero exit is a decline only when the step expects one may happen and the command's
+    output matches its decline_output pattern. Any other non-zero exit, such as a crash, fails."""
+    pattern = step['config'].get('decline_output')
+    expect = step['config'].get('expect')
+    return expect in ('unchanged', 'replace_or_unchanged') and bool(pattern) and re.search(pattern, output) is not None
 
 
 def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders, output_dir, workflow_name, dry_run=False) -> OperationResult:
@@ -172,26 +218,44 @@ def _handle_replace(step, engines, warehouse_path, namespace, name, placeholders
         print(f"    {step_id} [replace]: {resolved.strip()}")
         return OperationResult.dry_run()
 
-    checkpoints = _capture(engines, warehouse_path, namespace, name)
+    checkpoints, read_failures = _capture(engines, warehouse_path, namespace, name)
     expect = step['config'].get('expect')
     snapshot_engine = _snapshot_engine(engines) if expect else None
     before = snapshot_engine.current_snapshot(warehouse_path, namespace, name) if snapshot_engine else None
 
-    returncode = _run_command(step, resolved, output_dir, workflow_name, namespace, name)
+    returncode, output = _run_command(step, resolved, output_dir, workflow_name, namespace, name)
     if returncode is None:
         return OperationResult.failed(f"Step '{step_id}' timed out after {step['config'].get('timeout', 300)}s")
-    # A declined command may exit non-zero; the table must then be unchanged.
-    if returncode != 0 and expect not in ('unchanged', 'replace_or_unchanged'):
-        return OperationResult.failed(f"Step '{step_id}' exited with code {returncode}")
+    if returncode != 0 and not _declined(step, returncode, output):
+        return OperationResult.failed(f"Step '{step_id}' exited with code {returncode} without a recognized decline")
 
-    assertions: list[AssertionResult] = []
+    assertions: list[AssertionResult] = list(read_failures)
     if snapshot_engine:
         after = snapshot_engine.current_snapshot(warehouse_path, namespace, name)
         assertions.extend(_snapshot_assertions('unchanged' if returncode else expect, before, after))
 
     post_hashes: dict[str, int] = {}
+    reference = next(iter(checkpoints.values()), None)
     for engine_name, engine in engines:
-        for a in engine.validate(checkpoints[engine_name], warehouse_path, namespace, name):
+        if engine_name not in checkpoints:
+            # The reader could not read the input, but it must still read the output, which is
+            # compared with the row count the other readers saw before and with their content.
+            try:
+                post = engine.capture_checkpoint(warehouse_path, namespace, name)
+            except Exception as error:
+                assertions.append(_read_failure(engine_name, error))
+                continue
+            if reference is not None:
+                assertions.append(AssertionResult.row_count(reference.row_count, post.row_count, prefix=engine_name))
+            post_hashes[engine_name] = post.content_hash
+            continue
+        try:
+            validated = engine.validate(checkpoints[engine_name], warehouse_path, namespace, name)
+        except Exception as error:
+            # The reader read the table before the command, so the command's output is what it cannot read.
+            assertions.append(_read_failure(engine_name, error, "read_after"))
+            continue
+        for a in validated:
             assertions.append(AssertionResult(name=f"{engine_name}.{a.name}", passed=a.passed, expected=a.expected, actual=a.actual))
             if a.name == 'content_hash':
                 post_hashes[engine_name] = a.actual
@@ -206,10 +270,10 @@ def _handle_append(step, engines, warehouse_path, namespace, name, mutation_engi
         print(f"    {step['id']} [append]: {num_rows} rows via {step['config']['backend']}")
         return OperationResult.dry_run()
 
-    _, first_engine = engines[0]
-    pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
+    pre_count = _first_row_count(engines, warehouse_path, namespace, name)
     append_result = _get_mutation_engine(step, mutation_engines).append_rows(namespace, name, num_rows)
-    assertions = _agreement(_capture(engines, warehouse_path, namespace, name), pre_count + num_rows)
+    post, read_failures = _capture(engines, warehouse_path, namespace, name)
+    assertions = read_failures + _agreement(post, pre_count + num_rows)
     return OperationResult.success(assertions, snapshot_id=append_result.snapshot_id, appended_ids=append_result.appended_ids)
 
 
@@ -220,10 +284,10 @@ def _handle_delete(step, engines, warehouse_path, namespace, name, mutation_engi
         print(f"    {step['id']} [delete]: {num_rows} rows via {step['config']['backend']}")
         return OperationResult.dry_run()
 
-    _, first_engine = engines[0]
-    pre_count = first_engine.capture_checkpoint(warehouse_path, namespace, name).row_count
+    pre_count = _first_row_count(engines, warehouse_path, namespace, name)
     delete_result = _get_mutation_engine(step, mutation_engines).delete_rows(namespace, name, num_rows)
-    assertions = _agreement(_capture(engines, warehouse_path, namespace, name), pre_count - num_rows)
+    post, read_failures = _capture(engines, warehouse_path, namespace, name)
+    assertions = read_failures + _agreement(post, pre_count - num_rows)
     return OperationResult.success(assertions, snapshot_id=delete_result.snapshot_id, deleted_ids=delete_result.deleted_ids)
 
 
@@ -236,8 +300,8 @@ def _handle_sql(step, engines, warehouse_path, namespace, name, mutation_engines
 
     sql_result = _get_mutation_engine(step, mutation_engines).run_sql(namespace, name, statements)
     # Arbitrary SQL has no predicted row count, so every engine must match what the writer counts.
-    post = _capture(engines, warehouse_path, namespace, name)
-    return OperationResult.success(_agreement(post, sql_result.row_count), snapshot_id=sql_result.snapshot_id)
+    post, read_failures = _capture(engines, warehouse_path, namespace, name)
+    return OperationResult.success(read_failures + _agreement(post, sql_result.row_count), snapshot_id=sql_result.snapshot_id)
 
 
 def _handle_rollback(step, engines, warehouse_path, namespace, name, mutation_engines,
@@ -258,8 +322,9 @@ def _handle_rollback(step, engines, warehouse_path, namespace, name, mutation_en
     targets = accumulated_checkpoints[to_step]
     actual_snapshot_id = _get_mutation_engine(step, mutation_engines).rollback_to_snapshot(namespace, name, target_snapshot_id)
 
-    post = _capture(engines, warehouse_path, namespace, name)
-    assertions = [AssertionResult.equal("snapshot_id", target_snapshot_id, actual_snapshot_id)]
+    post, read_failures = _capture(engines, warehouse_path, namespace, name)
+    post = {n: cp for n, cp in post.items() if n in targets}
+    assertions = [AssertionResult.equal("snapshot_id", target_snapshot_id, actual_snapshot_id), *read_failures]
     for engine_name, cp in post.items():
         assertions.append(AssertionResult.row_count(targets[engine_name].row_count, cp.row_count, prefix=engine_name))
         assertions.append(AssertionResult.content_hash(targets[engine_name].content_hash, cp.content_hash, prefix=engine_name))
@@ -338,8 +403,16 @@ def _process_table(
             operation = step['operation']
 
             checks = [c for c in table_checks if c.applies_to(operation)] if not dry_run else []
+            check_states = []
+            check_failures = []
+            for check in checks:
+                try:
+                    check_states.append((check, check.before(namespace, table_name)))
+                except Exception as e:
+                    check_failures.append(AssertionResult(
+                        name=check.name, passed=False, expected="check completes before the step", actual=_error_message(e),
+                    ))
             try:
-                check_states = [(c, c.before(namespace, table_name)) for c in checks]
                 if operation == 'replace':
                     op_result = _handle_replace(
                         step, engines, warehouse_path, namespace, table_name, placeholders, output_dir, workflow_name, dry_run
@@ -364,14 +437,13 @@ def _process_table(
                 else:
                     op_result = OperationResult.failed(f"Unknown operation '{operation}' at step '{step_id}'")
             except Exception as e:
-                # PySpark exceptions carry their message in `desc` and print as empty.
-                message = str(e) or str(getattr(e, 'desc', '')).strip()
-                op_result = OperationResult.failed(f"Step '{step_id}' failed: {type(e).__name__}: {message}")
+                op_result = OperationResult.failed(f"Step '{step_id}' failed: {_error_message(e)}")
 
             if op_result.error:
                 result.error = op_result.error
                 return result
 
+            op_result.assertions.extend(check_failures)
             for check, state in check_states:
                 try:
                     op_result.assertions.extend(check.after(state, namespace, table_name))
@@ -415,7 +487,7 @@ def _process_table(
                 snapshot_id_by_step[step_id] = op_result.snapshot_id
 
             if step_id in rollback_targets and not dry_run:
-                accumulated_checkpoints[step_id] = _capture(engines, warehouse_path, namespace, table_name)
+                accumulated_checkpoints[step_id] = _capture(engines, warehouse_path, namespace, table_name)[0]
                 if point_queries:
                     alive_ids_by_step[step_id] = alive_ids.copy()
     finally:
