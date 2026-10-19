@@ -114,7 +114,7 @@ generation.
 ## Workflows
 
 Workflows run multi-step operations against existing tables and validate correctness.
-A workflow is defined in YAML with steps that perform operations like `replace`, `append`, `delete`, and `rollback`.
+A workflow is defined in YAML with steps that perform operations like `replace`, `append`, `delete`, `sql`, and `rollback`.
 See `specs/workflows/` for example workflow definitions and `iceberg_fuzzer/workflow/loader.py` for the authoritative list of supported operations and their required config fields.
 
 ```bash
@@ -177,12 +177,45 @@ steps:
 ```
 
 **Step operations:**
-- `replace` — runs an external command that should not change logical content (e.g., compaction). A checkpoint (row count + SHA256 content hash) is captured before and validated after. Requires `command`; `timeout` is optional.
+- `replace` — runs an external command that should not change logical content (e.g., compaction). A checkpoint (row count + content hash) is captured before and validated after. Requires `command`; `timeout` is optional. `expect` optionally states what the command must do to the current snapshot: `replace` commits a new snapshot whose operation is `replace`, `none` leaves the snapshot as it was because there was nothing to rewrite, and `unchanged` also leaves it as it was but lets the command exit non-zero, for a compactor that declines the table. A command that times out always fails the step.
 - `append` — adds rows to the table via the specified backend. Validates the row count increased by `num_rows`. Requires `backend` and `num_rows`.
 - `delete` — deletes rows from the table. Validates the row count decreased by `num_rows`. Requires `backend` and `num_rows`.
-- `rollback` — rolls the table back to the snapshot as of an earlier step, and validates the state matches that step's checkpoint. Requires `backend` and `to_step` (the `id` of a previous step).
+- `sql` — runs SQL statements in order through the backend. Every engine must then read the row count the backend reports and the same content. Requires `backend` and `statements`. Point queries predict values the way generated tables are filled, so a workflow with `setup` or `sql` steps runs without them.
+- `rollback` — rolls the table back to the snapshot as of an earlier step, and validates the state matches that step's checkpoint. Requires `backend` and `to_step` (the `id` of a previous `append`, `delete` or `sql` step).
 
-**Placeholders** available in `command`: `${warehouse}`, `${namespace}`, `${table_name}`.
+**Placeholders** available in `command`: `${warehouse}`, `${namespace}`, `${table_name}`. In `sql` and `setup` statements, `${table}` stands for the table's qualified name, and `${namespace}` and `${table_name}` for its parts, for example `CALL local.system.rewrite_data_files(table => '${namespace}.${table_name}')`. `$$` becomes `$`, and any other `$` is left as written.
+
+### Workflows that build their own table
+
+A top-level `setup` holds SQL statements that run once before the first step, so a workflow
+creates its table with any schema, partitioning and properties instead of running against a
+generated one. Together with `sql` steps and `expect` on `replace` steps, a workflow can describe
+any history SQL can write, and say what a compaction of it must do.
+
+```yaml
+name: residual_delete
+setup:
+  backend: pyspark
+  statements:
+    - >
+      CREATE TABLE ${table} (id BIGINT, region STRING) USING iceberg PARTITIONED BY (region)
+      TBLPROPERTIES ('format-version'='2', 'write.delete.mode'='merge-on-read')
+steps:
+  - id: write
+    operation: sql
+    config:
+      backend: pyspark
+      statements:
+        - INSERT INTO ${table} SELECT id, IF(id < 1000, 'us', 'eu') FROM range(0, 1010)
+        - DELETE FROM ${table} WHERE id = 7
+  - id: compact
+    operation: replace
+    config:
+      command: >
+        python3 scripts/example-pyspark-compact.py
+        --warehouse ${warehouse} --namespace ${namespace} --table-name ${table_name}
+      expect: replace
+```
 
 ## Requirements
 

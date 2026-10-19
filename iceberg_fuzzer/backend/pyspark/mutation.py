@@ -1,8 +1,10 @@
 """PySpark backend — mutation (append, etc.)."""
 
+from string import Template
+
 from pyspark.sql import Row
 
-from iceberg_fuzzer.backend import AppendResult, DeleteResult, MutationEngine
+from iceberg_fuzzer.backend import AppendResult, DeleteResult, MutationEngine, SqlResult
 from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
 from iceberg_fuzzer.backend.pyspark.data import generate_value
 from iceberg_fuzzer.common import row_id_from_index
@@ -28,13 +30,13 @@ class PySparkMutation(MutationEngine):
     def _qualified_name(self, namespace: str, table_name: str) -> str:
         return f"{self._catalog_name()}.{namespace}.{table_name}"
 
-    def _get_current_snapshot_id(self, qualified: str) -> int:
+    def _get_current_snapshot_id(self, qualified: str) -> int | None:
         spark = self._get_spark()
-        row = spark.sql(
+        rows = spark.sql(
             f"SELECT snapshot_id FROM {qualified}.refs "
             f"WHERE name = 'main' AND type = 'BRANCH'"
-        ).collect()[0]
-        return row.snapshot_id
+        ).collect()
+        return rows[0].snapshot_id if rows else None
 
     def append_rows(self, namespace: str, table_name: str, num_rows: int) -> AppendResult:
         spark = self._get_spark()
@@ -78,6 +80,17 @@ class PySparkMutation(MutationEngine):
         return DeleteResult(
             snapshot_id=self._get_current_snapshot_id(qualified),
             deleted_ids=set(ids_to_delete),
+        )
+
+    def run_sql(self, namespace: str, table_name: str, statements: list[str]) -> SqlResult:
+        spark = self._get_spark()
+        qualified = self._qualified_name(namespace, table_name)
+        placeholders = {'table': qualified, 'namespace': namespace, 'table_name': table_name}
+        for statement in statements:
+            spark.sql(Template(statement).safe_substitute(placeholders))
+        return SqlResult(
+            snapshot_id=self._get_current_snapshot_id(qualified),
+            row_count=spark.sql(f"SELECT COUNT(*) FROM {qualified}").collect()[0][0],
         )
 
     def rollback_to_snapshot(self, namespace: str, table_name: str, snapshot_id: int) -> int:

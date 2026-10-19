@@ -74,6 +74,8 @@ def create_spark_session(warehouse_path, app_name=None):
     if app_name is None:
         app_name = f"IcebergTableGenerator-{uuid.uuid4()}"
 
+    # Both catalogs turn off table caching. Workflows commit through external compactors, and a
+    # cached table would keep reading the snapshot from before their commits.
     # Detect if warehouse_path is an S3 table ARN
     is_s3_table = warehouse_path.startswith('arn:aws:s3tables:')
 
@@ -148,6 +150,7 @@ def create_spark_session(warehouse_path, app_name=None):
             .config("spark.sql.catalog.s3tables.io-impl", "org.apache.iceberg.aws.s3.S3FileIO") \
             .config("spark.sql.catalog.s3tables.client.region", region) \
             .config("spark.sql.catalog.s3tables.rest-metrics-reporting-enabled", "false") \
+            .config("spark.sql.catalog.s3tables.cache-enabled", "false") \
             .config(
                 "spark.hadoop.fs.s3a.aws.credentials.provider",
                 "org.apache.hadoop.fs.s3a.SimpleAWSCredentialProvider"
@@ -167,6 +170,7 @@ def create_spark_session(warehouse_path, app_name=None):
             .config("spark.sql.catalog.local", "org.apache.iceberg.spark.SparkCatalog") \
             .config("spark.sql.catalog.local.type", "hadoop") \
             .config("spark.sql.catalog.local.warehouse", warehouse_path) \
+            .config("spark.sql.catalog.local.cache-enabled", "false") \
             .config("spark.sql.iceberg.distribution-mode", "hash") \
             .config("spark.hadoop.fs.defaultFS", "file:///") \
             .config("spark.hadoop.fs.file.impl", "org.apache.hadoop.fs.LocalFileSystem") \
