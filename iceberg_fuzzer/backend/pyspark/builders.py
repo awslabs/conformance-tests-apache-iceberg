@@ -1734,10 +1734,8 @@ def create_partitioned_table(
                 final_df = prepare_partitioned_df(final_df, sort_cols, 3)
                 final_df.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
             else:
-                # Delete every POSDELETE_MODULUS-th row so each data file is
-                # left partly deleted. A contiguous range lines up with the append
-                # batches and is satisfied by dropping whole files, leaving no
-                # position delete.
+                # Iceberg cannot answer this predicate from a file's id bounds, so it
+                # records positions instead of dropping files; see common/mixed_chaos.py.
                 chunks = mixed_chaos_delete_chunks()
                 for number, (start_id, end_id) in enumerate(chunks, start=1):
                     spark.sql(
