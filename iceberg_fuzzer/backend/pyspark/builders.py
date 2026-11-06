@@ -274,30 +274,6 @@ def get_catalog_and_namespace(warehouse_path, table_type):
     # partitioned, evolution) for every warehouse type.
     return get_catalog_name(warehouse_path), table_type
 
-def create_table_safe(spark, catalog, namespace, table_name, schema_fields, props_sql, partition_clause=""):
-    """Create table with IF NOT EXISTS to handle race conditions in S3 Tables"""
-    try:
-        create_sql = (
-            f"CREATE TABLE IF NOT EXISTS {catalog}.{namespace}.{table_name} "
-            f"({schema_fields}) USING iceberg {partition_clause} "
-            f"TBLPROPERTIES ({props_sql})"
-        )
-        spark.sql(create_sql)
-        return True
-    except Exception as e:
-        # If IF NOT EXISTS fails, try regular CREATE (for older Spark versions)
-        try:
-            create_sql = (
-                f"CREATE TABLE {catalog}.{namespace}.{table_name} "
-                f"({schema_fields}) USING iceberg {partition_clause} "
-                f"TBLPROPERTIES ({props_sql})"
-            )
-            spark.sql(create_sql)
-            return True
-        except Exception as e2:
-            print(f"    → Failed to create table: {e2}")
-            return False
-
 def table_exists(spark, catalog, namespace, table_name):
     """Check if table exists"""
     try:
