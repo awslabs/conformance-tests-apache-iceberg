@@ -77,6 +77,11 @@ class TestNames:
     def test_name_derivation(self, transform, expected):
         assert transform_name(transform) == expected
 
+    def test_a_transform_the_parser_rejects_has_no_name(self):
+        # The parser rejects `date`, so the name derivation has to as well.
+        with pytest.raises(ValueError, match='unrecognized partition transform'):
+            transform_name(['date(timestamp)'])
+
     def test_every_name_is_made_of_its_parts(self):
         for spec in partitioned_table_specs():
             assert spec['name'] == \

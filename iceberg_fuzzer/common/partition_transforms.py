@@ -88,7 +88,6 @@ DELETE_MODES = ["cow", "posdelete"]
 # `keyword(col)`.
 _SINGLE_ARG_TRANSFORMS = {
     'identity(': len('identity('),
-    'date(': len('date('),
     'year(': len('year('),
     'month(': len('month('),
     'day(': len('day('),
