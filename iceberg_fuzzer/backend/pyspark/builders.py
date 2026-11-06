@@ -1508,8 +1508,6 @@ def build_partition_clause(partition_specs):
                 fields.append(f"days({col_name})")
             case 'hour':
                 fields.append(f"hours({col_name})")
-            case 'void':
-                fields.append(f"void({col_name})")
             case _:
                 raise ValueError(f"Unrecognised partition transform: {transform!r}")
     if not fields:
@@ -1579,9 +1577,8 @@ def parse_partition_spec(spec_str):
         elif part.startswith('hour(') or part.startswith('hours('):
             col_name = part[5:-1] if part.startswith('hour(') else part[6:-1]
             partition_specs.append(('hour', col_name, None))
-        elif part.startswith('void('):
-            col_name = part[5:-1]
-            partition_specs.append(('void', col_name, None))
+        else:
+            raise ValueError(f"Unrecognised partition transform: {part!r}")
 
     return partition_specs
 

@@ -29,7 +29,6 @@ def clause(spec_str):
     ('day(timestamp)', 'PARTITIONED BY (days(timestamp))'),
     ('hour(timestamp)', 'PARTITIONED BY (hours(timestamp))'),
     ('date(timestamp)', 'PARTITIONED BY (date(timestamp))'),
-    ('void(category)', 'PARTITIONED BY (void(category))'),
 ])
 def test_one_transform(spec_str, expected):
     assert clause(spec_str) == expected
@@ -63,6 +62,16 @@ def test_an_unrecognised_transform_raises():
     # name claims, which Spark accepts without complaint.
     with pytest.raises(ValueError, match='quarter'):
         build_partition_clause([('quarter', 'timestamp', None)])
+
+
+@pytest.mark.parametrize('spec_str', [
+    'identity(category),buckets[4](id)',
+    # Spark rejects void: "Transform is not supported: void(category)".
+    'void(category)',
+])
+def test_the_parser_rejects_a_transform_it_does_not_know(spec_str):
+    with pytest.raises(ValueError, match='Unrecognised partition transform'):
+        parse_partition_spec(spec_str)
 
 
 class TestTheClauseReachesTheStatement:
