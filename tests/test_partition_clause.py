@@ -90,14 +90,9 @@ class TestTheClauseReachesTheStatement:
         )
         assert 'PARTITIONED BY (bucket(4, id))' in sql
 
-    def test_it_comes_before_the_properties(self):
-        # Spark rejects the statement the other way round.
-        sql = build_create_table_sql(
-            'local.partitioned.t', self.SCHEMA, clause('bucket[4](id)'), self.PROPS
-        )
-        assert sql.index('PARTITIONED BY') < sql.index('TBLPROPERTIES')
-
     def test_it_comes_after_the_schema_and_using(self):
+        # Spark does not parse PARTITIONED BY ahead of USING. After it, the clause
+        # can go either side of TBLPROPERTIES.
         sql = build_create_table_sql(
             'local.partitioned.t', self.SCHEMA, clause('bucket[4](id)'), self.PROPS
         )
