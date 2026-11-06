@@ -345,7 +345,7 @@ python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /path/
 - `identity(category), bucket[4](id)` - Multi-column partitioning (20 partitions)
 
 The full set adds further bucket widths, `truncate`, `year`/`day`/`hour`,
-boolean and numeric identity partitioning, multi-column combinations, and a
+identity on a boolean and a date column, multi-column combinations, and a
 single-partition edge case.
 
 **Write Patterns**: insert_heavy, update_heavy, delete_heavy, mixed_chaos

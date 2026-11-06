@@ -16,11 +16,10 @@ Whether that leaves a file partly deleted depends on the partition transform,
 since a file holds one partition's rows. A month, day or hour partition fixes the
 timestamp's month, which generate_partitioned_data sets to 1 + id % 12. 3 divides
 12, so each such partition holds a single id % 3, and each of its files is either
-deleted in full, by position deletes, or untouched. The same goes for
-identity(int_col), one row per partition, and for any combination including one
-of these. part_month_timestamp_mixed_chaos_posdelete ends with 300 of its 900
-data files fully deleted and none partly. Every other transform puts every id % 3
-in each partition, so each file is partly deleted.
+deleted in full, by position deletes, or untouched. The same goes for any
+combination including one of them. part_month_timestamp_mixed_chaos_posdelete
+ends with 300 of its 900 data files fully deleted and none partly. Every other
+transform puts every id % 3 in each partition, so each file is partly deleted.
 """
 
 # Every row whose id is a multiple of this is deleted from a posdelete table.
