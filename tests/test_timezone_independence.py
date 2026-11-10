@@ -6,6 +6,7 @@ import importlib.util
 import os
 import time
 from contextlib import contextmanager
+from datetime import timezone
 from math import gcd
 from pathlib import Path
 
@@ -162,7 +163,8 @@ TIMESTAMP_PRODUCERS = {
 
 # build-shapes advances seconds and microseconds from the epoch rather than the
 # hour of one day, so a row is identifiable by its value alone. That is a
-# different formula deliberately; only the zone has to agree.
+# different formula deliberately: its zone has to agree, and its instant has to
+# be the zone-free value's (see test_build_shapes_keeps_the_instant_whatever_the_zone).
 OWN_FORMULA = {'build-shapes'}
 
 
@@ -212,6 +214,14 @@ class TestEveryProducerLeavesTheZoneFreeTypeAlone:
             with host_timezone(zone):
                 wall_clocks[zone] = TIMESTAMP_PRODUCERS[name](7)
         assert len(set(wall_clocks.values())) == 1, (name, wall_clocks)
+
+
+def test_build_shapes_keeps_the_instant_whatever_the_zone():
+    # The stored value is the instant, so it must not depend on the zone. The
+    # padding ids are negative and large; seven of them cover every offset.
+    for row_id in ROW_IDS + tuple(-(i + 1_000_000) for i in range(7)):
+        instant = generate_value('timestamptz', row_id).astimezone(timezone.utc)
+        assert instant.replace(tzinfo=None) == generate_value('timestamp', row_id), row_id
 
 
 def test_the_count_is_coprime_with_the_hour_cycle():
