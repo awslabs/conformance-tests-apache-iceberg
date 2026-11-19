@@ -136,7 +136,7 @@ class EquivalenceTracker:
 
         Returns True if representative (should get exhaustive L5).
         """
-        key = self._compute_equivalence_key(config)
+        key = equivalence_key(config)
 
         if key not in self.seen_classes:
             self.seen_classes[key] = config.get('config_id', 'unknown')
@@ -146,85 +146,86 @@ class EquivalenceTracker:
             self.non_representative_count += 1
             return False
 
-    def _compute_equivalence_key(self, config: Dict[str, Any]) -> tuple:
-        """
-        Compute equivalence class key based on dependency structure,
-        scoped within the L3 equivalence class.
 
-        Key includes:
-        - L3 equivalence class (file size signature) to prevent cross-L3 collapsing
-        - num_data, num_delete
-        - For each data file: (referenced_by, coverage, is_large)
-        - For each delete file: frozenset[(data_idx, coverage, is_large)]
+def equivalence_key(config: Dict[str, Any]) -> tuple:
+    """
+    Compute equivalence class key based on dependency structure,
+    scoped within the L3 equivalence class.
 
-        The is_large field tracks whether a file contains the sentinel row.
-        The L3 scoping ensures that configs from different L3 representatives
-        each independently select their own content representatives.
-        """
-        num_data = len(config['data_files'])
-        num_delete = len(config['delete_files'])
+    Key includes:
+    - L3 equivalence class (file size signature) to prevent cross-L3 collapsing
+    - num_data, num_delete
+    - For each data file: (referenced_by, coverage, is_large)
+    - For each delete file: frozenset[(data_idx, coverage, is_large)]
 
-        # Include L3 equivalence class to scope within L3
-        l3_equiv_class = config.get('data_partition_equiv_class', '')
+    The is_large field tracks whether a file contains the sentinel row.
+    The L3 scoping ensures that configs from different L3 representatives
+    each independently select their own content representatives.
+    """
+    num_data = len(config['data_files'])
+    num_delete = len(config['delete_files'])
 
-        # Compute sentinel row
-        sentinel_row = config['row_count'] // 2
+    # Include L3 equivalence class to scope within L3
+    l3_equiv_class = config.get('data_partition_equiv_class', '')
 
-        # Compute is_large for each data file
-        is_large_map = {}
-        for data_idx, data_file in enumerate(config['data_files']):
-            has_sentinel = any(row['row_id'] == sentinel_row for row in data_file['rows'])
-            is_large_map[data_idx] = has_sentinel
+    # Compute sentinel row
+    sentinel_row = config['row_count'] // 2
 
-        # Build data → delete mapping
-        data_to_delete = []
-        for data_idx, data_file in enumerate(config['data_files']):
-            referenced_by = set()
-            max_coverage = CoverageType.NONE
+    # Compute is_large for each data file
+    is_large_map = {}
+    for data_idx, data_file in enumerate(config['data_files']):
+        has_sentinel = any(row['row_id'] == sentinel_row for row in data_file['rows'])
+        is_large_map[data_idx] = has_sentinel
 
-            # Check each delete file
-            for del_idx, del_file in enumerate(config['delete_files']):
-                cov = self._compute_coverage(del_file, data_file)
-                if cov != CoverageType.NONE:
-                    referenced_by.add(del_idx)
-                    if cov.value > max_coverage.value:
-                        max_coverage = cov
+    # Build data → delete mapping
+    data_to_delete = []
+    for data_idx, data_file in enumerate(config['data_files']):
+        referenced_by = set()
+        max_coverage = CoverageType.NONE
 
-            is_large = is_large_map[data_idx]
-            data_to_delete.append((frozenset(referenced_by), max_coverage, is_large))
-
-        # Build delete → data mapping
-        delete_to_data = []
+        # Check each delete file
         for del_idx, del_file in enumerate(config['delete_files']):
-            referenced_files = []
+            cov = _coverage(del_file, data_file)
+            if cov != CoverageType.NONE:
+                referenced_by.add(del_idx)
+                if cov.value > max_coverage.value:
+                    max_coverage = cov
 
-            for data_idx, data_file in enumerate(config['data_files']):
-                cov = self._compute_coverage(del_file, data_file)
-                if cov != CoverageType.NONE:
-                    is_large = is_large_map[data_idx]
-                    referenced_files.append((data_idx, cov, is_large))
+        is_large = is_large_map[data_idx]
+        data_to_delete.append((frozenset(referenced_by), max_coverage, is_large))
 
-            delete_to_data.append(frozenset(referenced_files))
+    # Build delete → data mapping
+    delete_to_data = []
+    for del_idx, del_file in enumerate(config['delete_files']):
+        referenced_files = []
 
-        return (l3_equiv_class, num_data, num_delete, tuple(data_to_delete), tuple(delete_to_data))
+        for data_idx, data_file in enumerate(config['data_files']):
+            cov = _coverage(del_file, data_file)
+            if cov != CoverageType.NONE:
+                is_large = is_large_map[data_idx]
+                referenced_files.append((data_idx, cov, is_large))
 
-    def _compute_coverage(self, delete_file: Dict[str, Any],
-                         data_file: Dict[str, Any]) -> CoverageType:
-        """
-        Compute how much of data_file is deleted by delete_file.
+        delete_to_data.append(frozenset(referenced_files))
 
-        Returns: NONE, PARTIAL, or FULL
-        """
-        data_rows = {row['row_id'] for row in data_file['rows']}
-        deleted_rows = {delete['row_id'] for delete in delete_file['deletes']
-                        if delete['data_file'] == data_file['file_id']}
+    return (l3_equiv_class, num_data, num_delete, tuple(data_to_delete), tuple(delete_to_data))
 
-        if not deleted_rows:
-            return CoverageType.NONE
-        elif deleted_rows == data_rows:
-            return CoverageType.FULL
-        else:
-            return CoverageType.PARTIAL
+
+def _coverage(delete_file: Dict[str, Any], data_file: Dict[str, Any]) -> CoverageType:
+    """
+    Compute how much of data_file is deleted by delete_file.
+
+    Returns: NONE, PARTIAL, or FULL
+    """
+    data_rows = {row['row_id'] for row in data_file['rows']}
+    deleted_rows = {delete['row_id'] for delete in delete_file['deletes']
+                    if delete['data_file'] == data_file['file_id']}
+
+    if not deleted_rows:
+        return CoverageType.NONE
+    elif deleted_rows == data_rows:
+        return CoverageType.FULL
+    else:
+        return CoverageType.PARTIAL
 
 
 class TableConfigGenerator:
@@ -250,8 +251,7 @@ class TableConfigGenerator:
     MAX_RANDOM_ORDERING_ATTEMPTS = 100
 
     def __init__(self, max_row_count: int = 6, seed: int = 42,
-                 exhaustive_mode: bool = False,
-                 exhaustive_delete_instantiation: bool = False):
+                 exhaustive_mode: bool = False, deletes_before_data: bool = False):
         """
         Initialize the generator.
 
@@ -260,16 +260,17 @@ class TableConfigGenerator:
             seed: Random seed for reproducible L4b generation
             exhaustive_mode: If True, use exhaustive L5 for all configs.
                            If False (default), use equivalence-based approach.
-            exhaustive_delete_instantiation: If True, generate ALL delete instantiations
-                           for ALL partitions (not just representatives).
-                           If False (default), use hybrid strategy (representatives get all,
-                           non-representatives get one random instantiation).
+            deletes_before_data: If True, the main pipeline's L5 lifts its
+                           delete-after-data constraint, so an ordering may
+                           commit a delete file before a data file it names.
+                           The no-sentinel and single-row orderings do not
+                           read it.
         """
         self.max_row_count = max_row_count
         self.config_count = 0
         self.random = random.Random(seed)
         self.exhaustive_mode = exhaustive_mode
-        self.exhaustive_delete_instantiation = exhaustive_delete_instantiation
+        self.deletes_before_data = deletes_before_data
         self.equiv_tracker = EquivalenceTracker() if not exhaustive_mode else None
 
     def generate_all(self) -> Iterator[Dict[str, Any]]:
@@ -348,8 +349,7 @@ class TableConfigGenerator:
         tmp_gen = TableConfigGenerator(
             max_row_count=self.max_row_count,
             seed=42,
-            exhaustive_mode=self.exhaustive_mode,
-            exhaustive_delete_instantiation=self.exhaustive_delete_instantiation
+            exhaustive_mode=self.exhaustive_mode
         )
 
         for config in tmp_gen._level1_row_count():
@@ -409,18 +409,10 @@ class TableConfigGenerator:
         Generate 3 snapshot orderings for a no-sentinel config:
         1. All files in one snapshot
         2. Max spread (each file in its own snapshot, deletes after their data)
-        3. One random valid ordering in between
+        3. All data files in one snapshot, all delete files in a second
         """
         all_data_ids = [df['file_id'] for df in config['data_files']]
         all_del_ids = [df['file_id'] for df in config['delete_files']]
-
-        # Build dependency: which data files each delete file references
-        del_dependencies = {}
-        for del_file in config['delete_files']:
-            referenced = set()
-            for d in del_file['deletes']:
-                referenced.add(d['data_file'])
-            del_dependencies[del_file['file_id']] = referenced
 
         orderings = []
 
@@ -432,10 +424,9 @@ class TableConfigGenerator:
         }])
 
         # 2. Max spread: each data file in its own snapshot, then each delete
-        #    file in the earliest valid snapshot after all its referenced data files
+        #    file in a snapshot of its own after them
         if len(all_data_ids) + len(all_del_ids) > 1:
             snapshots = []
-            file_to_snap = {}
 
             # Each data file gets its own snapshot
             for i, data_id in enumerate(all_data_ids):
@@ -444,18 +435,11 @@ class TableConfigGenerator:
                     'data_files': [data_id],
                     'delete_files': []
                 })
-                file_to_snap[data_id] = i
 
             # Each delete file goes in a new snapshot after all its dependencies
             for del_id in all_del_ids:
-                deps = del_dependencies.get(del_id, set())
-                if deps:
-                    min_snap = max(file_to_snap[d] for d in deps)
-                else:
-                    min_snap = -1
-                new_snap_id = len(snapshots)
                 snapshots.append({
-                    'snapshot_id': new_snap_id,
+                    'snapshot_id': len(snapshots),
                     'data_files': [],
                     'delete_files': [del_id]
                 })
@@ -807,11 +791,6 @@ class TableConfigGenerator:
                 data_files = self._create_data_files(data_partition)
 
                 for inst_id, sentinel_constraint in enumerate(all_instantiations):
-                    if self.exhaustive_delete_instantiation or is_representative:
-                        actual_inst_id = inst_id
-                    else:
-                        actual_inst_id = all_instantiations.index(sentinel_constraint)
-
                     delete_files = self._create_delete_files(
                         delete_partition,
                         data_files,
@@ -826,7 +805,7 @@ class TableConfigGenerator:
                         'delete_partition': delete_partition,
                         'sentinel_row_id': sentinel_row,
                         'sentinel_in_file': sentinel_in_file,
-                        'delete_instantiation_id': actual_inst_id,
+                        'delete_instantiation_id': inst_id,
                         'is_data_partition_representative': is_representative,
                         'data_partition_equiv_class': str(sig),
                         'data_files': data_files,
@@ -986,11 +965,7 @@ class TableConfigGenerator:
             # Variables constrained to 'sentinel' target the sentinel row specifically;
             # unconstrained variables round-robin through non-sentinel positions.
             if sentinel_constraint and sentinel_constraint.get(var) == 'sentinel':
-                if sentinel_positions:
-                    pos = sentinel_positions[0]
-                else:
-                    # Fallback: sentinel not in any data file (shouldn't happen with valid config)
-                    pos = all_positions[0]
+                pos = sentinel_positions[0]
             else:
                 if non_sentinel_positions:
                     pos = non_sentinel_positions[non_sentinel_idx % len(non_sentinel_positions)]
@@ -1181,13 +1156,14 @@ class TableConfigGenerator:
         1. Exhaustive mode (--exhaustive flag):
            - All configs get full exhaustive orderings
            - ≤5 files: All ordered partitions
-           - 6-9 files: Delete-focused strategy
+           - ≥6 files: The same orderings as for five or fewer files, collapsed
 
         2. Equivalence-based mode (default):
            - Representatives: Full exhaustive orderings
            - Non-representatives: Random sample (1 ordering)
 
-        Constraint: Delete files must be in same or later snapshot than their data files.
+        Constraint: Delete files must be in same or later snapshot than their data files,
+        unless deletes_before_data lifts it.
         """
         if self.exhaustive_mode:
             # Exhaustive mode: always generate all orderings
@@ -1486,56 +1462,19 @@ class TableConfigGenerator:
 
         return tuple(collapsed)
 
-    def _generate_delete_focused_orderings(self, config: Dict[str, Any]) -> List[List[Dict[str, Any]]]:
-        """
-        Generate orderings focusing on delete file ordering.
-
-        For 6-9 files:
-        - Enumerate all delete file orderings (1-3 delete files → 1-13 orderings)
-        - For each delete ordering, compute one data placement using "co-locate then spread"
-
-        Strategy: "Co-locate then spread"
-        - Data files referenced by deletes go in first snapshot with their delete
-        - Unreferenced data files go in first snapshot
-        """
-        data_files = config['data_files']
-        delete_files = config['delete_files']
-
-        if not delete_files:
-            # No deletes: all data in one snapshot
-            snapshot = {
-                'snapshot_id': 0,
-                'data_files': [f['file_id'] for f in data_files],
-                'delete_files': []
-            }
-            return [[snapshot]]
-
-        # Build reverse dependency map: data_file_index -> list of delete_file_indices
-        data_to_deletes = self._build_data_to_delete_map(config)
-
-        # Generate all delete orderings
-        num_deletes = len(delete_files)
-        delete_orderings = list(generate_ordered_partitions(num_deletes, num_deletes))
-
-        results = []
-        for del_ordering in delete_orderings:
-            # Compute data placement using co-locate strategy
-            snapshots = self._compute_colocated_snapshots(
-                data_files, delete_files, del_ordering, data_to_deletes
-            )
-            results.append(snapshots)
-
-        return results
-
     def _build_file_dependencies(self, config: Dict[str, Any]) -> Dict[int, Set[int]]:
         """
-        Build dependency map for all files (data + delete combined).
+        Build dependency map for all files (data + delete combined), which
+        orders each delete file at or after the data files it names; none
+        under deletes_before_data.
 
         Returns:
             Dict mapping delete_file_global_index -> set of data_file_global_indices
         """
         num_data = len(config['data_files'])
         dependencies = {}
+        if self.deletes_before_data:
+            return dependencies
 
         for del_idx, delete_file in enumerate(config['delete_files']):
             global_del_idx = num_data + del_idx  # Delete files come after data files
@@ -1549,24 +1488,6 @@ class TableConfigGenerator:
                 dependencies[global_del_idx] = referenced_data
 
         return dependencies
-
-    def _build_data_to_delete_map(self, config: Dict[str, Any]) -> Dict[int, List[int]]:
-        """
-        Build reverse dependency map: which delete files reference each data file.
-
-        Returns:
-            Dict mapping data_file_index -> list of delete_file_indices
-        """
-        data_to_deletes = {}
-
-        for del_idx, delete_file in enumerate(config['delete_files']):
-            for delete in delete_file['deletes']:
-                data_idx = delete['data_file_index']
-                if data_idx not in data_to_deletes:
-                    data_to_deletes[data_idx] = []
-                data_to_deletes[data_idx].append(del_idx)
-
-        return data_to_deletes
 
     def _is_valid_file_ordering(self, ordering: List[List[int]],
                                 dependencies: Dict[int, Set[int]]) -> bool:
@@ -1639,65 +1560,6 @@ class TableConfigGenerator:
             }
             snapshots.append(snapshot)
             snapshot_id += 1
-
-        return snapshots
-
-    def _compute_colocated_snapshots(self,
-                                    data_files: List[Dict[str, Any]],
-                                    delete_files: List[Dict[str, Any]],
-                                    delete_ordering: List[List[int]],
-                                    data_to_deletes: Dict[int, List[int]]) -> List[Dict[str, Any]]:
-        """
-        Compute snapshot structure using "co-locate then spread" strategy.
-
-        Strategy:
-        1. Place delete files according to delete_ordering
-        2. For each data file:
-           - If referenced by deletes: place in FIRST snapshot containing a referencing delete
-           - If unreferenced: place in first snapshot
-
-        Args:
-            data_files: List of data file dicts
-            delete_files: List of delete file dicts
-            delete_ordering: Ordered partition of delete file indices
-            data_to_deletes: Map from data_file_index to list of delete_file_indices
-
-        Returns:
-            List of snapshot dicts
-        """
-        num_snapshots = len(delete_ordering)
-
-        # Create empty snapshots
-        snapshots = [
-            {
-                'snapshot_id': snap_idx,
-                'data_files': [],
-                'delete_files': []
-            }
-            for snap_idx in range(num_snapshots)
-        ]
-
-        # Place delete files according to ordering
-        for snap_idx, del_indices in enumerate(delete_ordering):
-            for del_idx in del_indices:
-                snapshots[snap_idx]['delete_files'].append(delete_files[del_idx]['file_id'])
-
-        # Build map: delete_file_index -> snapshot_index
-        delete_to_snapshot = {}
-        for snap_idx, del_indices in enumerate(delete_ordering):
-            for del_idx in del_indices:
-                delete_to_snapshot[del_idx] = snap_idx
-
-        # Place data files using co-locate strategy
-        for data_idx, data_file in enumerate(data_files):
-            if data_idx in data_to_deletes:
-                # Referenced by deletes: find first snapshot with a referencing delete
-                referencing_deletes = data_to_deletes[data_idx]
-                min_snapshot = min(delete_to_snapshot[del_idx] for del_idx in referencing_deletes)
-                snapshots[min_snapshot]['data_files'].append(data_file['file_id'])
-            else:
-                # Unreferenced: place in first snapshot
-                snapshots[0]['data_files'].append(data_file['file_id'])
 
         return snapshots
 

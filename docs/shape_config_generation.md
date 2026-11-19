@@ -8,7 +8,7 @@ We want to generate **all structurally distinct Iceberg tables** with up to 6 da
 - Snapshots (which files were committed together, in what order)
 - Manifest structure (how files are grouped in manifests)
 
-**Why small tables are enough:** For a compaction operation that reads input files and produces output files, if any bug exists, it can be reproduced on a bounded-size input. This is analogous to the small model property in first-order logic -- if a formula is satisfiable, it has a model of bounded size determined by the quantifier structure. The bounds for compaction correctness work out to: 3 data files, 2 rows per file (6 rows total), 1-3 delete entries. If no small input triggers a bug, no input does.
+**The generator's bounds:** It enumerates tables of up to 6 data rows and up to 3 position delete entries, which keeps the enumeration finite and small enough to build. The bounds are a choice, not a proof that a compaction bug shows on a table this small.
 
 **What is a sentinel file?** In the target compaction implementation, files above a certain byte-size threshold are skipped (not selected for compaction). The generator simulates this by designating one file as the "sentinel" -- at build time, this file gets padded with extra rows to exceed the threshold. This lets us test interactions between compacted files (small) and non-compacted files (large/sentinel). The sentinel row is always `row_count // 2` (e.g., row 3 for a 6-row table), and whichever file contains that row becomes the sentinel file.
 
@@ -60,7 +60,7 @@ INPUT: max_row_count=6, seed=42
      +------------------+  Output: final config with manifest groupings
               |
               v
-     WITH-SENTINEL CONFIGS (135,262 for seed=42)
+     WITH-SENTINEL CONFIGS (194,960 for seed=42)
 
 
      +------------------+
@@ -69,10 +69,10 @@ INPUT: max_row_count=6, seed=42
      +------------------+  x 3 orderings x 2 strategies x 2 manifests
               |
               v
-     NO-SENTINEL CONFIGS (6,708 for seed=42)
+     NO-SENTINEL CONFIGS (7,392 for seed=42)
 
 
-     TOTAL OUTPUT: 141,970 configs (seed=42)
+     TOTAL OUTPUT: 202,352 configs (seed=42)
 ```
 
 ---
@@ -292,7 +292,7 @@ Output (P1: same-file + cross-file repetition):
 **Input:** Valued config (all rows have values, but no snapshot structure yet)
 **Output:** Config with `snapshots[]` -- ordered list of snapshot objects
 
-**Constraint:** Every delete file must appear in the same or a later snapshot than the data files it references.
+**Constraint:** Every delete file must appear in the same or a later snapshot than the data files it references, unless `deletes_before_data` lifts it, as the sample's witnesses do, see Sample.
 
 ### Representatives: exhaustive orderings
 
@@ -423,11 +423,11 @@ x 2 value strategies x 2 manifest strategies = up to 12 configs per class
 (minus physical dedup)
 ```
 
-**Note on `nulls` strategy in this path:** Currently sets ALL rows to `value: None` (unlike the main pipeline's partial-NULL approach). This is a known simplification -- the no-sentinel path uses inline value assignment rather than calling `_assign_values_nulls`.
+**Note on `nulls` strategy in this path:** As in the main pipeline's `_assign_values_nulls`, a seeded choice of between one and `row_count // 2` rows is set to NULL and recorded in `null_rows`, and the other rows keep their row numbers; the no-sentinel path assigns them inline.
 
 **Physical dedup:** Applied via `_physical_delete_signature` to remove configs that would produce identical physical tables (e.g., two classes that differ only in which file was the sentinel -- without sentinel, they become identical).
 
-**Total no-sentinel:** 6,708 configs (seed=42).
+**Total no-sentinel:** 7,392 configs (seed=42).
 
 ---
 
@@ -455,18 +455,51 @@ x 2 value strategies x 2 manifest strategies = up to 12 configs per class
 - **No P2 fallback for L4c.** Code has P2 commented out. When P1 fails, repetition is skipped entirely. P3 fallback ("just pick any 2 rows to share a value") also not implemented.
 - **Not all orderings for non-representatives.** Only 1 random ordering (seed-dependent). Representatives get exhaustive.
 - **No `j=sentinel` for 3-variable patterns.** `['i','j','k']` only generates `all-non-sentinel`, `k=sentinel`, `i=sentinel`.
-- **No partial-NULL in no-sentinel path.** The `nulls` strategy in no-sentinel sets all values to None rather than a random subset.
-- **Dead code: `_generate_delete_focused_orderings`.** Exists in source but is never called.
+
+---
+
+## Sample
+
+`shape_sampling.py` picks which configs to build; nothing builds them yet, since `build-shapes` still
+builds every config `generate_all` yields. It keeps one class per dependency structure, the
+`EquivalenceTracker` key plus whether the config has a sentinel. Within a class, configs are added
+until every relation some config of the class has is set: a delete committed with a data file it
+names or after it, a delete on the sentinel after a delete on a file a compaction rewrites, the
+sentinel committed with such a file, and a row deleted twice by one delete file; and, on a data file
+the builder writes with the config's rows alone, never the sentinel, which it pads, and from deletes
+that [apply by sequence number](https://iceberg.apache.org/spec/#scan-planning), entries reaching the
+file's row count while a row of it stays live, every row deleted though no one delete file deletes
+them all, and a delete on its last row. At seed 42 that is 4,243 configs in 3,005 classes.
+
+The sample stops taking a class's configs by relations alone, and value strategies enter only
+through its tie break, by the pairs of ordering features a config adds, so a class need not hold each
+of its value strategies. At seed 42 its configs hold 3,775 with row numbers, 278 with nulls and 190
+with repetition, and every class holds more than one value strategy, of which the sample keeps each
+in 15 of the 3,005. It takes no maximal-manifest config, since each ties its minimal twin and has the
+higher config id.
+
+The generator commits every delete file with or after the data files it names, so the sample adds
+witnesses from a second pass under `deletes_before_data`: for each class with a sentinel whose second
+pass holds an eligible config, one that commits a delete file before a data file it names and every
+delete file no earlier than the first data commit, the eligible config holding the most of the three
+early relations, `delete_before_target`, `file_mixed_sequence` and `delete_spans_sequence`. A delete
+file committed before every data file would not last, since at a later commit Iceberg Java drops
+delete files older than every live data file,
+[`MergingSnapshotProducer.apply`](https://github.com/apache/iceberg/blob/apache-iceberg-1.10.0/core/src/main/java/org/apache/iceberg/MergingSnapshotProducer.java#L928-L937).
+Only the main pipeline's orderings read `deletes_before_data`, so classes without a sentinel get no
+witness. At seed 42 there are 2,196 witnesses, numbered past the generator's last config id, and of
+the 2,386 classes with a sentinel, 190 get none: 90 with no delete file, 22 with one data file, and
+78 with two data files or more and a delete file whose second pass holds no eligible config.
 
 ---
 
 ## Output Format
 
-Each config is a complete structural description of one Iceberg table:
+Each config is a complete structural description of one Iceberg table, here config 8315 of the seed 42 run:
 
 ```json
 {
-  "config_id": 34061,
+  "config_id": 8315,
   "row_count": 4,
   "delete_pattern": ["i", "j"],
   "delete_count": 2,
@@ -500,7 +533,7 @@ Each config is a complete structural description of one Iceberg table:
       "file_id": "del_f0",
       "file_index": 0,
       "deletes": [
-        {"row_id": 1, "data_file": "data_f0", "data_file_index": 0, "position": 1}
+        {"row_id": 0, "data_file": "data_f0", "data_file_index": 0, "position": 0}
       ]
     },
     {
@@ -540,23 +573,23 @@ Each config is a complete structural description of one Iceberg table:
 - `value_strategy`: Which L4 strategy was used (`row_numbers`, `nulls`, `repetition`).
 - `manifest_strategy`: How files are grouped in manifests (`minimal`, `maximal`).
 - `is_no_sentinel`: `true` for no-sentinel configs (absent or `false` for with-sentinel).
-- `null_rows`: (only for `nulls` strategy in main pipeline) List of row_ids set to NULL.
+- `null_rows`: (only for the `nulls` strategy, in either path) List of row_ids set to NULL.
 
 ---
 
 ## Current Numbers (seed=42, default flags)
 
-Default flags: `exhaustive_mode=False`, `exhaustive_delete_instantiation=False`.
+Default flags: `exhaustive_mode=False`, `deletes_before_data=False`. Every config count in this document comes from one run of `TableConfigGenerator(max_row_count=6, seed=42).generate_all()`, the sample's from `select_configs` over it and the witnesses' from the second pass `witnesses` makes at the same seed.
 
 | row_count | with-sentinel | no-sentinel | total |
 |-----------|--------------|-------------|-------|
 | 1 | 64 | 0 | 64 |
-| 2 | 1,036 | 268 | 1,304 |
-| 3 | 4,434 | 716 | 5,150 |
-| 4 | 12,318 | 1,316 | 13,634 |
-| 5 | 31,772 | 1,652 | 33,424 |
-| 6 | 85,638 | 2,756 | 88,394 |
-| **total** | **135,262** | **6,708** | **141,970** |
+| 2 | 1,064 | 268 | 1,332 |
+| 3 | 4,750 | 728 | 5,478 |
+| 4 | 16,392 | 1,508 | 17,900 |
+| 5 | 43,666 | 1,808 | 45,474 |
+| 6 | 129,024 | 3,080 | 132,104 |
+| **total** | **194,960** | **7,392** | **202,352** |
 
 **Seed dependence:** Non-representative counts are seed-dependent (different seeds produce slightly different totals because sampling + physical dedup interact). The row_count=1 counts and representative counts are deterministic regardless of seed.
 
@@ -564,7 +597,7 @@ Default flags: `exhaustive_mode=False`, `exhaustive_delete_instantiation=False`.
 
 ## End-to-End Trace: One Config Through the Pipeline
 
-Starting from scratch, here's how config #34061 gets generated:
+Starting from scratch, here's how config 8315 of the seed 42 run gets generated:
 
 ```
 L1: row_count = 4
@@ -574,27 +607,27 @@ L2: pattern = ['i', 'j'], delete_count = 2
 L3: data_partition = [[0,1],[2,3]]
     --> equiv class ((2,2), 2), this IS the representative
     delete_partition = [[0],[1]]  (2 delete files, 1 entry each)
-    instantiation 0: {i: None, j: None} (both target non-sentinel rows)
-    --> i maps to row 0 (in data_f0), j maps to row 1 (in data_f0)
+    instantiation 2, one of the two that put an entry on the sentinel row
+    --> the entries map to row 0 (in data_f0) and row 2 (in data_f1)
     sentinel_in_file = data_f1 (contains row 2 = row_count//2)
 
     Skeleton:
       data_f0: [row_0 pos_0, row_1 pos_1]
       data_f1: [row_2 pos_0, row_3 pos_1]  <-- sentinel file
       del_f0: [(row_0, data_f0, pos_0)]
-      del_f1: [(row_1, data_f0, pos_1)]
+      del_f1: [(row_2, data_f1, pos_0)]
 
 L4: value_strategy = 'row_numbers'
     row_0.value=0, row_1.value=1, row_2.value=2, row_3.value=3
 
 L5: is_representative=True --> exhaustive orderings
     This config has 4 files total (2 data + 2 delete)
-    Constraint: del_f0 >= data_f0, del_f1 >= data_f0
-    One valid ordering chosen: [{data_f0, data_f1}, {del_f0, del_f1}]
+    Constraint: del_f0 >= data_f0, del_f1 >= data_f1
+    One of its orderings: [{data_f0, data_f1}, {del_f0, del_f1}]
 
 L6: manifest_strategy = 'minimal'
     snapshot_0: data_manifests=[[data_f0, data_f1]], delete_manifests=[]
     snapshot_1: data_manifests=[], delete_manifests=[[del_f0, del_f1]]
 
-    --> config_id assigned, yielded as final output
+    --> config_id 8315 assigned, yielded as final output
 ```
