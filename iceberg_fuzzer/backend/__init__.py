@@ -45,7 +45,7 @@ class Checkpoint:
 
     Attributes:
         row_count: Total number of rows in the table.
-        content_hash: Order-independent hash of all row data (XOR of per-row SHA256).
+        content_hash: Order-independent hash of all row data, see backend/canonical.py.
     """
     row_count: int
     content_hash: int
@@ -113,9 +113,9 @@ class ValidationEngine(ABC):
         """
         pass
 
-    @abstractmethod
     def validate(self, checkpoint: Checkpoint, warehouse: str, namespace: str, table_name: str) -> list[AssertionResult]:
-        """Validate that the table's current state matches a previously captured checkpoint.
+        """Validate that the table's current state matches a previously captured checkpoint: its row
+        count and content hash.
 
         Args:
             checkpoint: The expected state captured before the operation.
@@ -126,7 +126,11 @@ class ValidationEngine(ABC):
         Returns:
             A list of AssertionResults (one per check, e.g., row_count, content_hash).
         """
-        pass
+        current = self.capture_checkpoint(warehouse, namespace, table_name)
+        return [
+            AssertionResult.row_count(checkpoint.row_count, current.row_count),
+            AssertionResult.content_hash(checkpoint.content_hash, current.content_hash),
+        ]
 
     @abstractmethod
     def filtered_count(
