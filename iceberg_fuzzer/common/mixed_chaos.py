@@ -5,11 +5,22 @@ them to land on MIXED_CHAOS_TOTAL_ROWS_FINAL. Which third decides whether the
 posdelete variant holds any position delete file at all.
 
 Each append batch is written as its own data files, so a delete covering a
-contiguous range of ids covers whole files, and Iceberg satisfies it by dropping
-them -- correctly and more cheaply than recording positions. The table then ends
-up with no position delete in it despite its name. Deleting every
-POSDELETE_MODULUS-th row instead leaves every file partially deleted, so the
-positions have to be written down.
+contiguous range of ids covers whole files, and their id bounds show it. Iceberg
+satisfies such a delete by dropping the files -- correctly and more cheaply than
+recording positions -- and the table ends up with no position delete in it
+despite its name. Iceberg cannot evaluate `id % POSDELETE_MODULUS = 0` against a
+file's bounds, so it cannot drop files for it: Spark reads the rows and writes
+down the position of each one it deletes.
+
+Whether that leaves a file partly deleted depends on the partition transform,
+since a file holds one partition's rows. A month, day or hour partition fixes the
+timestamp's month, which generate_partitioned_data sets to 1 + id % 12. 3 divides
+12, so each such partition holds a single id % 3, and each of its files is either
+deleted in full, by position deletes, or untouched. The same goes for
+identity(int_col), one row per partition, and for any combination including one
+of these. part_month_timestamp_mixed_chaos_posdelete ends with 300 of its 900
+data files fully deleted and none partly. Every other transform puts every id % 3
+in each partition, so each file is partly deleted.
 """
 
 # Every row whose id is a multiple of this is deleted from a posdelete table.

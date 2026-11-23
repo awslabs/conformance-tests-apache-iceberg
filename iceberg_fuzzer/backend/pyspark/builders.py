@@ -92,7 +92,7 @@ def create_spark_session(warehouse_path, app_name=None):
         .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
         .config("spark.sql.catalog.spark_catalog", "org.apache.iceberg.spark.SparkSessionCatalog") \
         .config("spark.sql.catalog.spark_catalog.type", "hive") \
-        .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1") \
+        .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.10.0") \
         .config("spark.jars.ivy", "/tmp/.ivy2") \
         .config("spark.driver.host", "localhost") \
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
@@ -160,9 +160,8 @@ def create_spark_session(warehouse_path, app_name=None):
             ) \
             .config(
                 "spark.jars.packages",
-                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1,"
-                "software.amazon.awssdk:bundle:2.28.11,"
-                "software.amazon.awssdk:url-connection-client:2.28.11"
+                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.10.0,"
+                "org.apache.iceberg:iceberg-aws-bundle:1.10.0"
             )
     else:
         # Configure for local/HDFS with comprehensive file system settings
@@ -273,30 +272,6 @@ def get_catalog_and_namespace(warehouse_path, table_type):
     # The namespace is the table type verbatim (simple, write_pattern,
     # partitioned, evolution) for every warehouse type.
     return get_catalog_name(warehouse_path), table_type
-
-def create_table_safe(spark, catalog, namespace, table_name, schema_fields, props_sql, partition_clause=""):
-    """Create table with IF NOT EXISTS to handle race conditions in S3 Tables"""
-    try:
-        create_sql = (
-            f"CREATE TABLE IF NOT EXISTS {catalog}.{namespace}.{table_name} "
-            f"({schema_fields}) USING iceberg {partition_clause} "
-            f"TBLPROPERTIES ({props_sql})"
-        )
-        spark.sql(create_sql)
-        return True
-    except Exception as e:
-        # If IF NOT EXISTS fails, try regular CREATE (for older Spark versions)
-        try:
-            create_sql = (
-                f"CREATE TABLE {catalog}.{namespace}.{table_name} "
-                f"({schema_fields}) USING iceberg {partition_clause} "
-                f"TBLPROPERTIES ({props_sql})"
-            )
-            spark.sql(create_sql)
-            return True
-        except Exception as e2:
-            print(f"    → Failed to create table: {e2}")
-            return False
 
 def table_exists(spark, catalog, namespace, table_name):
     """Check if table exists"""
@@ -1490,8 +1465,6 @@ def build_partition_clause(partition_specs):
                 fields.append(f"days({col_name})")
             case 'hour':
                 fields.append(f"hours({col_name})")
-            case 'void':
-                fields.append(f"void({col_name})")
             case _:
                 raise ValueError(f"Unrecognised partition transform: {transform!r}")
     if not fields:
@@ -1558,9 +1531,6 @@ def parse_partition_spec(spec_str):
         elif part.startswith('hour(') or part.startswith('hours('):
             col_name = part[5:-1] if part.startswith('hour(') else part[6:-1]
             partition_specs.append(('hour', col_name, None))
-        elif part.startswith('void('):
-            col_name = part[5:-1]
-            partition_specs.append(('void', col_name, None))
         else:
             raise ValueError(f"Unrecognised partition transform: {part!r}")
 
@@ -1718,10 +1688,8 @@ def create_partitioned_table(
                 final_df = prepare_partitioned_df(final_df, sort_cols, 3)
                 final_df.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
             else:
-                # Delete every POSDELETE_MODULUS-th row so each data file is
-                # left partly deleted. A contiguous range lines up with the append
-                # batches and is satisfied by dropping whole files, leaving no
-                # position delete.
+                # Iceberg cannot answer this predicate from a file's id bounds, so it
+                # records positions instead of dropping files; see common/mixed_chaos.py.
                 chunks = mixed_chaos_delete_chunks()
                 for number, (start_id, end_id) in enumerate(chunks, start=1):
                     spark.sql(
