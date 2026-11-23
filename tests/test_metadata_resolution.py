@@ -287,3 +287,41 @@ class TestTheHadoopCounter:
             '00010-0000ffff-0000-0000-0000-000000000000.metadata.json'
         ) is None
         assert validator._hadoop_metadata_version('version-hint.text') is None
+
+
+class _RecordingConnection:
+    """Stands in for a DuckDB connection: records each query and returns no rows."""
+
+    def __init__(self):
+        self.queries = []
+
+    def execute(self, sql):
+        self.queries.append(sql)
+        return self
+
+    def fetchone(self):
+        return (0,)
+
+    def fetchall(self):
+        return []
+
+
+@pytest.mark.parametrize('spec', [
+    {'name': 't', 'type': 'single_type', 'data_type': 'int', 'version': 'v2',
+     'expected_rows': 0, 'schema_columns': 2},
+    {'name': 't', 'type': 'evolution', 'version': 'v2', 'expected_rows': 0,
+     'schema_columns': 2, 'validation_queries': ['column_count', 'snapshot_count']},
+])
+def test_duckdb_reads_the_resolved_file(table, spec):
+    table('v1.metadata.json', **{'format-version': 1})
+    current = table('v2.metadata.json')
+    (table.metadata_dir / 'version-hint.text').write_text('1')
+    conn = _RecordingConnection()
+
+    result = validator._validate_iceberg_table(conn, table.path, spec)
+
+    reads = [q for q in conn.queries if 'iceberg_' in q]
+    assert any('iceberg_scan' in q for q in reads)
+    assert any('iceberg_snapshots' in q for q in reads)
+    assert all(f"'{current}'" in q for q in reads), reads
+    assert result['metadata_validation']['actual_version'] == 2
