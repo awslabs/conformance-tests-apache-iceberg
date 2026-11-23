@@ -1,6 +1,11 @@
-# Apache Iceberg Table Fuzzer
+# Conformance Tests for Apache Iceberg
 
 Generate a comprehensive variety of Apache Iceberg tables for testing compaction, compression, encoding, and cross-engine compatibility scenarios.
+
+> This is not an official Apache Software Foundation project and is not
+> affiliated with or endorsed by the ASF. Apache, Apache Iceberg, Iceberg, and the
+> Apache Iceberg logo are either registered trademarks or trademarks of The Apache
+> Software Foundation in the United States and/or other countries.
 
 ## Installation
 
@@ -56,7 +61,7 @@ write-pattern tables, `specs/partitioned.yaml` partitioned tables,
 type in sequence.
 
 Add `--seed S` to `generate --random N` to replay the selected table specs and
-their order when the spec files and fuzzer revision are unchanged.
+their order when the spec files and the revision of this project are unchanged.
 
 ## Commands
 

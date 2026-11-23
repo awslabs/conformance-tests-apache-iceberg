@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "iceberg-fuzzer"
 version = "1.0.0"
-description = "Apache Iceberg Table Fuzzer for testing compaction, compression, encoding, and cross-engine compatibility"
+description = "Conformance tests for Apache Iceberg: generates and validates tables across engines, compression, encoding and format versions"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "Apache-2.0"}
@@ -43,5 +43,5 @@ dev = [
 iceberg-fuzzer = "iceberg_fuzzer.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/awslabs/apache-iceberg-table-fuzzer"
-Repository = "https://github.com/awslabs/apache-iceberg-table-fuzzer"
+Homepage = "https://github.com/awslabs/conformance-tests-apache-iceberg"
+Repository = "https://github.com/awslabs/conformance-tests-apache-iceberg"

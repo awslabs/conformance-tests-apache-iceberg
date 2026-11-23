@@ -1,6 +1,6 @@
 # Test Configurations
 
-This directory contains test-specific configuration files for the Apache Iceberg Table Fuzzer.
+This directory contains test-specific configuration files for the Conformance Tests for Apache Iceberg.
 
 ## Files
 

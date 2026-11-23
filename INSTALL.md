@@ -20,8 +20,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ### 2. Clone and Setup
 ```bash
-git clone https://github.com/awslabs/apache-iceberg-table-fuzzer.git
-cd apache-iceberg-table-fuzzer
+git clone https://github.com/awslabs/conformance-tests-apache-iceberg.git
+cd conformance-tests-apache-iceberg
 ./setup.sh
 ```
 
