@@ -52,10 +52,8 @@ def create_spark_session(warehouse_path: str) -> SparkSession:
             )
             .config(
                 "spark.jars.packages",
-                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1,"
-                "org.apache.iceberg:iceberg-aws-bundle:1.7.1,"
-                "software.amazon.awssdk:bundle:2.28.11,"
-                "software.amazon.awssdk:url-connection-client:2.28.11",
+                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.10.0,"
+                "org.apache.iceberg:iceberg-aws-bundle:1.10.0",
             )
         )
     else:
@@ -68,7 +66,7 @@ def create_spark_session(warehouse_path: str) -> SparkSession:
             .config("spark.sql.catalog.local.warehouse", warehouse_path)
             .config(
                 "spark.jars.packages",
-                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1",
+                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.10.0",
             )
             .config("spark.jars.ivy", "/tmp/.ivy2")
         )
