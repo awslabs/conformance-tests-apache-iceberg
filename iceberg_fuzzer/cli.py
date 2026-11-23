@@ -395,7 +395,8 @@ Examples:
 
     # Handle build-shapes command
     if args.command == 'build-shapes':
-        from iceberg_fuzzer.exhaustive import TableConfigGenerator, UnifiedTableBuilder
+        from iceberg_fuzzer.exhaustive import TableConfigGenerator
+        from iceberg_fuzzer.exhaustive.table_builder import UnifiedTableBuilder
         from iceberg_fuzzer.exhaustive.dimensions.data_types import (
             DataTypeChoice, TypedValueFiller)
         from iceberg_fuzzer.exhaustive.dimensions.interfaces import WriteOptions

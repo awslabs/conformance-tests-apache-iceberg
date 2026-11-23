@@ -44,7 +44,7 @@ Modes:
   --exhaustive:
     - All configs get full exhaustive snapshot orderings
     - ≤5 files: All ordered partitions (100s of orderings)
-    - 6-9 files: Delete-focused (10s of orderings)
+    - ≥6 files: The same orderings as for five or fewer files, collapsed
     - Result: 2M+ configs
     - Use with --limit for testing only
         """
@@ -98,12 +98,6 @@ Modes:
         help='Use exhaustive snapshot generation for all configs (instead of equivalence-based)'
     )
 
-    parser.add_argument(
-        '--exhaustive-delete-instantiation',
-        action='store_true',
-        help='Generate ALL delete instantiations for ALL partitions (not just representatives)'
-    )
-
     args = parser.parse_args()
 
     # Validate exhaustive mode
@@ -119,17 +113,14 @@ Modes:
 
     # Initialize generator
     mode = "exhaustive" if args.exhaustive else "equivalence-based"
-    delete_inst_mode = "exhaustive" if args.exhaustive_delete_instantiation else "hybrid (equiv-based)"
     print(f"Initializing generator:")
     print(f"  max_rows: {args.max_rows}")
     print(f"  seed: {args.seed}")
     print(f"  snapshot mode: {mode}")
-    print(f"  delete instantiation: {delete_inst_mode}")
     generator = TableConfigGenerator(
         max_row_count=args.max_rows,
         seed=args.seed,
-        exhaustive_mode=args.exhaustive,
-        exhaustive_delete_instantiation=args.exhaustive_delete_instantiation
+        exhaustive_mode=args.exhaustive
     )
 
     # Generate configs
