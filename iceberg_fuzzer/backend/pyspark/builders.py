@@ -92,7 +92,7 @@ def create_spark_session(warehouse_path, app_name=None):
         .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
         .config("spark.sql.catalog.spark_catalog", "org.apache.iceberg.spark.SparkSessionCatalog") \
         .config("spark.sql.catalog.spark_catalog.type", "hive") \
-        .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1") \
+        .config("spark.jars.packages", "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.10.0") \
         .config("spark.jars.ivy", "/tmp/.ivy2") \
         .config("spark.driver.host", "localhost") \
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
@@ -160,9 +160,8 @@ def create_spark_session(warehouse_path, app_name=None):
             ) \
             .config(
                 "spark.jars.packages",
-                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1,"
-                "software.amazon.awssdk:bundle:2.28.11,"
-                "software.amazon.awssdk:url-connection-client:2.28.11"
+                "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.10.0,"
+                "org.apache.iceberg:iceberg-aws-bundle:1.10.0"
             )
     else:
         # Configure for local/HDFS with comprehensive file system settings
