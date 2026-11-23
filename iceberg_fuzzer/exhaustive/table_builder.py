@@ -42,7 +42,7 @@ from .dimensions.compression import CompressionChoice
 
 logger = logging.getLogger(__name__)
 
-ICEBERG_SPARK_RUNTIME = "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.7.1"
+ICEBERG_SPARK_RUNTIME = "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.10.0"
 
 # Bootstrap codec for the bytes-per-row measurement probe, used only before
 # build_table sets the actual data codec from write_options (e.g. when
