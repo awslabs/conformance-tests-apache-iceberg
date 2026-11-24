@@ -13,11 +13,10 @@ file's bounds, so it cannot drop files for it: Spark reads the rows and writes
 down the position of each one it deletes.
 
 Whether that leaves a file partly deleted depends on the partition transform,
-since a file holds one partition's rows. A month, day, hour or date partition
-(Spark resolves `date` to day) fixes the timestamp's month, which
-generate_partitioned_data sets to 1 + id % 12. 3 divides 12, so each such
-partition holds a single id % 3, and each of its files is either deleted in full,
-by position deletes, or untouched. The same goes for
+since a file holds one partition's rows. A month, day or hour partition fixes the
+timestamp's month, which generate_partitioned_data sets to 1 + id % 12. 3 divides
+12, so each such partition holds a single id % 3, and each of its files is either
+deleted in full, by position deletes, or untouched. The same goes for
 identity(int_col), one row per partition, and for any combination including one
 of these. part_month_timestamp_mixed_chaos_posdelete ends with 300 of its 900
 data files fully deleted and none partly. Every other transform puts every id % 3

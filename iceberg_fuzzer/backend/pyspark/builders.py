@@ -31,7 +31,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 from decimal import Decimal
 import boto3
-import yaml
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, date_add
 from pyspark.sql.types import (
@@ -48,6 +47,7 @@ from iceberg_fuzzer.common.mixed_chaos import (
     mixed_chaos_append_batches,
     mixed_chaos_delete_chunks,
 )
+from iceberg_fuzzer.common.partition_transforms import partitioned_table_specs
 
 
 @contextmanager
@@ -697,29 +697,13 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
     except Exception:
         pass  # Ignore errors
 
-    # Try to find the table in partitioned specs by generating all possible combinations
-    try:
-        with open('specs/partitioned.yaml', 'r') as f:
-            partitioned_spec = yaml.safe_load(f)
-
-        transforms = partitioned_spec.get('partition_transforms', [])
-        patterns = partitioned_spec.get('patterns', [])
-
-        # Generate all possible table names and find exact match
-        for transform in transforms:
-            for pattern in patterns:
-                for mode in ['cow', 'posdelete']:
-                    generated_name = f"part_{transform['name']}_{pattern['name']}_{mode}"
-                    if generated_name == table_name:
-                        # Found exact match - create the table using YAML data
-                        partition_spec_list = transform['spec']  # This is already a list from YAML
-                        partition_spec_str = ','.join(partition_spec_list)
-                        return create_partitioned_table(
-                            spark, warehouse_path, table_name, pattern['name'],
-                            partition_spec_str, delete_existing=delete_existing
-                        )
-    except Exception as e:
-        print(f"Error checking partitioned specs: {e}")
+    # Try to find the table in the partitioned set
+    for spec in partitioned_table_specs():
+        if spec['name'] == table_name:
+            return create_partitioned_table(
+                spark, warehouse_path, table_name, spec['pattern'],
+                ",".join(spec['transform']), delete_existing=delete_existing
+            )
 
     # Try to find the table in evolution specs
     try:
@@ -1473,8 +1457,6 @@ def build_partition_clause(partition_specs):
                 fields.append(f"bucket({param}, {col_name})")
             case 'truncate':
                 fields.append(f"truncate({param}, {col_name})")
-            case 'date':
-                fields.append(f"date({col_name})")
             case 'year':
                 fields.append(f"years({col_name})")
             case 'month':
@@ -1537,9 +1519,6 @@ def parse_partition_spec(spec_str):
             inner = part[9:-1]  # Remove truncate( and )
             width, col_name = [x.strip() for x in inner.split(',')]
             partition_specs.append(('truncate', col_name, int(width)))
-        elif part.startswith('date('):
-            col_name = part[5:-1]
-            partition_specs.append(('date', col_name, None))
         elif part.startswith('year(') or part.startswith('years('):
             col_name = part[5:-1] if part.startswith('year(') else part[6:-1]
             partition_specs.append(('year', col_name, None))
@@ -1734,108 +1713,6 @@ def create_partitioned_table(
     except Exception as e:
         print(f"Error creating {table_name}: {e}")
         return False
-
-def create_partitioned_table_worker_with_session(warehouse_path, table_name, pattern, partition_spec):
-    """Worker function that creates its own Spark session per thread"""
-    spark = None
-    try:
-        spark = create_spark_session(warehouse_path)
-        spark.conf.set("spark.sql.iceberg.fanout-enabled", "true")
-        success = create_partitioned_table(spark, warehouse_path, table_name, pattern, partition_spec)
-        return (table_name, success)
-    except Exception as e:
-        return (table_name, False)
-    finally:
-        if spark:
-            spark.stop()
-
-def create_partitioned_table_worker(spark, warehouse_path, table_name, pattern, partition_spec, delete_existing=True):
-    """Worker function for parallel partitioned table creation using shared Spark session"""
-    try:
-        result = create_partitioned_table(
-            spark, warehouse_path, table_name, pattern, partition_spec,
-            delete_existing=delete_existing
-        )
-        return (table_name, result)
-    except Exception as e:
-        return (table_name, False)
-
-def generate_partitioned_tables(args, spark, warehouse_path):
-    """Generate partitioned tables - limited to mixed_chaos pattern only"""
-    # Minimal set of 4 essential partition transforms
-    minimal_transforms = [
-        ["identity(category)"],                    # Direct partitioning
-        ["bucket(4, id)"],                       # Hash partitioning
-        ["months(timestamp)"],                   # Temporal partitioning
-        ["identity(category)", "bucket(4, id)"]  # Multi-column partitioning
-    ]
-
-    patterns = ['mixed_chaos']  # Only mixed_chaos pattern
-    delete_modes = ['cow', 'posdelete']  # Test both modes
-
-    total = len(minimal_transforms) * len(patterns) * len(delete_modes)
-    print(f"Generating {total} partitioned tables (minimal set: mixed_chaos pattern only)...")
-
-    # Build list of all tables to create
-    tables = []
-    for transform in minimal_transforms:
-        for pattern in patterns:
-            for delete_mode in delete_modes:
-                transform_name = (
-                    "_".join(transform).replace('(', '_').replace(')', '')
-                    .replace('[', '').replace(']', '').replace(',', '_')
-                )
-                table_name = f"part_{transform_name}_{pattern}_{delete_mode}"
-                tables.append((table_name, pattern, transform))
-
-    created = 0
-    if args.num_parallel > 1:
-        # Parallel execution
-        with ThreadPoolExecutor(max_workers=args.num_parallel) as executor:
-            futures = {
-                executor.submit(create_partitioned_table_worker_with_session, warehouse_path, name, pat, spec): name
-                for name, pat, spec in tables
-            }
-
-            for future in as_completed(futures):
-                table_name = futures[future]
-                try:
-                    _, success = future.result()
-                    if success:
-                        created += 1
-                        print(f"✓ Created {table_name} ({created}/{total})")
-                    else:
-                        print(f"✗ Failed {table_name}")
-                except Exception as e:
-                    print(f"✗ Failed {table_name}: {e}")
-    else:
-        # Sequential execution
-        if spark is None:
-            spark = create_spark_session(warehouse_path)
-            should_stop = True
-        else:
-            should_stop = False
-
-        spark.conf.set("spark.sql.iceberg.fanout-enabled", "true")
-
-        try:
-            for i, (table_name, pattern, partition_spec) in enumerate(tables, 1):
-                try:
-                    if create_partitioned_table(
-                        spark, warehouse_path, table_name, pattern, partition_spec,
-                        delete_existing=delete_existing
-                    ):
-                        created += 1
-                        print(f"✓ Created {table_name} ({created}/{total})")
-                except Exception as e:
-                    print(f"✗ Failed {table_name}: {e}")
-        finally:
-            if should_stop:
-                spark.stop()
-
-    print(f"\nCompleted: {created}/{total} partitioned tables created")
-
-
 
 def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
     """Generate data for evolution tables with schema-aware column mapping"""
