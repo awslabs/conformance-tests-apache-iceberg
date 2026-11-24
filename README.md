@@ -344,7 +344,7 @@ python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /path/
 - `month(timestamp)` - Temporal partitioning (60 monthly partitions)
 - `identity(category), bucket[4](id)` - Multi-column partitioning (20 partitions)
 
-The full set adds further bucket widths, `truncate`, `year`/`day`/`hour`/`date`,
+The full set adds further bucket widths, `truncate`, `year`/`day`/`hour`,
 boolean and numeric identity partitioning, multi-column combinations, and a
 single-partition edge case.
 

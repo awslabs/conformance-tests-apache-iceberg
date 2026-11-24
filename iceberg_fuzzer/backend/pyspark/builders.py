@@ -31,7 +31,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 from decimal import Decimal
 import boto3
-import yaml
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, date_add
 from pyspark.sql.types import (
@@ -43,6 +42,13 @@ from pyspark.sql.types import (
 from iceberg_fuzzer.table_spec import load_table_specs
 from iceberg_fuzzer.common import row_id_from_index
 from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
+from iceberg_fuzzer.common.mixed_chaos import (
+    MIXED_CHAOS_TOTAL_ROWS_FINAL,
+    POSDELETE_MODULUS,
+    mixed_chaos_append_batches,
+    mixed_chaos_delete_chunks,
+)
+from iceberg_fuzzer.common.partition_transforms import partitioned_table_specs
 
 
 @contextmanager
@@ -267,30 +273,6 @@ def get_catalog_and_namespace(warehouse_path, table_type):
     # The namespace is the table type verbatim (simple, write_pattern,
     # partitioned, evolution) for every warehouse type.
     return get_catalog_name(warehouse_path), table_type
-
-def create_table_safe(spark, catalog, namespace, table_name, schema_fields, props_sql, partition_clause=""):
-    """Create table with IF NOT EXISTS to handle race conditions in S3 Tables"""
-    try:
-        create_sql = (
-            f"CREATE TABLE IF NOT EXISTS {catalog}.{namespace}.{table_name} "
-            f"({schema_fields}) USING iceberg {partition_clause} "
-            f"TBLPROPERTIES ({props_sql})"
-        )
-        spark.sql(create_sql)
-        return True
-    except Exception as e:
-        # If IF NOT EXISTS fails, try regular CREATE (for older Spark versions)
-        try:
-            create_sql = (
-                f"CREATE TABLE {catalog}.{namespace}.{table_name} "
-                f"({schema_fields}) USING iceberg {partition_clause} "
-                f"TBLPROPERTIES ({props_sql})"
-            )
-            spark.sql(create_sql)
-            return True
-        except Exception as e2:
-            print(f"    → Failed to create table: {e2}")
-            return False
 
 def table_exists(spark, catalog, namespace, table_name):
     """Check if table exists"""
@@ -725,29 +707,13 @@ def create_single_table(spark, warehouse_path, table_name, delete_existing=True)
     except Exception:
         pass  # Ignore errors
 
-    # Try to find the table in partitioned specs by generating all possible combinations
-    try:
-        with open('specs/partitioned.yaml', 'r') as f:
-            partitioned_spec = yaml.safe_load(f)
-
-        transforms = partitioned_spec.get('partition_transforms', [])
-        patterns = partitioned_spec.get('patterns', [])
-
-        # Generate all possible table names and find exact match
-        for transform in transforms:
-            for pattern in patterns:
-                for mode in ['cow', 'posdelete']:
-                    generated_name = f"part_{transform['name']}_{pattern['name']}_{mode}"
-                    if generated_name == table_name:
-                        # Found exact match - create the table using YAML data
-                        partition_spec_list = transform['spec']  # This is already a list from YAML
-                        partition_spec_str = ','.join(partition_spec_list)
-                        return create_partitioned_table(
-                            spark, warehouse_path, table_name, pattern['name'],
-                            partition_spec_str, delete_existing=delete_existing
-                        )
-    except Exception as e:
-        print(f"Error checking partitioned specs: {e}")
+    # Try to find the table in the partitioned set
+    for spec in partitioned_table_specs():
+        if spec['name'] == table_name:
+            return create_partitioned_table(
+                spark, warehouse_path, table_name, spec['pattern'],
+                ",".join(spec['transform']), delete_existing=delete_existing
+            )
 
     # Try to find the table in evolution specs
     try:
@@ -1476,6 +1442,46 @@ def generate_partitioned_data(spark, schema_spec, num_rows=100, row_offset=0):
 
     return spark.createDataFrame(data, schema)
 
+def build_create_table_sql(qualified_name, schema_fields, partition_clause, props_sql):
+    """The CREATE TABLE statement for a partitioned table."""
+    sql = f"CREATE TABLE {qualified_name} ({schema_fields}) USING iceberg"
+    if partition_clause:
+        sql += f" {partition_clause}"
+    if props_sql:
+        sql += f" TBLPROPERTIES ({props_sql})"
+    return sql
+
+
+def build_partition_clause(partition_specs):
+    """The `PARTITIONED BY (...)` clause for a parsed partition spec, or ''.
+
+    Spark's own transform names, which are not the spec's: `year` is written
+    `years`, and `bucket`/`truncate` take the parameter first.
+    """
+    fields = []
+    for transform, col_name, param in partition_specs:
+        match transform:
+            case 'identity':
+                fields.append(col_name)
+            case 'bucket':
+                fields.append(f"bucket({param}, {col_name})")
+            case 'truncate':
+                fields.append(f"truncate({param}, {col_name})")
+            case 'year':
+                fields.append(f"years({col_name})")
+            case 'month':
+                fields.append(f"months({col_name})")
+            case 'day':
+                fields.append(f"days({col_name})")
+            case 'hour':
+                fields.append(f"hours({col_name})")
+            case _:
+                raise ValueError(f"Unrecognised partition transform: {transform!r}")
+    if not fields:
+        return ''
+    return f"PARTITIONED BY ({', '.join(fields)})"
+
+
 def parse_partition_spec(spec_str):
     """Parse partition spec string into list of (transform, column, param) tuples"""
     # Smart split that respects parentheses
@@ -1523,9 +1529,6 @@ def parse_partition_spec(spec_str):
             inner = part[9:-1]  # Remove truncate( and )
             width, col_name = [x.strip() for x in inner.split(',')]
             partition_specs.append(('truncate', col_name, int(width)))
-        elif part.startswith('date('):
-            col_name = part[5:-1]
-            partition_specs.append(('date', col_name, None))
         elif part.startswith('year(') or part.startswith('years('):
             col_name = part[5:-1] if part.startswith('year(') else part[6:-1]
             partition_specs.append(('year', col_name, None))
@@ -1538,9 +1541,8 @@ def parse_partition_spec(spec_str):
         elif part.startswith('hour(') or part.startswith('hours('):
             col_name = part[5:-1] if part.startswith('hour(') else part[6:-1]
             partition_specs.append(('hour', col_name, None))
-        elif part.startswith('void('):
-            col_name = part[5:-1]
-            partition_specs.append(('void', col_name, None))
+        else:
+            raise ValueError(f"Unrecognised partition transform: {part!r}")
 
     return partition_specs
 
@@ -1610,28 +1612,6 @@ def create_partitioned_table(
         partition_specs = parse_partition_spec(partition_spec)
         sort_cols = get_sort_columns(partition_specs)
 
-        # Build SQL partition spec
-        partition_spec_sql = []
-        for transform, col_name, param in partition_specs:
-            if transform == 'identity':
-                partition_spec_sql.append(col_name)
-            elif transform == 'bucket':
-                partition_spec_sql.append(f"bucket({param}, {col_name})")
-            elif transform == 'truncate':
-                partition_spec_sql.append(f"truncate({param}, {col_name})")
-            elif transform == 'date':
-                partition_spec_sql.append(f"date({col_name})")
-            elif transform == 'year':
-                partition_spec_sql.append(f"years({col_name})")
-            elif transform == 'month':
-                partition_spec_sql.append(f"months({col_name})")
-            elif transform == 'day':
-                partition_spec_sql.append(f"days({col_name})")
-            elif transform == 'hour':
-                partition_spec_sql.append(f"hours({col_name})")
-            elif transform == 'void':
-                partition_spec_sql.append(f"void({col_name})")
-
         # Build table properties - use snappy compression and plain encoding for partitioned tables
         props = get_table_properties(table_name)
 
@@ -1650,9 +1630,12 @@ def create_partitioned_table(
         schema_fields = ", ".join([f"{f.name} {f.dataType.simpleString()}" for f in schema_df.schema.fields])
 
         # Build CREATE TABLE statement with properties
-        create_sql = f"CREATE TABLE {catalog}.{namespace}.{table_name} ({schema_fields}) USING iceberg"
-        if props_sql:
-            create_sql += f" TBLPROPERTIES ({props_sql})"
+        create_sql = build_create_table_sql(
+            f"{catalog}.{namespace}.{table_name}",
+            schema_fields,
+            build_partition_clause(partition_specs),
+            props_sql,
+        )
 
         spark.sql(create_sql)
 
@@ -1700,36 +1683,31 @@ def create_partitioned_table(
                 spark.sql(f"DELETE FROM {catalog}.{namespace}.{table_name} WHERE id > 100000")
 
         elif pattern_name == "mixed_chaos":
-            # Create 150K rows, delete 1/3, add back to reach 100K
-            for i in range(15):
-                batch_df = generate_partitioned_data(spark, schema_spec, 10000, i * 10000)
+            for batch_rows, row_offset in mixed_chaos_append_batches():
+                batch_df = generate_partitioned_data(
+                    spark, schema_spec, batch_rows, row_offset
+                )
                 batch_df = prepare_partitioned_df(batch_df, sort_cols, 3)
                 batch_df.writeTo(f"{catalog}.{namespace}.{table_name}").append()
 
             if "cow" in table_name:
                 # COW: Use overwrite
-                final_df = generate_partitioned_data(spark, schema_spec, 100000, 0)
+                final_df = generate_partitioned_data(
+                    spark, schema_spec, MIXED_CHAOS_TOTAL_ROWS_FINAL, 0
+                )
                 final_df = prepare_partitioned_df(final_df, sort_cols, 3)
                 final_df.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
             else:
-                # Posdelete: Force position deletes with multiple DELETE operations
-                # Delete in smaller chunks to force position delete files
-                for chunk in range(5):
-                    start_id = 100000 + (chunk * 10000) + 1
-                    end_id = 100000 + ((chunk + 1) * 10000)
-                    try:
-                        spark.sql(
-                            f"DELETE FROM {catalog}.{namespace}.{table_name} "
-                            f"WHERE id >= {start_id} AND id < {end_id}"
-                        )
-                        print(f"✓ DELETE chunk {chunk+1}/5 for {table_name}")
-                    except Exception as e:
-                        print(f"✗ DELETE failed for {table_name}: {e}")
-                        # Fallback to overwrite if DELETE fails
-                        final_df = generate_partitioned_data(spark, schema_spec, 100000, 0)
-                        final_df = prepare_partitioned_df(final_df, sort_cols, 3)
-                        final_df.writeTo(f"{catalog}.{namespace}.{table_name}").overwritePartitions()
-                        break
+                # Iceberg cannot answer this predicate from a file's id bounds, so it
+                # records positions instead of dropping files; see common/mixed_chaos.py.
+                chunks = mixed_chaos_delete_chunks()
+                for number, (start_id, end_id) in enumerate(chunks, start=1):
+                    spark.sql(
+                        f"DELETE FROM {catalog}.{namespace}.{table_name} "
+                        f"WHERE id % {POSDELETE_MODULUS} = 0 "
+                        f"AND id >= {start_id} AND id <= {end_id}"
+                    )
+                    print(f"✓ DELETE chunk {number}/{len(chunks)} for {table_name}")
 
         else:
             # Default: append-only pattern (100K rows)
@@ -1745,108 +1723,6 @@ def create_partitioned_table(
     except Exception as e:
         print(f"Error creating {table_name}: {e}")
         return False
-
-def create_partitioned_table_worker_with_session(warehouse_path, table_name, pattern, partition_spec):
-    """Worker function that creates its own Spark session per thread"""
-    spark = None
-    try:
-        spark = create_spark_session(warehouse_path)
-        spark.conf.set("spark.sql.iceberg.fanout-enabled", "true")
-        success = create_partitioned_table(spark, warehouse_path, table_name, pattern, partition_spec)
-        return (table_name, success)
-    except Exception as e:
-        return (table_name, False)
-    finally:
-        if spark:
-            spark.stop()
-
-def create_partitioned_table_worker(spark, warehouse_path, table_name, pattern, partition_spec, delete_existing=True):
-    """Worker function for parallel partitioned table creation using shared Spark session"""
-    try:
-        result = create_partitioned_table(
-            spark, warehouse_path, table_name, pattern, partition_spec,
-            delete_existing=delete_existing
-        )
-        return (table_name, result)
-    except Exception as e:
-        return (table_name, False)
-
-def generate_partitioned_tables(args, spark, warehouse_path):
-    """Generate partitioned tables - limited to mixed_chaos pattern only"""
-    # Minimal set of 4 essential partition transforms
-    minimal_transforms = [
-        ["identity(category)"],                    # Direct partitioning
-        ["bucket(4, id)"],                       # Hash partitioning
-        ["months(timestamp)"],                   # Temporal partitioning
-        ["identity(category)", "bucket(4, id)"]  # Multi-column partitioning
-    ]
-
-    patterns = ['mixed_chaos']  # Only mixed_chaos pattern
-    delete_modes = ['cow', 'posdelete']  # Test both modes
-
-    total = len(minimal_transforms) * len(patterns) * len(delete_modes)
-    print(f"Generating {total} partitioned tables (minimal set: mixed_chaos pattern only)...")
-
-    # Build list of all tables to create
-    tables = []
-    for transform in minimal_transforms:
-        for pattern in patterns:
-            for delete_mode in delete_modes:
-                transform_name = (
-                    "_".join(transform).replace('(', '_').replace(')', '')
-                    .replace('[', '').replace(']', '').replace(',', '_')
-                )
-                table_name = f"part_{transform_name}_{pattern}_{delete_mode}"
-                tables.append((table_name, pattern, transform))
-
-    created = 0
-    if args.num_parallel > 1:
-        # Parallel execution
-        with ThreadPoolExecutor(max_workers=args.num_parallel) as executor:
-            futures = {
-                executor.submit(create_partitioned_table_worker_with_session, warehouse_path, name, pat, spec): name
-                for name, pat, spec in tables
-            }
-
-            for future in as_completed(futures):
-                table_name = futures[future]
-                try:
-                    _, success = future.result()
-                    if success:
-                        created += 1
-                        print(f"✓ Created {table_name} ({created}/{total})")
-                    else:
-                        print(f"✗ Failed {table_name}")
-                except Exception as e:
-                    print(f"✗ Failed {table_name}: {e}")
-    else:
-        # Sequential execution
-        if spark is None:
-            spark = create_spark_session(warehouse_path)
-            should_stop = True
-        else:
-            should_stop = False
-
-        spark.conf.set("spark.sql.iceberg.fanout-enabled", "true")
-
-        try:
-            for i, (table_name, pattern, partition_spec) in enumerate(tables, 1):
-                try:
-                    if create_partitioned_table(
-                        spark, warehouse_path, table_name, pattern, partition_spec,
-                        delete_existing=delete_existing
-                    ):
-                        created += 1
-                        print(f"✓ Created {table_name} ({created}/{total})")
-                except Exception as e:
-                    print(f"✗ Failed {table_name}: {e}")
-        finally:
-            if should_stop:
-                spark.stop()
-
-    print(f"\nCompleted: {created}/{total} partitioned tables created")
-
-
 
 def generate_evolution_data(spark, table_name, num_rows, row_offset=0):
     """Generate data for evolution tables with schema-aware column mapping"""

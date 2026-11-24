@@ -37,6 +37,7 @@ import yaml
 
 from iceberg_fuzzer.common import row_id_from_index
 from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
+from iceberg_fuzzer.common.partition_transforms import partitioned_table_specs
 from iceberg_fuzzer.table_spec import select_primitive_types
 from iceberg_fuzzer.validator import TableValidator
 
@@ -153,8 +154,13 @@ def _extract_expected_write_pattern_tables(specs):
 
     return tables
 
-def _extract_expected_partitioned_tables(specs):
-    """Extract expected partitioned table specifications from partitioned.yaml"""
+def _extract_expected_partitioned_tables(specs, minimal=False):
+    """Extract expected partitioned table specifications.
+
+    The set of tables comes from the same place `generate` builds it, so the
+    two cannot disagree. `partitioned.yaml` supplies only the row and column
+    counts every table in the set shares.
+    """
 
     tables = []
 
@@ -174,88 +180,23 @@ def _extract_expected_partitioned_tables(specs):
         print(f"Warning: Could not load partitioned.yaml: {e}")
         return tables
 
-    # Extract patterns and configuration
-    patterns = [p['name'] for p in partitioned_specs.get('patterns', [])]
-    config = partitioned_specs.get('table_config', {})
-    delete_modes = config.get('delete_modes', ['cow', 'posdelete'])
-    expected_rows = partitioned_specs.get('metadata', {}).get('final_rows', 100000)
-    expected_columns = partitioned_specs.get('metadata', {}).get('total_columns', 30)
+    metadata = partitioned_specs.get('metadata', {})
+    expected_rows = metadata.get('final_rows', 100000)
+    expected_columns = metadata.get('total_columns', 30)
 
-    # All partition transforms (full set - validator should expect all possible tables)
-    partition_transforms = [
-        # Single-column transforms
-        ["identity(category)"], ["bucket[4](id)"], ["bucket[8](id)"], ["truncate[2](name)"],
-        ["truncate[5](name)"], ["year(timestamp)"], ["month(timestamp)"], ["day(timestamp)"],
-        ["hour(timestamp)"], ["bucket[10](value)"], ["date(timestamp)"], ["bucket[2](id)"],
-        ["bucket[16](id)"], ["bucket[32](id)"], ["bucket[4](value)"], ["bucket[8](value)"],
-        ["truncate[1](name)"], ["truncate[3](name)"], ["truncate[10](name)"],
-        ["identity(boolean_col)"], ["identity(int_col)"], ["identity(date_col)"],
-        # Multi-column transforms
-        ["identity(category)", "year(timestamp)"], ["identity(category)", "bucket[8](id)"],
-        ["bucket[4](id)", "day(timestamp)"], ["year(timestamp)", "bucket[4](id)"],
-        ["identity(category)", "month(timestamp)", "bucket[4](id)"],
-        ["hour(timestamp)", "identity(category)"], ["day(timestamp)", "bucket[8](id)"],
-        ["truncate[2](name)", "year(timestamp)"], ["bucket[4](id)", "bucket[8](value)"],
-        ["identity(category)", "day(timestamp)", "bucket[4](id)"],
-        ["date(timestamp)", "identity(category)"], ["truncate[3](name)", "bucket[4](id)"],
-        ["month(timestamp)", "bucket[2](id)"],
-        # Edge cases
-        ["identity(single_value_field)"]
-    ]
-
-    for transform in partition_transforms:
-        # Generate clean table name from transform spec
-        transform_parts = []
-        for t in transform:
-            if t.startswith('identity('):
-                col = t[9:-1]
-                transform_parts.append(f"identity_{col}")
-            elif t.startswith('bucket['):
-                size = t.split('[')[1].split(']')[0]
-                col = t.split('(')[1].rstrip(')')
-                transform_parts.append(f"bucket{size}_{col}")
-            elif t.startswith('truncate['):
-                width = t.split('[')[1].split(']')[0]
-                col = t.split('(')[1].rstrip(')')
-                transform_parts.append(f"truncate{width}_{col}")
-            elif t.startswith('date('):
-                col = t[5:-1]
-                transform_parts.append(f"date_{col}")
-            elif t.startswith('year('):
-                col = t[5:-1]
-                transform_parts.append(f"year_{col}")
-            elif t.startswith('month('):
-                col = t[6:-1]
-                transform_parts.append(f"month_{col}")
-            elif t.startswith('day('):
-                col = t[4:-1]
-                transform_parts.append(f"day_{col}")
-            elif t.startswith('hour('):
-                col = t[5:-1]
-                transform_parts.append(f"hour_{col}")
-
-        transform_name = "_".join(transform_parts)
-
-        for pattern in patterns:
-            for delete_mode in delete_modes:
-                # Skip invalid combinations: v1 only supports cow
-                if delete_mode == "posdelete" and "_v1_" in transform_name:
-                    continue
-
-                table_name = f"part_{transform_name}_{pattern}_{delete_mode}"
-
-                tables.append({
-                    'name': table_name,
-                    'type': 'partitioned',
-                    'pattern': pattern,
-                    'partition_spec': transform,
-                    'delete_mode': delete_mode,
-                    'expected_rows': expected_rows,
-                    'expected_columns': expected_columns,
-                    'schema_columns': expected_columns,
-                    'compression': 'snappy',
-                    'encoding': 'plain'
-                })
+    for spec in partitioned_table_specs(minimal=minimal):
+        tables.append({
+            'name': spec['name'],
+            'type': 'partitioned',
+            'pattern': spec['pattern'],
+            'partition_spec': spec['transform'],
+            'delete_mode': spec['delete_mode'],
+            'expected_rows': expected_rows,
+            'expected_columns': expected_columns,
+            'schema_columns': expected_columns,
+            'compression': 'snappy',
+            'encoding': 'plain'
+        })
 
     return tables
 
@@ -1682,7 +1623,9 @@ def _validate_tables(warehouse_path, specs_path, num_parallel=1, minimal=False):
         print(f"  Write-pattern tables: {len(expected_write_patterns)}")
 
     if include_partitioned:
-        expected_partitioned = _extract_expected_partitioned_tables(specs)
+        expected_partitioned = _extract_expected_partitioned_tables(
+            specs, minimal=minimal
+        )
         all_expected.extend(expected_partitioned)
         print(f"  Partitioned tables: {len(expected_partitioned)}")
 
