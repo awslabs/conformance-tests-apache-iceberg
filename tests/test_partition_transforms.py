@@ -34,14 +34,17 @@ class TestCounts:
     def test_minimal_is_eight_tables(self):
         assert len(partitioned_table_specs(minimal=True)) == 8
 
-    def test_full_is_two_hundred_and_eighty_eight(self):
-        assert len(partitioned_table_specs()) == 288
+    def test_full_is_two_hundred_and_eighty(self):
+        # The minimal set is also pinned name for name below; the full set is
+        # pinned only here. generate and validate both read this function, so a
+        # full-set table it skipped would be missed by both.
+        assert len(partitioned_table_specs()) == 280
 
     def test_the_counts_are_the_product_of_the_dimensions(self):
         # Guards against a table being dropped or doubled by a change to any one
         # dimension rather than to the count itself.
         assert len(MINIMAL_TRANSFORMS) * len(MINIMAL_WRITE_PATTERNS) * len(DELETE_MODES) == 8
-        assert len(FULL_TRANSFORMS) * len(FULL_WRITE_PATTERNS) * len(DELETE_MODES) == 288
+        assert len(FULL_TRANSFORMS) * len(FULL_WRITE_PATTERNS) * len(DELETE_MODES) == 280
 
     def test_minimal_is_a_subset_of_full(self):
         full = {spec['name'] for spec in partitioned_table_specs()}
