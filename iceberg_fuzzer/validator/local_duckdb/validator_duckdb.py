@@ -28,6 +28,7 @@ from decimal import Decimal
 from pathlib import Path
 import argparse
 import json
+import re
 import sys
 import uuid as uuid_lib
 
@@ -284,32 +285,93 @@ def _extract_expected_evolution_tables(specs_path):
 
     return tables
 
+_HADOOP_METADATA_VERSION = re.compile(r'^v(\d+)(\.gz)?\.metadata\.json$')
+
+
+
+def _hadoop_metadata_version(name: str) -> int | None:
+    """The N in a Hadoop catalog's `vN.metadata.json`, or None for another scheme."""
+    match = _HADOOP_METADATA_VERSION.match(name)
+    return int(match.group(1)) if match else None
+
+
+def _latest_metadata_file(table_path: Path) -> Path | None:
+    """
+    The table's current metadata file assuming a filesystem catalog, or None if it has none.
+
+    This assumes that a version hint file cannot be trusted,
+    as not all filesystem catalog implementations update it.
+    """
+    metadata_dir = Path(table_path) / 'metadata'
+    if not metadata_dir.is_dir():
+        return None
+
+    parsed = {}
+    for path in metadata_dir.glob('*.metadata.json'):
+        with open(path, 'r') as f:
+            # Falible, but filesystem catalog is not safe to use concurrently anyway.
+            # Don't try to catch the error.
+            parsed[path] = json.load(f)
+    if not parsed:
+        return None
+
+    superseded = {
+        Path(entry['metadata-file']).name
+        for metadata in parsed.values()
+        for entry in metadata.get('metadata-log', [])
+        if entry.get('metadata-file')
+    }
+    candidates = [path for path in parsed if path.name not in superseded] or list(parsed)
+
+    def ordering(path: Path) -> tuple[int, int, str]:
+        version = _hadoop_metadata_version(path.name)
+        return (
+            parsed[path].get('last-updated-ms', 0),
+            -1 if version is None else version,
+            path.name,
+        )
+
+    return max(candidates, key=ordering)
+
+
+def _read_table_metadata(table_path: Path) -> dict | None:
+    """The contents of the table's current metadata file, or None."""
+    latest = _latest_metadata_file(table_path)
+    if latest is None:
+        return None
+    with open(latest, 'r') as f:
+        return json.load(f)
+
+
+def _current_snapshot(metadata: dict) -> dict | None:
+    """The snapshot the table is on, or None if it has none."""
+    snapshots = metadata.get('snapshots', [])
+    if not snapshots:
+        return None
+
+    current_id = metadata['current-snapshot-id']
+    for snapshot in snapshots:
+        if snapshot.get('snapshot-id') == current_id:
+            return snapshot
+    return None
+
+
 def _validate_delete_file_types(table_path, delete_mode):
     """Validate that the correct delete files are present for the delete mode"""
 
-    table_path = Path(table_path)
-    metadata_dir = table_path / 'metadata'
-    if not metadata_dir.exists():
+    if not (Path(table_path) / 'metadata').is_dir():
         return False, "No metadata directory found"
 
-    # Find the latest metadata file
-    metadata_files = [f for f in metadata_dir.iterdir() if f.name.startswith('v') and f.name.endswith('.metadata.json')]
-    if not metadata_files:
-        return False, "No metadata files found"
-
-    latest_metadata = sorted(metadata_files, key=lambda f: f.name)[-1]
-
     try:
-        with open(latest_metadata, 'r') as f:
-            metadata = json.load(f)
+        metadata = _read_table_metadata(table_path)
+        if metadata is None:
+            return False, "No metadata files found"
 
-        # Check snapshots for delete files
-        snapshots = metadata.get('snapshots', [])
-        if not snapshots:
-            return True, "No snapshots to check"
+        current = _current_snapshot(metadata)
+        if current is None:
+            return True, "No current snapshot to check"
 
-        latest_snapshot = snapshots[-1]
-        summary = latest_snapshot.get('summary', {})
+        summary = current.get('summary', {})
 
         total_delete_files = int(summary.get('total-delete-files', 0))
         total_position_deletes = int(summary.get('total-position-deletes', 0))
@@ -576,18 +638,18 @@ def _validate_parquet_properties(table_path, expected_spec):
     except Exception as e:
         return {'valid': False, 'error': f'Failed to read parquet metadata: {str(e)}'}
 
-def _validate_table_contents(conn, table_path, expected_spec):
+def _validate_table_contents(conn, metadata_file, expected_spec):
     """Validate actual table contents against expected data"""
     try:
         # Check ALL rows, not just a sample
-        query = f"SELECT * FROM iceberg_scan('{table_path}') ORDER BY id"
+        query = f"SELECT * FROM iceberg_scan('{metadata_file}') ORDER BY id"
         actual_rows = conn.execute(query).fetchall()
 
         if not actual_rows:
             return {'valid': False, 'error': 'No data found', 'treat_as_missing': True}
 
         # Get column names
-        columns_query = f"DESCRIBE (SELECT * FROM iceberg_scan('{table_path}') LIMIT 0)"
+        columns_query = f"DESCRIBE (SELECT * FROM iceberg_scan('{metadata_file}') LIMIT 0)"
         columns = [row[0] for row in conn.execute(columns_query).fetchall()]
 
         content_errors = []
@@ -808,125 +870,11 @@ def _validate_table_contents(conn, table_path, expected_spec):
     except Exception as e:
         return {'valid': False, 'error': f"Content validation failed: {str(e)}"}
 
-def _validate_delete_files(table_path, expected_spec):
-    """Validate delete files and metadata for tables with delete operations"""
-    try:
-        table_dir = Path(table_path)
-        metadata_dir = table_dir / "metadata"
-
-        if not metadata_dir.exists():
-            return {'valid': False, 'error': 'No metadata directory found'}
-
-        # Find latest metadata file
-        metadata_files = list(metadata_dir.glob("*.metadata.json"))
-        if not metadata_files:
-            return {'valid': False, 'error': 'No metadata files found'}
-
-        latest_metadata = max(metadata_files, key=lambda f: f.name)
-
-        # Read metadata
-        with open(latest_metadata, 'r') as f:
-            metadata = json.load(f)
-
-        # Count delete files across all snapshots
-        total_delete_files = 0
-        total_position_deletes = 0
-        total_equality_deletes = 0
-
-        for snapshot in metadata.get('snapshots', []):
-            summary = snapshot.get('summary', {})
-            delete_files = int(summary.get('total-delete-files', 0))
-            position_deletes = int(summary.get('total-position-deletes', 0))
-            equality_deletes = int(summary.get('total-equality-deletes', 0))
-
-            total_delete_files = max(total_delete_files, delete_files)
-            total_position_deletes = max(total_position_deletes, position_deletes)
-            total_equality_deletes = max(total_equality_deletes, equality_deletes)
-
-        # Determine expectations based on table type
-        table_name = expected_spec.get('name', '')
-        pattern = expected_spec.get('pattern', '')
-
-        # Expected delete file behavior for write-pattern tables
-        if expected_spec.get('type') == 'write_pattern':
-            if 'cow' in table_name:
-                # COW tables should have NO delete files
-                expected_delete_files = 0
-                expected_position_deletes = 0
-                validation_msg = "COW mode should have no delete files"
-            elif 'posdelete' in table_name:
-                # Posdelete tables should have position deletes (if pattern does DELETEs)
-                delete_patterns = [
-                    'delete_heavy', 'mixed_chaos', 'update_heavy', 'batch_replace'
-                ]
-                if pattern in delete_patterns:
-                    expected_delete_files = ">=1"  # Should have some delete files
-                    expected_position_deletes = ">=1"  # Should have position deletes
-                else:
-                    expected_delete_files = 0  # Insert-only patterns
-                    expected_position_deletes = 0
-                validation_msg = f"Posdelete mode for {pattern} pattern"
-            else:
-                expected_delete_files = 0
-                expected_position_deletes = 0
-                validation_msg = "Unknown delete mode"
-        else:
-            # For non-write-pattern tables, no specific expectations
-            expected_delete_files = 0
-            expected_position_deletes = 0
-            validation_msg = "Non-write-pattern table"
-
-        # Validate expectations
-        validation_errors = []
-
-        # Check equality deletes (should always be 0 for PySpark)
-        if total_equality_deletes > 0:
-            validation_errors.append(
-                f"Found {total_equality_deletes} equality deletes, "
-                f"expected 0 for {delete_mode} mode"
-            )
-
-        # Check delete file counts
-        if isinstance(expected_delete_files, int):
-            if total_delete_files != expected_delete_files:
-                validation_errors.append(f"Expected {expected_delete_files} delete files, got {total_delete_files}")
-        elif expected_delete_files == ">=1":
-            if total_delete_files == 0:
-                validation_errors.append(f"Expected position deletes for {pattern} pattern but found none")
-
-        # Check position delete counts
-        if isinstance(expected_position_deletes, int):
-            if total_position_deletes != expected_position_deletes:
-                validation_errors.append(
-                    f"Expected {expected_position_deletes} position deletes, "
-                    f"found {total_position_deletes}"
-                )
-        elif expected_position_deletes == ">=1":
-            if total_position_deletes == 0:
-                validation_errors.append(f"Expected position deletes for {pattern} pattern but found none")
-
-        delete_validation = {
-            'delete_files': total_delete_files,
-            'position_deletes': total_position_deletes,
-            'equality_deletes': total_equality_deletes,
-            'validation_msg': validation_msg,
-            'valid': len(validation_errors) == 0,
-            'errors': validation_errors
-        }
-
-        if validation_errors:
-            delete_validation['error'] = '; '.join(validation_errors)
-
-        return delete_validation
-
-    except Exception as e:
-        return {'valid': False, 'error': f"Delete file validation failed: {str(e)}"}
-
-def _validate_iceberg_metadata(conn, table_path, expected_spec):
+def _validate_iceberg_metadata(conn, metadata_file, expected_spec):
     """Validate Iceberg metadata using DuckDB metadata functions"""
     try:
         # Get snapshots info
-        snapshots_query = f"SELECT * FROM iceberg_snapshots('{table_path}')"
+        snapshots_query = f"SELECT * FROM iceberg_snapshots('{metadata_file}')"
         snapshots_result = conn.execute(snapshots_query).fetchall()
 
         # Validate format version
@@ -937,16 +885,9 @@ def _validate_iceberg_metadata(conn, table_path, expected_spec):
         if 'version' in expected_spec:
             expected_version = int(expected_spec['version'].replace('v', ''))
 
-            # Read metadata.json to get format-version
-            metadata_dir = Path(table_path) / 'metadata'
-            if metadata_dir.exists():
-                metadata_files = list(metadata_dir.glob('*.metadata.json'))
-                if metadata_files:
-                    latest_metadata = max(metadata_files, key=lambda f: f.name)
-                    with open(latest_metadata, 'r') as f:
-                        metadata = json.load(f)
-                        actual_version = metadata.get('format-version', 1)
-                        version_valid = actual_version == expected_version
+            with open(metadata_file, 'r') as f:
+                actual_version = json.load(f).get('format-version', 1)
+            version_valid = actual_version == expected_version
 
         # Validate number of snapshots (should match expected commits)
         expected_commits = 10  # Most patterns have 10 commits
@@ -1037,17 +978,17 @@ def _validate_value_column_type(
     return False, f"value is {actual_type}, expected {expected_type} for {iceberg_type}"
 
 
-def _validate_basic_table_properties(conn, table_path, expected_spec):
+def _validate_basic_table_properties(conn, metadata_file, expected_spec):
     """Validate basic table properties: row count, column count, and schema."""
     # Try to scan the table
     print(f"    ✓ Checking table accessibility...")
-    query = f"SELECT COUNT(*) as row_count FROM iceberg_scan('{table_path}')"
+    query = f"SELECT COUNT(*) as row_count FROM iceberg_scan('{metadata_file}')"
     result = conn.execute(query).fetchone()
     row_count = result[0] if result else 0
 
     # Get schema information
     print(f"    ✓ Checking schema...")
-    schema_query = f"DESCRIBE (SELECT * FROM iceberg_scan('{table_path}') LIMIT 0)"
+    schema_query = f"DESCRIBE (SELECT * FROM iceberg_scan('{metadata_file}') LIMIT 0)"
     schema_result = conn.execute(schema_query).fetchall()
     column_count = len(schema_result)
 
@@ -1083,13 +1024,13 @@ def _validate_basic_table_properties(conn, table_path, expected_spec):
         'column_type_error': column_type_error
     }
 
-def _validate_evolution_properties(conn, table_path, expected_spec):
+def _validate_evolution_properties(conn, metadata_file, expected_spec):
     """Validate evolution-specific properties for evolution tables."""
     if expected_spec.get('type') != 'evolution':
         return {'valid': True, 'evolution_validation': {}}
 
     print(f"    ✓ Validating evolution-specific properties...")
-    evolution_validation = _validate_evolution_table(conn, table_path, expected_spec)
+    evolution_validation = _validate_evolution_table(conn, metadata_file, expected_spec)
     evolution_valid = evolution_validation['valid']
 
     # Print evolution validation details
@@ -1240,24 +1181,25 @@ def _validate_iceberg_table(conn, table_path, expected_spec):
     print(f"  Validating table: {table_name}")
 
     try:
-        # Enable unsafe version guessing for DuckDB
-        conn.execute("SET unsafe_enable_version_guessing = true")
+        metadata_file = _latest_metadata_file(table_path)
+        if metadata_file is None:
+            raise FileNotFoundError(f"No metadata file in {Path(table_path) / 'metadata'}")
 
         # Validate basic properties
-        basic_props = _validate_basic_table_properties(conn, table_path, expected_spec)
+        basic_props = _validate_basic_table_properties(conn, metadata_file, expected_spec)
 
         # Validate table contents
         print(f"    ✓ Validating table contents...")
-        content_validation = _validate_table_contents(conn, table_path, expected_spec)
+        content_validation = _validate_table_contents(conn, metadata_file, expected_spec)
         content_valid = content_validation['valid']
 
         # Validate Iceberg metadata and snapshots
         print(f"    ✓ Validating Iceberg metadata and format version...")
-        metadata_validation = _validate_iceberg_metadata(conn, table_path, expected_spec)
+        metadata_validation = _validate_iceberg_metadata(conn, metadata_file, expected_spec)
         metadata_valid = metadata_validation['valid']
 
         # Validate evolution-specific properties
-        evolution_result = _validate_evolution_properties(conn, table_path, expected_spec)
+        evolution_result = _validate_evolution_properties(conn, metadata_file, expected_spec)
 
         # Validate Parquet properties
         parquet_result = _validate_parquet_properties_for_table(table_path, expected_spec)
@@ -1360,7 +1302,7 @@ def _failed_evolution_checks(result):
             detail = f"expected {info.get('expected')}, got {info.get('actual')}"
         yield name, detail
 
-def _validate_evolution_table(conn, table_path, expected_spec):
+def _validate_evolution_table(conn, metadata_file, expected_spec):
     """Validate evolution-specific properties of a table"""
     validation_results = {}
 
@@ -1375,7 +1317,7 @@ def _validate_evolution_table(conn, table_path, expected_spec):
                     try:
                         # Try to get format version from table properties
                         result = conn.execute(
-                            f"SELECT value FROM iceberg_metadata('{table_path}', 'snapshots')"
+                            f"SELECT value FROM iceberg_metadata('{metadata_file}', 'snapshots')"
                         ).fetchone()
                         if not result:
                             # Fallback: assume v2 if no explicit version (v1 tables don't have this property)
@@ -1406,7 +1348,7 @@ def _validate_evolution_table(conn, table_path, expected_spec):
                     try:
                         # For partitioned tables, check if files are in partition directories
                         result = conn.execute(
-                            f"SELECT file_path FROM iceberg_metadata('{table_path}', 'entries')"
+                            f"SELECT file_path FROM iceberg_metadata('{metadata_file}', 'entries')"
                         ).fetchall()
                         partition_paths = set()
 
@@ -1450,7 +1392,7 @@ def _validate_evolution_table(conn, table_path, expected_spec):
                 elif query_name == 'column_count':
                     # Get actual schema details
                     result = conn.execute(
-                        f"DESCRIBE SELECT * FROM iceberg_scan('{table_path}')"
+                        f"DESCRIBE SELECT * FROM iceberg_scan('{metadata_file}')"
                     ).fetchall()
                     actual_schema = [(row[0], row[1]) for row in result]  # (column_name, column_type)
                     actual_columns = len(actual_schema)
@@ -1536,7 +1478,7 @@ def _validate_evolution_table(conn, table_path, expected_spec):
                     # Simplified snapshot validation - just check if table has data (indicates successful evolution)
                     try:
                         result = conn.execute(
-                            f"SELECT COUNT(*) FROM iceberg_scan('{table_path}')"
+                            f"SELECT COUNT(*) FROM iceberg_scan('{metadata_file}')"
                         ).fetchone()
                         has_data = result[0] > 0 if result else False
                         actual_snapshots = 1 if has_data else 0  # Simplified: just check if evolution succeeded
