@@ -23,7 +23,7 @@ PyIceberg table generation implementation using PyIceberg library
 """
 
 import uuid
-from datetime import datetime, date, time
+from datetime import date, time
 from decimal import Decimal
 
 import pyarrow as pa
@@ -49,6 +49,7 @@ from pyiceberg.types import (
 )
 
 from iceberg_fuzzer.common import row_id_from_index
+from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
 
 
 def create_iceberg_schema(table_spec):
@@ -153,15 +154,14 @@ def generate_sample_data(table_spec, num_rows=100, row_offset=0):
                 type=pa.time64("us"),
             )
         elif field_type == "timestamp":
-            base_ts = datetime(2023, 1, 1)
             data[field_name] = pa.array(
-                [base_ts.replace(hour=(i % 24)) for i in row_ids],
+                [timestamp_value(i) for i in row_ids],
                 type=pa.timestamp("us"),
             )
         elif field_type == "timestamptz":
-            base_ts = datetime(2023, 1, 1)
             data[field_name] = pa.array(
-                [base_ts.replace(hour=(i % 24)) for i in row_ids],
+                [timestamptz_value(i) for i in row_ids],
+                # Arrow uses one timezone per column, and PyIceberg accepts only UTC here.
                 type=pa.timestamp("us", tz="UTC"),
             )
         elif field_type.startswith("decimal("):
@@ -378,13 +378,13 @@ def generate_comprehensive_row_data(row_id, num_rows=1):
         type=pa.time64("us"),
     )
 
-    base_ts = datetime(2023, 1, 1)
     data["timestamp_col"] = pa.array(
-        [base_ts.replace(hour=((row_id + i) % 24)) for i in range(num_rows)],
+        [timestamp_value(row_id + i) for i in range(num_rows)],
         type=pa.timestamp("us"),
     )
     data["timestamptz_col"] = pa.array(
-        [base_ts.replace(hour=((row_id + i) % 24)) for i in range(num_rows)],
+        [timestamptz_value(row_id + i) for i in range(num_rows)],
+        # Arrow uses one timezone per column, and PyIceberg accepts only UTC here.
         type=pa.timestamp("us", tz="UTC"),
     )
 

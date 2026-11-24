@@ -4,8 +4,10 @@ Used by both table generation (builders.py) and mutation (mutation.py)
 to produce deterministic row values from a row ID.
 """
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
+
+from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
 
 
 def generate_value(field_name: str, spark_type_str: str, row_id: int):
@@ -40,8 +42,10 @@ def generate_value(field_name: str, spark_type_str: str, row_id: int):
         return f"value_{row_id}".encode()
     elif t == "date":
         return date(2023, 1, 1).replace(day=min(28, (row_id % 28) + 1))
-    elif t in ("timestamp", "timestamp_ntz"):
-        return datetime(2023, 1, 1, hour=(row_id % 24))
+    elif t == "timestamp":
+        return timestamptz_value(row_id)
+    elif t == "timestamp_ntz":
+        return timestamp_value(row_id)
     elif t.startswith("decimal"):
         return Decimal(f"{row_id}.{row_id % 100:02d}")
     else:

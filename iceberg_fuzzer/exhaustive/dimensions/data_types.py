@@ -32,6 +32,8 @@ from typing import Any, Dict, Iterator, List, Tuple, Union
 
 import pyarrow as pa
 
+from iceberg_fuzzer.common.timestamps import timestamptz_zone
+
 from . import Dimension
 
 
@@ -178,11 +180,13 @@ class TimestamptzType(IcebergType):
     spark_ddl = "TIMESTAMP"
 
     def generate(self, row_id: int) -> Any:
-        # Same seconds + microseconds spread as TimestampType (see there), with
-        # a UTC zone since Iceberg timestamptz is with-zone.
+        # Same seconds + microseconds spread as TimestampType (see there), as a UTC
+        # instant expressed in the row's zone, so the zone never changes the stored
+        # value (unlike common.timestamps.timestamptz_value).
         return (_EPOCH_DATETIME.replace(tzinfo=timezone.utc)
                 + timedelta(seconds=_bounded(row_id, _DATE_SPAN),
-                            microseconds=_bounded(row_id, 1_000_000)))
+                            microseconds=_bounded(row_id, 1_000_000))
+                ).astimezone(timestamptz_zone(row_id))
 
 
 class DecimalType(IcebergType):
