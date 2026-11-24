@@ -9,8 +9,8 @@ and a CompressionChoice, implementing the WriteOptionsProvider protocol with
 compatibility validation and safe fallback logic.
 
 Usage pattern:
-    from iceberg_fuzzer.exhaustive.dimensions import SchemaProvider, WriteOptionsProvider
-    from iceberg_fuzzer.exhaustive.dimensions import WriteOptions
+    from iceberg_conformance.exhaustive.dimensions import SchemaProvider, WriteOptionsProvider
+    from iceberg_conformance.exhaustive.dimensions import WriteOptions
 
     class MySchema:
         def get_spark_ddl(self) -> str: ...

@@ -12,7 +12,7 @@ import json
 import hashlib
 from collections import defaultdict
 
-from iceberg_fuzzer.exhaustive.shape_config_generator import TableConfigGenerator
+from iceberg_conformance.exhaustive.shape_config_generator import TableConfigGenerator
 
 
 EXPECTED_COUNTS = {

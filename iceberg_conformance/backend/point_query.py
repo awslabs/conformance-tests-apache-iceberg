@@ -5,14 +5,14 @@ from collections import Counter
 from enum import Enum
 from typing import Any, Sequence
 
-from iceberg_fuzzer.backend import (
+from iceberg_conformance.backend import (
     AssertionResult,
     ColTypeStr,
     ColumnFilter,
     ColumnName,
     ValidationEngine,
 )
-from iceberg_fuzzer.backend.pyspark.data import generate_value
+from iceberg_conformance.backend.pyspark.data import generate_value
 
 
 class ProbeReason(Enum):

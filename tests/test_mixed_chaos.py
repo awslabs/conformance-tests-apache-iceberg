@@ -5,8 +5,8 @@ exactly the ids the batches append, and removing every POSDELETE_MODULUS-th of
 those ids has to land on the final row count.
 """
 
-from iceberg_fuzzer.common import row_id_from_index
-from iceberg_fuzzer.common.mixed_chaos import (
+from iceberg_conformance.common import row_id_from_index
+from iceberg_conformance.common.mixed_chaos import (
     MIXED_CHAOS_APPEND_BATCH_COUNT,
     MIXED_CHAOS_DELETE_CHUNK_COUNT,
     MIXED_CHAOS_TOTAL_ROWS_APPENDED,

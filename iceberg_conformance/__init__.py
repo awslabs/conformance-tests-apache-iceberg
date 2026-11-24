@@ -5,5 +5,5 @@ Generate a comprehensive variety of Apache Iceberg tables for testing compaction
 compression, encoding, and cross-engine compatibility scenarios.
 """
 
-__version__ = "1.0.0"
+__version__ = "0.1.0"
 __author__ = "Amazon Web Services"

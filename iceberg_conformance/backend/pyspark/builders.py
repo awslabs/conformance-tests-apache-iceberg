@@ -21,16 +21,16 @@ from pyspark.sql.types import (
     StringType, BinaryType, ArrayType, MapType, TimestampNTZType
 )
 
-from iceberg_fuzzer.table_spec import load_table_specs
-from iceberg_fuzzer.common import row_id_from_index
-from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
-from iceberg_fuzzer.common.mixed_chaos import (
+from iceberg_conformance.table_spec import load_table_specs
+from iceberg_conformance.common import row_id_from_index
+from iceberg_conformance.common.timestamps import timestamp_value, timestamptz_value
+from iceberg_conformance.common.mixed_chaos import (
     MIXED_CHAOS_TOTAL_ROWS_FINAL,
     POSDELETE_MODULUS,
     mixed_chaos_append_batches,
     mixed_chaos_delete_chunks,
 )
-from iceberg_fuzzer.common.partition_transforms import partitioned_table_specs
+from iceberg_conformance.common.partition_transforms import partitioned_table_specs
 
 
 @contextmanager

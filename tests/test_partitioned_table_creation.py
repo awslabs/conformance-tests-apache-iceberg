@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from iceberg_fuzzer.backend.pyspark.builders import (
+from iceberg_conformance.backend.pyspark.builders import (
     create_partitioned_table,
     create_spark_session,
 )

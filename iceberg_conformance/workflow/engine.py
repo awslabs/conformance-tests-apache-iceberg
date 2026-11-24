@@ -1,5 +1,5 @@
 """
-Workflow engine for iceberg-fuzzer.
+Workflow engine for iceberg-conformance.
 
 Runs multi-step workflows against existing Iceberg tables.
 """
@@ -10,12 +10,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from string import Template
 
-from iceberg_fuzzer.backend import AssertionResult, Checkpoint, ColTypeStr, ColumnName, ValidationEngine
-from iceberg_fuzzer.backend.duckdb import DuckDBValidation
-from iceberg_fuzzer.backend.point_query import validate_point_queries
-from iceberg_fuzzer.backend.pyspark.mutation import PySparkMutation
-from iceberg_fuzzer.backend.pyspark.validation import PySparkValidation
-from iceberg_fuzzer.workflow.loader import Workflow, load_workflow
+from iceberg_conformance.backend import AssertionResult, Checkpoint, ColTypeStr, ColumnName, ValidationEngine
+from iceberg_conformance.backend.duckdb import DuckDBValidation
+from iceberg_conformance.backend.point_query import validate_point_queries
+from iceberg_conformance.backend.pyspark.mutation import PySparkMutation
+from iceberg_conformance.backend.pyspark.validation import PySparkValidation
+from iceberg_conformance.workflow.loader import Workflow, load_workflow
 
 StepId = str
 EngineName = str

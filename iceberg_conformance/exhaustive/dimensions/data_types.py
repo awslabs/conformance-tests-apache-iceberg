@@ -32,7 +32,7 @@ from typing import Any, Dict, Iterator, List, Tuple, Union
 
 import pyarrow as pa
 
-from iceberg_fuzzer.common.timestamps import timestamptz_zone
+from iceberg_conformance.common.timestamps import timestamptz_zone
 
 from . import Dimension
 
@@ -260,7 +260,7 @@ class FixedType(IcebergType):
 # data type "UUID" (verified on Spark 3.5.3/Iceberg 1.7.1 and 4.0.0/Iceberg
 # 1.11.0). Only binary/string DDL are accepted, so uuid could only be FAKED as a
 # STRING of uuid text — indistinguishable from a plain string at both the Iceberg
-# and Parquet layers, i.e. reporting coverage the fuzzer doesn't have. Omitted
+# and Parquet layers, i.e. reporting coverage this suite does not have. Omitted
 # from the registry so _handler rejects it instead. (fixed(L) is different, and
 # stays supported: its Parquet column really is fixed_size_binary[L] — a real
 # physical type behind a lossy DDL, not a fabrication.)

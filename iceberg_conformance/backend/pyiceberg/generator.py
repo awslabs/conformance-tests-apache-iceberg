@@ -15,8 +15,8 @@ from pyiceberg.catalog.sql import SqlCatalog
 from backend.pyiceberg.builders import (
     create_table_with_commits
 )
-from iceberg_fuzzer.table_spec import load_table_specs
-from iceberg_fuzzer.generator import TableGenerator
+from iceberg_conformance.table_spec import load_table_specs
+from iceberg_conformance.generator import TableGenerator
 
 
 class PyIcebergGenerator(TableGenerator):

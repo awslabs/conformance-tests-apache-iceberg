@@ -28,7 +28,7 @@ cd conformance-tests-apache-iceberg
 ### 3. Activate and Test
 ```bash
 source .venv/bin/activate
-python -m iceberg_fuzzer.cli --help
+python -m iceberg_conformance.cli --help
 ```
 
 ## Manual Setup
@@ -86,7 +86,7 @@ pip install -e ".[dev]"
 
 ```bash
 # Test the CLI
-python -m iceberg_fuzzer.cli --help
+python -m iceberg_conformance.cli --help
 
 # Test all imports
 python -c "import pyspark, pyiceberg, polars, pyarrow, yaml, boto3, sqlalchemy; print('All imports successful')"
@@ -100,13 +100,13 @@ echo $JAVA_HOME
 
 ```bash
 # Generate simple tables with PyIceberg
-python -m iceberg_fuzzer.cli generate --backend pyiceberg --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 3
+python -m iceberg_conformance.cli generate --backend pyiceberg --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 3
 
 # Generate tables with Polars
-python -m iceberg_fuzzer.cli generate --backend polars --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 3
+python -m iceberg_conformance.cli generate --backend polars --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 3
 
 # Generate with PySpark (requires Java)
-python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 3
+python -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --random 3
 ```
 
 ## Dependencies

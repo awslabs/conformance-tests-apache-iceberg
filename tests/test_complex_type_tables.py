@@ -33,13 +33,13 @@ import duckdb
 import pyarrow.parquet as pq
 import pytest
 
-from iceberg_fuzzer.exhaustive.table_builder import UnifiedTableBuilder
-from iceberg_fuzzer.exhaustive.shape_config_generator import TableConfigGenerator
-from iceberg_fuzzer.exhaustive.dimensions.data_types import (
+from iceberg_conformance.exhaustive.table_builder import UnifiedTableBuilder
+from iceberg_conformance.exhaustive.shape_config_generator import TableConfigGenerator
+from iceberg_conformance.exhaustive.dimensions.data_types import (
     DataTypeChoice, TypedValueFiller, physical_value)
-from iceberg_fuzzer.exhaustive.dimensions.interfaces import WriteOptions
-from iceberg_fuzzer.exhaustive.dimensions.encoding import EncodingChoice, is_compatible
-from iceberg_fuzzer.exhaustive.dimensions.compression import (
+from iceberg_conformance.exhaustive.dimensions.interfaces import WriteOptions
+from iceberg_conformance.exhaustive.dimensions.encoding import EncodingChoice, is_compatible
+from iceberg_conformance.exhaustive.dimensions.compression import (
     CompressionChoice, CompressionCodec)
 
 

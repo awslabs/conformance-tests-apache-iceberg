@@ -18,13 +18,13 @@ This directory contains test-specific configuration files for the Conformance Te
 ### CI Testing
 ```bash
 # Run CI tests with minimal table set
-python -m iceberg_fuzzer.cli generate --backend pyiceberg --warehouse-path ./test-warehouse --specs tests/ci_specs.yaml --random 5
+python -m iceberg_conformance.cli generate --backend pyiceberg --warehouse-path ./test-warehouse --specs tests/ci_specs.yaml --random 5
 ```
 
 ### Manual Testing
 ```bash
 # Run with legacy test specs
-python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path ./test-warehouse --specs tests/test_specs.yaml
+python -m iceberg_conformance.cli generate --backend pyspark --warehouse-path ./test-warehouse --specs tests/test_specs.yaml
 ```
 
 ## Configuration

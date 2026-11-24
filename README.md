@@ -18,37 +18,37 @@ See [INSTALL.md](INSTALL.md) for setup instructions, including the Java version 
 source .venv/bin/activate
 
 # Generate simple tables with PySpark
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml
 
 # Generate all tables with PyIceberg (parallel) - excludes partitioned tables
-python3 -m iceberg_fuzzer.cli generate --backend pyiceberg --warehouse-path /tmp/warehouse --specs table_specs.yaml --num-parallel 4
+python3 -m iceberg_conformance.cli generate --backend pyiceberg --warehouse-path /tmp/warehouse --specs table_specs.yaml --num-parallel 4
 
 # Generate partitioned tables with PySpark (minimal set)
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/partitioned.yaml --minimal --num-parallel 4
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/partitioned.yaml --minimal --num-parallel 4
 
 # Generate evolution tables with PySpark (comprehensive evolution testing)
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/evolution.yaml --num-parallel 4
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/evolution.yaml --num-parallel 4
 
 # Generate a reproducible random subset of evolution tables
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/evolution.yaml --random 3 --seed 42
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/evolution.yaml --random 3 --seed 42
 
 # Generate tables in S3 Tables bucket (deletes existing tables first)
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path "arn:aws:s3tables:us-west-2:123456789012:bucket/my-bucket" --specs table_specs.yaml --delete-existing --num-parallel 4
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path "arn:aws:s3tables:us-west-2:123456789012:bucket/my-bucket" --specs table_specs.yaml --delete-existing --num-parallel 4
 
 # Generate single table
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --table-name unpart_boolean_gzip_lvl1_plain_v1
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --table-name unpart_boolean_gzip_lvl1_plain_v1
 
 # Generate minimal set with PySpark
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal
 
 # Validate what was generated
-python3 -m iceberg_fuzzer.cli validate --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal --num-parallel 8
+python3 -m iceberg_conformance.cli validate --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal --num-parallel 8
 
 # Delete all tables in warehouse
-python3 -m iceberg_fuzzer.cli delete --backend pyspark --warehouse-path /tmp/warehouse --confirm
+python3 -m iceberg_conformance.cli delete --backend pyspark --warehouse-path /tmp/warehouse --confirm
 
 # Delete all tables with parallel workers (faster)
-python3 -m iceberg_fuzzer.cli delete --backend pyspark --warehouse-path /tmp/warehouse --confirm --num-parallel 8
+python3 -m iceberg_conformance.cli delete --backend pyspark --warehouse-path /tmp/warehouse --confirm --num-parallel 8
 
 # Deactivate virtual environment when done
 deactivate
@@ -73,7 +73,7 @@ their order when the spec files and the revision of this project are unchanged.
 | `build-shapes` | Build tables from exhaustive per-column shape configs |
 | `workflow run` | Run a multi-step correctness workflow against an existing table |
 
-Run `python3 -m iceberg_fuzzer.cli <command> --help` for the full option list.
+Run `python3 -m iceberg_conformance.cli <command> --help` for the full option list.
 
 ### validate
 
@@ -85,10 +85,10 @@ and partitioned ones.
 
 ```bash
 # Validate tables with parallel workers
-python3 -m iceberg_fuzzer.cli validate --warehouse-path /path/to/warehouse --specs specs/simple.yaml --num-parallel 16
+python3 -m iceberg_conformance.cli validate --warehouse-path /path/to/warehouse --specs specs/simple.yaml --num-parallel 16
 
 # Validate the minimal set (must match the flags used to generate)
-python3 -m iceberg_fuzzer.cli validate --warehouse-path /path/to/warehouse --specs specs/simple.yaml --minimal
+python3 -m iceberg_conformance.cli validate --warehouse-path /path/to/warehouse --specs specs/simple.yaml --minimal
 ```
 
 The set of tables `validate` expects is derived the same way `generate` derives
@@ -104,13 +104,13 @@ per configuration into the `exhaustive_shapes` namespace.
 
 ```bash
 # Build the first 10 configs
-python3 -m iceberg_fuzzer.cli build-shapes --warehouse-path /tmp/warehouse --limit 10
+python3 -m iceberg_conformance.cli build-shapes --warehouse-path /tmp/warehouse --limit 10
 
 # Build one config by ID
-python3 -m iceberg_fuzzer.cli build-shapes --warehouse-path /tmp/warehouse --config-id 84823 --target-size-mb 0.01
+python3 -m iceberg_conformance.cli build-shapes --warehouse-path /tmp/warehouse --config-id 84823 --target-size-mb 0.01
 
 # Build a nested-type column directly
-python3 -m iceberg_fuzzer.cli build-shapes --warehouse-path /tmp/warehouse --data-type 'map<string,int>' --limit 1
+python3 -m iceberg_conformance.cli build-shapes --warehouse-path /tmp/warehouse --data-type 'map<string,int>' --limit 1
 ```
 
 Each table is validated as it is built; pass `--no-validate` for faster bulk
@@ -120,22 +120,22 @@ generation.
 
 Workflows run multi-step operations against existing tables and validate correctness.
 A workflow is defined in YAML with steps that perform operations like `replace`, `append`, `delete`, and `rollback`.
-See `specs/workflows/` for example workflow definitions and `iceberg_fuzzer/workflow/loader.py` for the authoritative list of supported operations and their required config fields.
+See `specs/workflows/` for example workflow definitions and `iceberg_conformance/workflow/loader.py` for the authoritative list of supported operations and their required config fields.
 
 ```bash
 # Generate a table first
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal --random 1
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /tmp/warehouse --specs specs/simple.yaml --minimal --random 1
 
 # Run a workflow against it
 TABLE=$(ls /tmp/warehouse/simple/ | head -1)
-python3 -m iceberg_fuzzer.cli workflow run \
+python3 -m iceberg_conformance.cli workflow run \
     --workflow specs/workflows/compaction.yaml \
     --warehouse-path /tmp/warehouse \
     --table-name "$TABLE" \
     --namespace simple
 
 # Dry-run to see what would execute
-python3 -m iceberg_fuzzer.cli workflow run \
+python3 -m iceberg_conformance.cli workflow run \
     --workflow specs/workflows/compaction.yaml \
     --warehouse-path /tmp/warehouse \
     --table-name "$TABLE" \
@@ -313,19 +313,19 @@ All write-pattern tables preserve commit history (no DROP TABLE operations):
 
 ```bash
 # Generate every table type (thousands of tables; expect this to take hours)
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs table_specs.yaml --num-parallel 16
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs table_specs.yaml --num-parallel 16
 
 # Generate only single-type tables
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/simple.yaml --num-parallel 16
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/simple.yaml --num-parallel 16
 
 # Generate minimal set for testing (uncompressed + plain encoding + v1&v2, excluding time types)
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/simple.yaml --minimal --num-parallel 16
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/simple.yaml --minimal --num-parallel 16
 
 # Generate only write-pattern tables
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/write_patterns.yaml --num-parallel 16
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/write_patterns.yaml --num-parallel 16
 
 # Generate partitioned tables (minimal set)
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/partitioned.yaml --minimal --num-parallel 4
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/partitioned.yaml --minimal --num-parallel 4
 ```
 
 ### Partitioned Tables
@@ -399,10 +399,10 @@ list.
 
 ```bash
 # Generate evolution tables
-python3 -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/evolution.yaml --num-parallel 4
+python3 -m iceberg_conformance.cli generate --backend pyspark --warehouse-path /path/to/warehouse --specs specs/evolution.yaml --num-parallel 4
 
 # Validate them with evolution-specific checks
-python3 -m iceberg_fuzzer.cli validate --warehouse-path /path/to/warehouse --specs specs/evolution.yaml --num-parallel 4
+python3 -m iceberg_conformance.cli validate --warehouse-path /path/to/warehouse --specs specs/evolution.yaml --num-parallel 4
 ```
 
 ## PyIceberg Implementation
@@ -462,13 +462,13 @@ Degraded to INSERT-only:
 
 ```bash
 # Generate single-type tables only
-python3 -m iceberg_fuzzer.cli generate --backend pyiceberg --warehouse-path /path/to/warehouse --specs specs/simple.yaml --num-parallel 4
+python3 -m iceberg_conformance.cli generate --backend pyiceberg --warehouse-path /path/to/warehouse --specs specs/simple.yaml --num-parallel 4
 
 # Generate write-pattern tables only (some degraded to INSERT-only)
-python3 -m iceberg_fuzzer.cli generate --backend pyiceberg --warehouse-path /path/to/warehouse --specs specs/write_patterns.yaml
+python3 -m iceberg_conformance.cli generate --backend pyiceberg --warehouse-path /path/to/warehouse --specs specs/write_patterns.yaml
 
 # Generate all supported table types
-python3 -m iceberg_fuzzer.cli generate --backend pyiceberg --warehouse-path /path/to/warehouse --specs table_specs.yaml --num-parallel 4
+python3 -m iceberg_conformance.cli generate --backend pyiceberg --warehouse-path /path/to/warehouse --specs table_specs.yaml --num-parallel 4
 ```
 
 ### Future Improvements

@@ -7,7 +7,7 @@ to produce deterministic row values from a row ID.
 from datetime import date
 from decimal import Decimal
 
-from iceberg_fuzzer.common.timestamps import timestamp_value, timestamptz_value
+from iceberg_conformance.common.timestamps import timestamp_value, timestamptz_value
 
 
 def generate_value(field_name: str, spark_type_str: str, row_id: int):

@@ -9,11 +9,11 @@ from typing import Any, List, Optional
 
 import pyarrow as pa
 
-from iceberg_fuzzer.exhaustive.dimensions import SchemaProvider, WriteOptionsProvider
-from iceberg_fuzzer.exhaustive.dimensions.interfaces import (
+from iceberg_conformance.exhaustive.dimensions import SchemaProvider, WriteOptionsProvider
+from iceberg_conformance.exhaustive.dimensions.interfaces import (
     SchemaProvider as DirectSchemaProvider,
 )
-from iceberg_fuzzer.exhaustive.dimensions.interfaces import (
+from iceberg_conformance.exhaustive.dimensions.interfaces import (
     WriteOptionsProvider as DirectWriteOptionsProvider,
 )
 

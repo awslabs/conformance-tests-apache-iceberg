@@ -2,10 +2,10 @@
 
 from pyspark.sql import Row
 
-from iceberg_fuzzer.backend import AppendResult, DeleteResult, MutationEngine
-from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
-from iceberg_fuzzer.backend.pyspark.data import generate_value
-from iceberg_fuzzer.common import row_id_from_index
+from iceberg_conformance.backend import AppendResult, DeleteResult, MutationEngine
+from iceberg_conformance.backend.pyspark.builders import create_spark_session
+from iceberg_conformance.backend.pyspark.data import generate_value
+from iceberg_conformance.common import row_id_from_index
 
 
 class PySparkMutation(MutationEngine):

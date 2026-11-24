@@ -5,8 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from iceberg_fuzzer.cli import main
-from iceberg_fuzzer.generator import TableGenerator
+from iceberg_conformance.cli import main
+from iceberg_conformance.generator import TableGenerator
 
 
 class SelectionGenerator(TableGenerator):
@@ -50,10 +50,10 @@ def test_seed_replays_random_selection():
 @pytest.mark.parametrize(
     ("backend", "generator_path", "random_count"),
     [
-        ("pyspark", "iceberg_fuzzer.backend.pyspark.generator.PySparkGenerator", 6),
-        ("pyiceberg", "iceberg_fuzzer.backend.pyiceberg.generator.PyIcebergGenerator", 6),
-        ("polars", "iceberg_fuzzer.backend.polars.generator.PolarsGenerator", 6),
-        ("pyspark", "iceberg_fuzzer.backend.pyspark.generator.PySparkGenerator", None),
+        ("pyspark", "iceberg_conformance.backend.pyspark.generator.PySparkGenerator", 6),
+        ("pyiceberg", "iceberg_conformance.backend.pyiceberg.generator.PyIcebergGenerator", 6),
+        ("polars", "iceberg_conformance.backend.polars.generator.PolarsGenerator", 6),
+        ("pyspark", "iceberg_conformance.backend.pyspark.generator.PySparkGenerator", None),
     ],
 )
 def test_generate_cli_passes_seed(
@@ -74,7 +74,7 @@ def test_generate_cli_passes_seed(
 
     monkeypatch.setattr(generator_path, FakeGenerator)
     argv = [
-        "iceberg-fuzzer",
+        "iceberg-conformance",
         "generate",
         "--backend", backend,
         "--warehouse-path", str(tmp_path),
@@ -93,7 +93,7 @@ def test_generate_cli_passes_seed(
 
 
 def test_evolution_cli_selection_replays_seed(monkeypatch, tmp_path):
-    from iceberg_fuzzer.backend.pyspark import generator as pyspark_generator
+    from iceberg_conformance.backend.pyspark import generator as pyspark_generator
 
     created = []
 
@@ -112,7 +112,7 @@ def test_evolution_cli_selection_replays_seed(monkeypatch, tmp_path):
             sys,
             "argv",
             [
-                "iceberg-fuzzer",
+                "iceberg-conformance",
                 "generate",
                 "--backend", "pyspark",
                 "--warehouse-path", str(tmp_path / str(global_seed)),

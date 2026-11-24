@@ -4,7 +4,7 @@ import os
 
 import duckdb
 
-from iceberg_fuzzer.backend import (
+from iceberg_conformance.backend import (
     ValidationEngine,
     Checkpoint,
     AssertionResult,
@@ -13,8 +13,8 @@ from iceberg_fuzzer.backend import (
     ColTypeStr,
     is_s3_tables_warehouse,
 )
-from iceberg_fuzzer.backend.duckdb.canonical import DuckDBCanonicalCast
-from iceberg_fuzzer.backend.point_query import format_sql_literal
+from iceberg_conformance.backend.duckdb.canonical import DuckDBCanonicalCast
+from iceberg_conformance.backend.point_query import format_sql_literal
 
 
 def _extract_region(warehouse_path: str) -> str:

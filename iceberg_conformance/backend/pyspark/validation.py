@@ -2,7 +2,7 @@
 
 from pyspark.sql import functions as F
 
-from iceberg_fuzzer.backend import (
+from iceberg_conformance.backend import (
     ValidationEngine,
     Checkpoint,
     AssertionResult,
@@ -10,9 +10,9 @@ from iceberg_fuzzer.backend import (
     ColumnName,
     ColTypeStr,
 )
-from iceberg_fuzzer.backend.point_query import format_sql_literal
-from iceberg_fuzzer.backend.pyspark.canonical import PySparkCanonicalCast
-from iceberg_fuzzer.backend.pyspark.builders import create_spark_session
+from iceberg_conformance.backend.point_query import format_sql_literal
+from iceberg_conformance.backend.pyspark.canonical import PySparkCanonicalCast
+from iceberg_conformance.backend.pyspark.builders import create_spark_session
 
 
 class PySparkValidation(ValidationEngine):
