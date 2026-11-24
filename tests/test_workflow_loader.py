@@ -3,7 +3,7 @@
 import pytest
 import yaml
 
-from iceberg_fuzzer.workflow.loader import load_workflow
+from iceberg_conformance.workflow.loader import load_workflow
 
 
 def test_missing_name(tmp_path):

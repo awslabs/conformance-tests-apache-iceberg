@@ -3,7 +3,7 @@
 
 set -e
 
-echo "Verifying prerequisites for Apache Iceberg Table Fuzzer..."
+echo "Verifying prerequisites for Conformance Tests for Apache Iceberg..."
 
 # Check Python version. Must match requires-python in pyproject.toml, otherwise
 # this script passes and the `uv sync` at the end fails on the constraint.
@@ -82,4 +82,4 @@ uv sync
 echo ""
 echo "✅ Setup complete!"
 echo "Activate with: source .venv/bin/activate"
-echo "Test with: python -m iceberg_fuzzer.cli --help"
+echo "Test with: python -m iceberg_conformance.cli --help"

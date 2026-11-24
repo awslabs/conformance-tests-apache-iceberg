@@ -11,7 +11,7 @@ import random
 import pytest
 import pyarrow as pa
 
-from iceberg_fuzzer.exhaustive.dimensions.data_types import (
+from iceberg_conformance.exhaustive.dimensions.data_types import (
     DataTypeDimension,
     DataTypeChoice,
     TypedValueFiller,
@@ -241,12 +241,12 @@ class TestDataTypeChoiceSchemaProvider:
     """DataTypeChoice implements the SchemaProvider protocol."""
 
     def test_isinstance_schema_provider(self):
-        from iceberg_fuzzer.exhaustive.dimensions.interfaces import SchemaProvider
+        from iceberg_conformance.exhaustive.dimensions.interfaces import SchemaProvider
         dtc = DataTypeChoice(columns=[("value", "int")])
         assert isinstance(dtc, SchemaProvider)
 
     def test_isinstance_schema_provider_nullable(self):
-        from iceberg_fuzzer.exhaustive.dimensions.interfaces import SchemaProvider
+        from iceberg_conformance.exhaustive.dimensions.interfaces import SchemaProvider
         dtc = DataTypeChoice(columns=[("value", "int")], nullable=True)
         assert isinstance(dtc, SchemaProvider)
 

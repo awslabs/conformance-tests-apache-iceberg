@@ -12,31 +12,31 @@ from pathlib import Path
 
 import pytest
 
-from iceberg_fuzzer.backend.polars.generator import PolarsGenerator
-from iceberg_fuzzer.backend.pyiceberg.builders import generate_sample_data
-from iceberg_fuzzer.backend.pyspark.builders import (
+from iceberg_conformance.backend.polars.generator import PolarsGenerator
+from iceberg_conformance.backend.pyiceberg.builders import generate_sample_data
+from iceberg_conformance.backend.pyspark.builders import (
     generate_partitioned_data,
     generate_spark_data,
 )
-from iceberg_fuzzer.backend.pyspark.data import generate_value as spark_value
-from iceberg_fuzzer.common.timestamps import (
+from iceberg_conformance.backend.pyspark.data import generate_value as spark_value
+from iceberg_conformance.common.timestamps import (
     TIMESTAMPTZ_OFFSETS,
     timestamp_value,
     timestamptz_value,
 )
-from iceberg_fuzzer.exhaustive.dimensions.data_types import generate_value
+from iceberg_conformance.exhaustive.dimensions.data_types import generate_value
 
 
 def _load_duckdb_validator():
     """Load the DuckDB validator by path.
 
-    `iceberg_fuzzer/validator.py` takes the `iceberg_fuzzer.validator` name, so
+    `iceberg_conformance/validator.py` takes the `iceberg_conformance.validator` name, so
     the `validator/local_duckdb/` directory beneath it is not importable; the CLI
     runs the script as a subprocess instead.
     """
     path = (
         Path(__file__).resolve().parent.parent
-        / 'iceberg_fuzzer' / 'validator' / 'local_duckdb' / 'validator_duckdb.py'
+        / 'iceberg_conformance' / 'validator' / 'local_duckdb' / 'validator_duckdb.py'
     )
     spec = importlib.util.spec_from_file_location('validator_duckdb', path)
     module = importlib.util.module_from_spec(spec)

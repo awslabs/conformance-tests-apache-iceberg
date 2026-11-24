@@ -16,13 +16,13 @@ import pytest
 def _load_duckdb_validator():
     """Load the DuckDB validator by path.
 
-    `iceberg_fuzzer/validator.py` takes the `iceberg_fuzzer.validator` name, so the
+    `iceberg_conformance/validator.py` takes the `iceberg_conformance.validator` name, so the
     `validator/local_duckdb/` directory beneath it is not importable; the CLI runs
     the script as a subprocess instead.
     """
     path = (
         Path(__file__).resolve().parent.parent
-        / 'iceberg_fuzzer' / 'validator' / 'local_duckdb' / 'validator_duckdb.py'
+        / 'iceberg_conformance' / 'validator' / 'local_duckdb' / 'validator_duckdb.py'
     )
     spec = importlib.util.spec_from_file_location('validator_duckdb', path)
     module = importlib.util.module_from_spec(spec)

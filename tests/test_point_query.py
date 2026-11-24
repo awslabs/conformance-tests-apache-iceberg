@@ -3,8 +3,8 @@
 import pytest
 from unittest.mock import MagicMock
 
-from iceberg_fuzzer.backend import ColumnFilter
-from iceberg_fuzzer.backend.point_query import (
+from iceberg_conformance.backend import ColumnFilter
+from iceberg_conformance.backend.point_query import (
     ProbeReason,
     _generate_probe_values,
     _sample_filters_for_column,

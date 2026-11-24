@@ -33,7 +33,7 @@ jobs:
     - name: Test CLI and imports
       run: |
         uv run python -c "import pyspark, pyiceberg, polars, pyarrow, yaml, boto3, sqlalchemy, duckdb; print('All imports successful')"
-        uv run python -m iceberg_fuzzer.cli --help
+        uv run python -m iceberg_conformance.cli --help
 
   pyiceberg:
     runs-on: ubuntu-latest
@@ -48,9 +48,9 @@ jobs:
     - name: Install dependencies
       run: uv sync
     - name: Generate PyIceberg tables
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyiceberg --warehouse-path ./test-warehouse-pyiceberg --specs specs/simple.yaml --minimal
+      run: uv run python -m iceberg_conformance.cli generate --backend pyiceberg --warehouse-path ./test-warehouse-pyiceberg --specs specs/simple.yaml --minimal
     - name: Validate PyIceberg tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path ./test-warehouse-pyiceberg --specs specs/simple.yaml --minimal --num-parallel 4
+      run: uv run python -m iceberg_conformance.cli validate --warehouse-path ./test-warehouse-pyiceberg --specs specs/simple.yaml --minimal --num-parallel 4
     - name: Upload PyIceberg artifacts
       uses: actions/upload-artifact@v7
       if: always()
@@ -72,9 +72,9 @@ jobs:
     - name: Install dependencies
       run: uv sync
     - name: Generate Polars tables
-      run: uv run python -m iceberg_fuzzer.cli generate --backend polars --warehouse-path ./test-warehouse-polars --specs specs/simple.yaml --minimal
+      run: uv run python -m iceberg_conformance.cli generate --backend polars --warehouse-path ./test-warehouse-polars --specs specs/simple.yaml --minimal
     - name: Validate Polars tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path ./test-warehouse-polars --specs specs/simple.yaml --minimal --num-parallel 4
+      run: uv run python -m iceberg_conformance.cli validate --warehouse-path ./test-warehouse-polars --specs specs/simple.yaml --minimal --num-parallel 4
     - name: Upload Polars artifacts
       uses: actions/upload-artifact@v7
       if: always()
@@ -101,9 +101,9 @@ jobs:
     - name: Install dependencies
       run: uv sync
     - name: Generate PySpark simple tables
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark --specs specs/simple.yaml --minimal
+      run: uv run python -m iceberg_conformance.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark --specs specs/simple.yaml --minimal
     - name: Validate PySpark simple tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark --specs specs/simple.yaml --minimal --num-parallel 4
+      run: uv run python -m iceberg_conformance.cli validate --warehouse-path $PWD/test-warehouse-pyspark --specs specs/simple.yaml --minimal --num-parallel 4
     - name: Upload PySpark simple artifacts
       uses: actions/upload-artifact@v7
       if: always()
@@ -130,9 +130,9 @@ jobs:
     - name: Install dependencies
       run: uv sync
     - name: Generate PySpark partitioned tables
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-partitioned --specs specs/partitioned.yaml --minimal
+      run: uv run python -m iceberg_conformance.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-partitioned --specs specs/partitioned.yaml --minimal
     - name: Validate PySpark partitioned tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark-partitioned --specs specs/partitioned.yaml --minimal --num-parallel 4
+      run: uv run python -m iceberg_conformance.cli validate --warehouse-path $PWD/test-warehouse-pyspark-partitioned --specs specs/partitioned.yaml --minimal --num-parallel 4
     - name: Upload PySpark partitioned artifacts
       uses: actions/upload-artifact@v7
       if: always()
@@ -159,9 +159,9 @@ jobs:
     - name: Install dependencies
       run: uv sync
     - name: Generate PySpark write-pattern tables
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-writepatterns --specs specs/write_patterns.yaml --num-parallel 4
+      run: uv run python -m iceberg_conformance.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-writepatterns --specs specs/write_patterns.yaml --num-parallel 4
     - name: Validate PySpark write-pattern tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark-writepatterns --specs specs/write_patterns.yaml --num-parallel 4
+      run: uv run python -m iceberg_conformance.cli validate --warehouse-path $PWD/test-warehouse-pyspark-writepatterns --specs specs/write_patterns.yaml --num-parallel 4
     - name: Upload PySpark write-pattern artifacts
       uses: actions/upload-artifact@v7
       if: always()
@@ -188,9 +188,9 @@ jobs:
     - name: Install dependencies
       run: uv sync
     - name: Generate PySpark evolution tables
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --num-parallel 4
+      run: uv run python -m iceberg_conformance.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --num-parallel 4
     - name: Validate PySpark evolution tables
-      run: uv run python -m iceberg_fuzzer.cli validate --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --num-parallel 4
+      run: uv run python -m iceberg_conformance.cli validate --warehouse-path $PWD/test-warehouse-pyspark-evolution --specs specs/evolution.yaml --num-parallel 4
     - name: Upload PySpark evolution artifacts
       uses: actions/upload-artifact@v7
       if: always()
@@ -223,10 +223,10 @@ jobs:
       run: uv sync
     # Use int table: fast to generate, exercises point query validation (int is a supported type)
     - name: Generate a table
-      run: uv run python -m iceberg_fuzzer.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-workflow --specs specs/simple.yaml --minimal --table-name unpart_int_uncompressed_plain_v2
+      run: uv run python -m iceberg_conformance.cli generate --backend pyspark --warehouse-path $PWD/test-warehouse-workflow --specs specs/simple.yaml --minimal --table-name unpart_int_uncompressed_plain_v2
     - name: Run workflow
       run: |
-        uv run python -m iceberg_fuzzer.cli workflow run \
+        uv run python -m iceberg_conformance.cli workflow run \
           --workflow ${{ matrix.workflow-file }} \
           --warehouse-path $PWD/test-warehouse-workflow \
           --table-name unpart_int_uncompressed_plain_v2 \

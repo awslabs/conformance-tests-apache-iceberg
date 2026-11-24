@@ -6,7 +6,7 @@ session or a generated table.
 
 import pytest
 
-from iceberg_fuzzer.backend.pyspark.builders import (
+from iceberg_conformance.backend.pyspark.builders import (
     build_create_table_sql,
     build_partition_clause,
     parse_partition_spec,

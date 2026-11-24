@@ -8,7 +8,7 @@ counts, the derived names, and the uniqueness the matrix depends on.
 
 import pytest
 
-from iceberg_fuzzer.common.partition_transforms import (
+from iceberg_conformance.common.partition_transforms import (
     DELETE_MODES,
     FULL_TRANSFORMS,
     FULL_WRITE_PATTERNS,
@@ -105,7 +105,7 @@ class TestParsing:
     """Every transform in the matrix has to be one the PySpark backend can parse."""
 
     def test_every_transform_parses(self):
-        from iceberg_fuzzer.backend.pyspark.builders import parse_partition_spec
+        from iceberg_conformance.backend.pyspark.builders import parse_partition_spec
         for transform in FULL_TRANSFORMS:
             parsed = parse_partition_spec(",".join(transform))
             assert len(parsed) == len(transform), transform
@@ -113,11 +113,11 @@ class TestParsing:
     def test_an_unrecognised_transform_is_rejected(self):
         # Silently dropping it would create the table unpartitioned under a name
         # saying it was partitioned, which no check downstream would catch.
-        from iceberg_fuzzer.backend.pyspark.builders import parse_partition_spec
+        from iceberg_conformance.backend.pyspark.builders import parse_partition_spec
         with pytest.raises(ValueError, match='Unrecognised partition transform'):
             parse_partition_spec('date(timestamp)')
 
     def test_a_typo_is_rejected(self):
-        from iceberg_fuzzer.backend.pyspark.builders import parse_partition_spec
+        from iceberg_conformance.backend.pyspark.builders import parse_partition_spec
         with pytest.raises(ValueError, match='Unrecognised partition transform'):
             parse_partition_spec('buckets[4](id)')
